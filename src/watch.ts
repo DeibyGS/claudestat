@@ -110,6 +110,8 @@ export async function startWatch() {
           cache_read:       p.cache_read,
           cache_creation:   p.cache_creation,
           efficiency_score: p.efficiency_score,
+          context_used:     p.context_used,
+          context_window:   p.context_window,
           loops:            p.loops || [],
           summary:          p.summary
         }

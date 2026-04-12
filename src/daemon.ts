@@ -128,6 +128,8 @@ const onCostUpdate: CostUpdateCallback = (sessionId, cost) => {
       output_tokens:    cost.output_tokens,
       cache_read:       cost.cache_read,
       cache_creation:   cost.cache_creation,
+      context_used:     cost.context_used,
+      context_window:   cost.context_window,
       efficiency_score: report.efficiencyScore,
       loops:            report.loops,
       summary:          report.summary

@@ -84,6 +84,8 @@ export interface CostUpdate {
   cache_read: number
   cache_creation: number
   cost_usd: number
+  context_used: number    // tokens del último request (≈ contexto activo actual)
+  context_window: number  // tamaño máximo del modelo (ej: 200000)
 }
 
 // ─── Prepared statements (se compilan una vez al iniciar) ─────────────────────

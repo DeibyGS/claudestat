@@ -85,10 +85,17 @@ function processJSONL(filePath: string): CostUpdate | null {
   const knownOffset = fileOffsets.get(filePath) ?? 0
   if (currentSize < knownOffset) fileOffsets.set(filePath, 0)
 
-  // Acumular coste de TODAS las líneas assistant del archivo
+  // Todos los modelos Claude actuales tienen 200K de contexto
+  const CONTEXT_WINDOW: Record<string, number> = {
+    'claude-opus-4-6':   200_000,
+    'claude-sonnet-4-6': 200_000,
+    'claude-haiku-4-5':  200_000,
+  }
+
   const totals: CostUpdate = {
     input_tokens: 0, output_tokens: 0,
-    cache_read: 0, cache_creation: 0, cost_usd: 0
+    cache_read: 0, cache_creation: 0, cost_usd: 0,
+    context_used: 0, context_window: 200_000
   }
 
   for (const raw of fileContent.split('\n')) {
@@ -109,6 +116,13 @@ function processJSONL(filePath: string): CostUpdate | null {
       totals.cache_read     += usage.cache_read_input_tokens       ?? 0
       totals.cache_creation += usage.cache_creation_input_tokens   ?? 0
       totals.cost_usd       += calcCost(model, usage)
+
+      // El contexto del ÚLTIMO mensaje es el más relevante — cuánto contexto
+      // está activo ahora mismo. Es la suma de lo que Claude "ve" en este request.
+      totals.context_used   = (usage.input_tokens ?? 0)
+                            + (usage.cache_read_input_tokens ?? 0)
+                            + (usage.cache_creation_input_tokens ?? 0)
+      totals.context_window = CONTEXT_WINDOW[model] ?? 200_000
     } catch {
       // Línea malformada — ignorar y continuar
     }

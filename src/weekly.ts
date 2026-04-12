@@ -20,23 +20,19 @@ export function readWeeklyStats(): WeeklyStats {
     const raw  = fs.readFileSync(STATS_PATH, 'utf8')
     const data = JSON.parse(raw)
 
-    const today   = new Date()
-    const cutoff  = new Date(today)
-    cutoff.setDate(today.getDate() - 6)  // últimos 7 días
-
     const byDay: { date: string; tokens: number }[] = []
 
-    for (const entry of (data.dailyModelTokens || [])) {
-      const date = new Date(entry.date)
-      if (date < cutoff) continue
+    // Tomar los últimos 7 días disponibles (sin filtrar por fecha actual,
+    // porque stats-cache.json puede estar desactualizado por días/semanas)
+    const allEntries = (data.dailyModelTokens || [])
+      .map((entry: any) => ({
+        date:   entry.date as string,
+        tokens: Object.values(entry.tokensByModel as Record<string, number>)
+                  .reduce((sum, n) => sum + n, 0)
+      }))
+      .sort((a: any, b: any) => a.date.localeCompare(b.date))
 
-      const tokens = Object.values(entry.tokensByModel as Record<string, number>)
-        .reduce((sum, n) => sum + n, 0)
-
-      byDay.push({ date: entry.date, tokens })
-    }
-
-    byDay.sort((a, b) => a.date.localeCompare(b.date))
+    byDay.push(...allEntries.slice(-7))
 
     return {
       totalTokens:  byDay.reduce((s, d) => s + d.tokens, 0),

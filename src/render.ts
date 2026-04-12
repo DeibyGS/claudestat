@@ -270,10 +270,10 @@ export function renderTrace(state: RenderState): string {
       }
     }
 
-    // Barra de eficiencia
-    const scoreColor = cost.efficiency_score >= 90 ? C.green
-      : cost.efficiency_score >= 70 ? C.yellow : C.red
-    const scoreBar = progressBar(cost.efficiency_score, 14, scoreColor)
+    // Barra de eficiencia — si score es 0 y cost es muy bajo, aún no calculó
+    const score      = (cost.efficiency_score === 0 && cost.cost_usd < 0.001) ? 100 : cost.efficiency_score
+    const scoreColor = score >= 90 ? C.green : score >= 70 ? C.yellow : C.red
+    const scoreBar   = progressBar(score, 14, scoreColor)
 
     // Tokens
     const tokenLine =
@@ -284,7 +284,7 @@ export function renderTrace(state: RenderState): string {
     lines.push(
       `  ${C.bold}💰 $${cost.cost_usd.toFixed(4)}${C.reset}   ` +
       `${tokenLine}   ` +
-      `eficiencia: ${scoreBar} ${scoreColor}${cost.efficiency_score}/100${C.reset}`
+      `eficiencia: ${scoreBar} ${scoreColor}${score}/100${C.reset}`
     )
   } else {
     const totalDone = events.filter(e => e.type === 'Done').length

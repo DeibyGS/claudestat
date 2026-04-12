@@ -183,10 +183,11 @@ export function renderTrace(state: RenderState): string {
     const pct     = Math.round(cost.context_used / cost.context_window * 100)
     const barColor = pct > 80 ? C.red : pct > 60 ? C.yellow : C.green
     const bar      = progressBar(pct, 24, barColor)
+    const remaining = 100 - pct
     lines.push(
-      `  ${C.dim}contexto:${C.reset} ${bar}  ` +
-      `${barColor}${pct}%${C.reset}  ` +
-      `${C.dim}${fmtTok(cost.context_used)} / ${fmtTok(cost.context_window)} tokens${C.reset}`
+      `  ${C.dim}auto-compact en:${C.reset} ${bar}  ` +
+      `${barColor}${remaining}% restante${C.reset}  ` +
+      `${C.dim}${fmtTok(cost.context_used)} / ${fmtTok(cost.context_window)} tokens usados${C.reset}`
     )
   } else {
     lines.push(`  ${C.dim}contexto: calculando...${C.reset}`)

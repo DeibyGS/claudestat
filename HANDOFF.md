@@ -41,10 +41,13 @@ CLI watch (src/watch.ts)
   - Algoritmo de detección de loops (mismo tool >3 veces en 60s)
   - Scoring de eficiencia por sesión
   - Enriquecimiento con coste desde JSONL de Claude Code
+- [x] Visual upgrade: contexto, bloques, modo, tokens K/M, loop badge, eficiencia bar
 - [ ] **Phase 3** — Dashboard web
   - Servidor React (Vite)
   - Grafo DAG en tiempo real (React Flow o D3)
   - WebSocket upgrade del SSE
+  - Barra semanal: tokens acumulados esta semana desde stats-cache.json (sin % — límite no accesible localmente)
+  - Investigar: claude-code source en npm para ver si expone límite semanal via endpoint local
 - [ ] **Phase 4** — Git correlation
   - Hook post-commit que anota el coste de la sesión en git notes
 - [ ] **Phase 5** — Kill switch de presupuesto
@@ -59,4 +62,5 @@ CLI watch (src/watch.ts)
 - El hook script debe siempre hacer `process.exit(0)` — nunca bloquear Claude
 
 ## Session Log
-- **2026-04-13** — Proyecto iniciado. Análisis de ecosistema (ccusage, claude-usage, etc.). Decidido enfoque diferenciador: distributed tracing + cost intelligence. Phase 1 MVP completa: daemon HTTP+SSE, store en memoria, CLI renderer ANSI, instalador de hooks.
+- **2026-04-13** — Proyecto iniciado. Análisis de ecosistema. Phase 1 MVP: daemon HTTP+SSE, store en memoria, CLI renderer, hooks.
+- **2026-04-13** — Phase 2: SQLite (node:sqlite), loop detection, enricher JSONL + pricing. Visual upgrade: barra de contexto, bloques por respuesta, detección de modo, tokens K/M, badge de loop, barra eficiencia.

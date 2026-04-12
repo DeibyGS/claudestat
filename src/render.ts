@@ -52,12 +52,19 @@ export interface CostInfo {
   context_window?: number
 }
 
+export interface WeeklyStats {
+  totalTokens: number
+  byDay: { date: string; tokens: number }[]
+  lastUpdated: string | null
+}
+
 export interface RenderState {
   sessionId: string
   cwd: string
   startedAt: number
   events: TraceEvent[]
   cost?: CostInfo
+  weekly?: WeeklyStats
 }
 
 // ─── Helpers de formato ───────────────────────────────────────────────────────
@@ -284,6 +291,22 @@ export function renderTrace(state: RenderState): string {
     const elapsed   = fmtMs((events.at(-1)?.ts ?? startedAt) - startedAt)
     lines.push(
       `  ${C.dim}⏱ ${elapsed}  ✅ ${totalDone} tools  💰 calculando...${C.reset}`
+    )
+  }
+
+  // ── Barra semanal (stats-cache.json) ──────────────────────────────────────
+  if (state.weekly && state.weekly.totalTokens > 0) {
+    const { totalTokens, byDay, lastUpdated } = state.weekly
+    // Mini sparkline: un char por día de la semana
+    const maxDay  = Math.max(...byDay.map(d => d.tokens), 1)
+    const BARS    = ['▁','▂','▃','▄','▅','▆','▇','█']
+    const spark   = byDay.map(d => BARS[Math.min(7, Math.floor(d.tokens / maxDay * 7))]).join('')
+    const padded  = spark.padStart(7, '▁')   // garantizar 7 chars (1 por día)
+
+    lines.push(
+      `  ${C.dim}semanal:${C.reset}  ${C.cyan}${padded}${C.reset}  ` +
+      `${C.bold}${fmtTok(totalTokens)} tokens${C.reset}  ` +
+      `${C.dim}(últimos 7 días${lastUpdated ? ' · datos al ' + lastUpdated : ''})${C.reset}`
     )
   }
 

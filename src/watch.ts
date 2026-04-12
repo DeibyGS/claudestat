@@ -8,6 +8,7 @@
 
 import http from 'http'
 import { renderTrace, type RenderState, type TraceEvent, type CostInfo } from './render'
+import { readWeeklyStats } from './weekly'
 
 const DAEMON_HOST = 'localhost'
 const DAEMON_PORT = 7337
@@ -59,8 +60,12 @@ export async function startWatch() {
   }
 
   let state: RenderState = {
-    sessionId: '', cwd: '', startedAt: Date.now(), events: []
+    sessionId: '', cwd: '', startedAt: Date.now(), events: [],
+    weekly: readWeeklyStats()
   }
+
+  // Refrescar stats semanales cada 5 minutos
+  setInterval(() => { state.weekly = readWeeklyStats() }, 5 * 60 * 1000)
 
   function draw() {
     if (state.sessionId) { clearScreen(); process.stdout.write(renderTrace(state)) }

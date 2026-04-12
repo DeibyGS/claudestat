@@ -6,7 +6,8 @@
     "claudetrace": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build:dashboard",
+    "build:dashboard": "cd dashboard && npm install && npm run build",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js"
   },

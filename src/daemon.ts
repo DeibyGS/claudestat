@@ -9,6 +9,7 @@
  */
 
 import express, { type Request, type Response } from 'express'
+import path   from 'path'
 import { dbOps }                                 from './db'
 import { startEnricher, type CostUpdateCallback } from './enricher'
 import { analyzeSession }                         from './intelligence'
@@ -103,6 +104,16 @@ app.get('/sessions', (_req: Request, res: Response) => {
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', port: PORT, clients: sseClients.size })
+})
+
+// ─── Dashboard React (servir estáticos del build de Vite) ────────────────────
+
+const DASHBOARD_DIST = path.join(__dirname, '..', 'dashboard', 'dist')
+app.use(express.static(DASHBOARD_DIST))
+
+// SPA fallback: cualquier ruta no capturada sirve index.html
+app.get('*', (_req: Request, res: Response) => {
+  res.sendFile(path.join(DASHBOARD_DIST, 'index.html'))
 })
 
 // ─── Callback del enricher ────────────────────────────────────────────────────

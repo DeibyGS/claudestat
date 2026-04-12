@@ -11,6 +11,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "chokidar": "^3.6.0",
     "commander": "^12.1.0",
     "express": "^4.19.2"
   },

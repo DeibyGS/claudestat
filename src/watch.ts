@@ -1,22 +1,18 @@
 /**
- * watch.ts — Cliente SSE + renderizador de terminal
+ * watch.ts — Cliente SSE + renderizador (Phase 2)
  *
- * Se conecta al daemon via SSE y redibuja el trace tree en tiempo real.
- * Usamos el módulo `http` nativo de Node para el SSE en lugar de fetch()
- * porque el stream de fetch puede tener comportamiento inconsistente
- * en diferentes versiones de Node para SSE de larga duración.
+ * Novedades:
+ * - Maneja el evento 'cost_update' que llega del enricher
+ * - Actualiza cost en estado y redibuja con datos reales
  */
 
 import http from 'http'
-import { renderTrace, type RenderState, type TraceEvent } from './render'
+import { renderTrace, type RenderState, type TraceEvent, type CostInfo } from './render'
 
 const DAEMON_HOST = 'localhost'
 const DAEMON_PORT = 7337
 
-// Limpiar la pantalla y volver al inicio (ANSI escape)
-function clearScreen() {
-  process.stdout.write('\x1b[2J\x1b[H')
-}
+function clearScreen() { process.stdout.write('\x1b[2J\x1b[H') }
 
 async function checkDaemon(): Promise<boolean> {
   return new Promise(resolve => {
@@ -28,20 +24,15 @@ async function checkDaemon(): Promise<boolean> {
   })
 }
 
-// Conectar al SSE y procesar eventos línea a línea
 function connectSSE(onMessage: (msg: any) => void): Promise<void> {
   return new Promise((_, reject) => {
     const req = http.request({
-      hostname: DAEMON_HOST,
-      port: DAEMON_PORT,
-      path: '/stream',
-      method: 'GET',
+      hostname: DAEMON_HOST, port: DAEMON_PORT, path: '/stream', method: 'GET',
       headers: { Accept: 'text/event-stream', 'Cache-Control': 'no-cache' }
-    }, (res) => {
+    }, res => {
       let buffer = ''
       res.on('data', (chunk: Buffer) => {
         buffer += chunk.toString()
-        // SSE delimita mensajes con doble newline (\n\n)
         const parts = buffer.split('\n\n')
         buffer = parts.pop() || ''
         for (const part of parts) {
@@ -52,7 +43,7 @@ function connectSSE(onMessage: (msg: any) => void): Promise<void> {
           }
         }
       })
-      res.on('end', () => reject(new Error('Stream cerrado por el servidor')))
+      res.on('end', () => reject(new Error('Stream cerrado')))
     })
     req.on('error', reject)
     req.end()
@@ -60,83 +51,96 @@ function connectSSE(onMessage: (msg: any) => void): Promise<void> {
 }
 
 export async function startWatch() {
-  console.log('Verificando daemon...')
-
   const alive = await checkDaemon()
   if (!alive) {
     console.error('\n❌ El daemon no está corriendo.')
-    console.error('   Ejecutá primero en otra terminal: \x1b[36mclaudetrace start\x1b[0m\n')
+    console.error('   Ejecutá: \x1b[36mclaudetrace start\x1b[0m\n')
     process.exit(1)
   }
 
-  // Estado del trace que se actualiza con cada evento SSE
   let state: RenderState = {
-    sessionId: '',
-    cwd: '',
-    startedAt: Date.now(),
-    events: []
+    sessionId: '', cwd: '', startedAt: Date.now(), events: []
+  }
+
+  function draw() {
+    if (state.sessionId) { clearScreen(); process.stdout.write(renderTrace(state)) }
   }
 
   function handleMessage(msg: any) {
     if (msg.type === 'init') {
-      // Estado inicial al conectar: cargar sesión más reciente desde DB
       if (msg.session) {
         state = {
-          sessionId: msg.session.id,
-          cwd: msg.session.cwd || '',
-          startedAt: msg.session.started_at,
-          events: (msg.events || []) as TraceEvent[]
+          sessionId:  msg.session.id,
+          cwd:        msg.session.cwd || '',
+          startedAt:  msg.session.started_at,
+          events:     (msg.events || []) as TraceEvent[],
+          cost:       buildCostFromSession(msg.session)
         }
       }
+
     } else if (msg.type === 'event') {
       const evt = msg.payload as TraceEvent & { session_id: string }
 
-      // Nueva sesión detectada → resetear estado
+      // Nueva sesión → resetear estado
       if (evt.session_id && evt.session_id !== state.sessionId && state.sessionId !== '') {
-        state = {
-          sessionId: evt.session_id,
-          cwd: evt.cwd || '',
-          startedAt: evt.ts,
-          events: []
-        }
+        state = { sessionId: evt.session_id, cwd: evt.cwd || '', startedAt: evt.ts, events: [] }
       } else if (!state.sessionId && evt.session_id) {
         state.sessionId = evt.session_id
-        state.cwd = evt.cwd || ''
+        state.cwd       = evt.cwd || ''
         state.startedAt = evt.ts
       }
 
       if (evt.type === 'Done' && evt.tool_name) {
-        // El PostToolUse llegó: actualizar el PreToolUse pendiente con duration
-        const pending = [...state.events]
-          .reverse()
+        // Actualizar el PreToolUse pendiente a Done
+        const pending = [...state.events].reverse()
           .find(e => e.type === 'PreToolUse' && e.tool_name === evt.tool_name)
-        if (pending) {
-          pending.type = 'Done'
-          pending.duration_ms = evt.ts - pending.ts
-        }
+        if (pending) { pending.type = 'Done'; pending.duration_ms = evt.ts - pending.ts }
       } else {
         state.events.push(evt)
       }
+
+    } else if (msg.type === 'cost_update') {
+      // El enricher calculó el coste real desde el JSONL — actualizar estado
+      const p = msg.payload
+      if (p.session_id === state.sessionId) {
+        state.cost = {
+          cost_usd:         p.cost_usd,
+          input_tokens:     p.input_tokens,
+          output_tokens:    p.output_tokens,
+          cache_read:       p.cache_read,
+          cache_creation:   p.cache_creation,
+          efficiency_score: p.efficiency_score,
+          loops:            p.loops || [],
+          summary:          p.summary
+        }
+      }
     }
 
-    // Redibujar solo si hay sesión activa
-    if (state.sessionId) {
-      clearScreen()
-      process.stdout.write(renderTrace(state))
-    }
+    draw()
   }
 
   clearScreen()
-  process.stdout.write('\x1b[36m● claudetrace watch\x1b[0m — conectando al daemon...\n')
+  process.stdout.write('\x1b[36m● claudetrace watch\x1b[0m — conectando...\n')
 
-  // Intentar reconectar automáticamente si se pierde la conexión
   while (true) {
-    try {
-      await connectSSE(handleMessage)
-    } catch (err: any) {
+    try { await connectSSE(handleMessage) }
+    catch {
       clearScreen()
       console.log('\x1b[33m⚠ Conexión perdida. Reconectando en 2s...\x1b[0m')
       await new Promise(r => setTimeout(r, 2000))
     }
+  }
+}
+
+function buildCostFromSession(session: any): CostInfo | undefined {
+  if (!session?.total_cost_usd) return undefined
+  return {
+    cost_usd:         session.total_cost_usd      ?? 0,
+    input_tokens:     session.total_input_tokens  ?? 0,
+    output_tokens:    session.total_output_tokens ?? 0,
+    cache_read:       session.total_cache_read    ?? 0,
+    cache_creation:   session.total_cache_creation ?? 0,
+    efficiency_score: session.efficiency_score    ?? 100,
+    loops:            []
   }
 }

@@ -2,9 +2,15 @@
 /**
  * index.ts — Entry point del CLI
  *
- * Commander parsea los argumentos de línea de comando y
- * delega a cada módulo según el subcomando.
+ * Suprimimos el ExperimentalWarning de node:sqlite antes de importar nada.
+ * El módulo funciona perfectamente — el warning es solo informativo.
  */
+
+// Filtrar solo el warning de SQLite, dejar pasar el resto
+process.on('warning', (w) => {
+  if (w.name === 'ExperimentalWarning' && w.message.includes('SQLite')) return
+  process.stderr.write(`${w.name}: ${w.message}\n`)
+})
 
 import { Command } from 'commander'
 import { startDaemon }              from './daemon'

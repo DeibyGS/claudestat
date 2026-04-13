@@ -108,9 +108,7 @@ const S = {
 }
 
 export function ProjectCard({ project: p, isActive }: Props) {
-  // Detectar si el HANDOFF fue auto-generado por claudetrace
-  const isAutoHandoff = p.has_handoff && p.progress.total === 0 &&
-    p.progress.done === 0 && p.progress.nextTask === null
+  const isAutoHandoff = !!p.auto_handoff
 
   return (
     <div style={S.card(!!isActive)}>

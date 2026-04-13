@@ -21,6 +21,7 @@ export interface ProjectScanResult {
   name:         string         // último segmento del path
   encodedDir:   string         // nombre del directorio en ~/.claude/projects
   hasHandoff:   boolean
+  autoHandoff:  boolean        // true si fue auto-generado por claudetrace (no escrito por el usuario)
   progress:     HandoffProgress
   jsonlStats:   JSONLStats     // datos históricos leídos directamente de los JSONL
 }
@@ -93,38 +94,70 @@ function findRealPath(base: string, remaining: string): string | null {
 
 // ─── HANDOFF parser ───────────────────────────────────────────────────────────
 
+/** Secciones que indican tareas pendientes (case-insensitive) */
+const PENDING_SECTION = /pending|task|feature|todo|por hacer|pendiente/i
+/** Secciones que indican tareas completadas */
+const DONE_SECTION    = /done|completed|finished|completado|hecho/i
+
 export function parseHandoffProgress(content: string): HandoffProgress {
-  // Formato markdown: - [x] / - [ ]
-  const mdDone    = (content.match(/- \[x\]/gi) || []).length
-  const mdPending = (content.match(/- \[ \]/g)  || []).length
-
-  // Formato emoji (ej: WodRival): ✅ done, 🟡/⬜/☐ pending — en líneas de lista
-  // Patrón: línea con número o guión, seguida de ✅ o emoji de pendiente
-  const emojiDone    = (content.match(/^[\s]*\d+\.\s+✅/gm) || []).length
-  const emojiPending = (content.match(/^[\s]*\d+\.\s+(?:🟡|⬜|☐|🔲)/gm) || []).length
-
-  // Formato lista numerada simple (sin emoji de estado) → contar como pendientes
-  // Solo aplica si no hay ningún otro formato detectado
-  const hasAnyFormat = mdDone + mdPending + emojiDone + emojiPending > 0
-  const plainPending = hasAnyFormat ? 0
-    : (content.match(/^[\s]*\d+\.\s+(?!✅|🟡|⬜|☐|🔲|\[)(.+)$/gm) || []).length
-
-  const done  = mdDone    + emojiDone
-  const total = done + mdPending + emojiPending + plainPending
-  const pct   = total > 0 ? Math.round(done / total * 100) : 0
-
-  // Primera tarea pendiente
+  let done = 0, pending = 0
   let nextTask: string | null = null
-  const lines = content.split('\n')
+
+  // Parsear sección por sección para entender el contexto de cada ítem
+  const lines       = content.split('\n')
+  let inPending     = false   // estamos dentro de una sección "Pending"
+  let inDone        = false   // estamos dentro de una sección "Done"
+
   for (const line of lines) {
-    // Formato markdown
-    const m1 = line.match(/^[\s]*- \[ \]\s*(.+)$/)
-    if (m1) { nextTask = m1[1].trim().replace(/^\*\*/, '').replace(/\*\*$/, ''); break }
-    // Formato emoji
-    const m2 = line.match(/^[\s]*\d+\.\s+(?:🟡|⬜|☐|🔲)\s+\*?\*?(.+?)(?:\*\*)?$/)
-    if (m2) { nextTask = m2[1].trim().replace(/^\*\*/, '').replace(/\*\*$/, '').replace(/\s*—.*$/, ''); break }
+    // Detectar cambio de sección (heading ##)
+    const heading = line.match(/^#{1,3}\s+(.+)$/)
+    if (heading) {
+      const h = heading[1]
+      inPending = PENDING_SECTION.test(h)
+      inDone    = DONE_SECTION.test(h)
+      continue
+    }
+
+    // ── Formato checkbox: - [x] / - [ ] — válido en cualquier sección ──────
+    if (/- \[x\]/i.test(line)) { done++;    continue }
+    if (/- \[ \]/.test(line))  {
+      pending++
+      if (!nextTask) {
+        const m = line.match(/^[\s]*- \[ \]\s*(.+)$/)
+        if (m) nextTask = m[1].trim().replace(/^\*\*|\*\*$/g, '')
+      }
+      continue
+    }
+
+    // ── Formato emoji: 1. ✅ / 1. 🟡 — válido en cualquier sección ──────────
+    if (/^[\s]*\d+\.\s+✅/.test(line)) { done++;    continue }
+    if (/^[\s]*\d+\.\s+(?:🟡|⬜|☐|🔲)/.test(line)) {
+      pending++
+      if (!nextTask) {
+        const m = line.match(/^[\s]*\d+\.\s+(?:🟡|⬜|☐|🔲)\s+\*?\*?(.+?)(?:\*\*)?$/)
+        if (m) nextTask = m[1].trim().replace(/^\*\*|\*\*$/g, '').replace(/\s*—.*$/, '')
+      }
+      continue
+    }
+
+    // ── Lista simple (- texto sin checkbox): solo si estamos en sección Pending ──
+    // Esto cubre el formato de CatcherAuto, EvolutFit, etc.
+    if (inPending && /^[\s]*-\s+\S/.test(line) && !/^[\s]*-\s*\[/.test(line)) {
+      pending++
+      if (!nextTask) {
+        const m = line.match(/^[\s]*-\s+(.+)$/)
+        if (m) nextTask = m[1].trim().replace(/^\*\*|\*\*$/g, '')
+      }
+      continue
+    }
+    if (inDone && /^[\s]*-\s+\S/.test(line) && !/^[\s]*-\s*\[/.test(line)) {
+      done++
+      continue
+    }
   }
 
+  const total = done + pending
+  const pct   = total > 0 ? Math.round(done / total * 100) : 0
   return { done, total, pct, nextTask }
 }
 
@@ -522,9 +555,11 @@ export function discoverProjects(): ProjectScanResult[] {
       autoCreateHandoff(rootPath, jsonlStats)
     }
 
-    const hasHandoff  = fs.existsSync(handoffPath)
-    const progress    = hasHandoff
-      ? parseHandoffProgress(fs.readFileSync(handoffPath, 'utf8'))
+    const hasHandoff     = fs.existsSync(handoffPath)
+    const handoffContent = hasHandoff ? (() => { try { return fs.readFileSync(handoffPath, 'utf8') } catch { return '' } })() : ''
+    const autoHandoff    = hasHandoff && handoffContent.includes('<!-- Auto-generado por claudetrace')
+    const progress       = hasHandoff
+      ? parseHandoffProgress(handoffContent)
       : { done: 0, total: 0, pct: 0, nextTask: null }
 
     // last_active = max(JSONL mtime, HANDOFF.md mtime)
@@ -542,6 +577,7 @@ export function discoverProjects(): ProjectScanResult[] {
       name:       path.basename(rootPath),
       encodedDir: encodedDirs[0],
       hasHandoff,
+      autoHandoff,
       progress,
       jsonlStats,
     })

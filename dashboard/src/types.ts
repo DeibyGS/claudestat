@@ -115,6 +115,7 @@ export interface ProjectSummary {
   last_active:    number | null
   avg_efficiency: number | null
   has_handoff:    boolean
+  auto_handoff?:  boolean
   progress:       HandoffProgress
   model_usage?:   ModelUsage
 }

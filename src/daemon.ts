@@ -299,6 +299,7 @@ app.get('/projects', (_req: Request, res: Response) => {
       total_tokens:   useJSONL ? jStats.total_tokens   : base.total_tokens,
       last_active:    useJSONL ? jStats.last_active     : base.last_active,
       has_handoff:    scan.hasHandoff,
+      auto_handoff:   scan.autoHandoff,
       progress:       scan.progress,
       model_usage:    jStats.modelUsage,  // siempre desde JSONL — más preciso que la DB
       jsonl_source:   useJSONL,

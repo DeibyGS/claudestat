@@ -26,6 +26,9 @@ import { computeMetaStats, getMetaHistory }                   from './meta-stats
 import { discoverProjects, parseHandoffProgress }             from './project-scanner'
 import { deriveSessionState, STATE_META }                     from './session-state'
 import { computeQuota, invalidateQuotaCache }                 from './quota-tracker'
+import { getGitInfo, type GitInfo }                           from './git'
+import { getPRStatus, type PRStatus }                         from './github'
+import { summarizeSession }                                   from './summarizer'
 
 const PORT = 7337
 const app  = express()
@@ -37,6 +40,30 @@ const sseClients = new Map<string, Response>()
 // Estado de sesión en memoria — se deriva a demanda, no se persiste en DB.
 // Clave: session_id  Valor: {type, ts} del último evento recibido vía /event
 const sessionLastEvent = new Map<string, { type: string; ts: number }>()
+
+// Caché de git info por project path — TTL 30s
+const gitCache = new Map<string, { data: GitInfo | null; ts: number }>()
+// Caché de PR status por project path — TTL 5min (llamada de red)
+const prCache  = new Map<string, { data: PRStatus | null; ts: number }>()
+
+const GIT_TTL = 30_000
+const PR_TTL  = 5 * 60_000
+
+function getCachedGitInfo(projectPath: string): GitInfo | null {
+  const cached = gitCache.get(projectPath)
+  if (cached && Date.now() - cached.ts < GIT_TTL) return cached.data
+  const data = getGitInfo(projectPath)
+  gitCache.set(projectPath, { data, ts: Date.now() })
+  return data
+}
+
+function getCachedPRStatus(projectPath: string): PRStatus | null {
+  const cached = prCache.get(projectPath)
+  if (cached && Date.now() - cached.ts < PR_TTL) return cached.data
+  const data = getPRStatus(projectPath)
+  prCache.set(projectPath, { data, ts: Date.now() })
+  return data
+}
 
 function broadcast(msg: object) {
   const data = `data: ${JSON.stringify(msg)}\n\n`
@@ -94,8 +121,24 @@ app.post('/event', (req: Request, res: Response) => {
   const stateMeta = STATE_META[state]
   broadcast({ type: 'state_change', payload: { session_id, state, ...stateMeta } })
 
-  // Si es un nuevo prompt del usuario → invalidar caché de quota
-  if (type === 'Stop') invalidateQuotaCache()
+  // Al terminar un turno (Stop) → invalidar quota cache + generar summary IA en background
+  if (type === 'Stop') {
+    invalidateQuotaCache()
+    // Generar resumen IA en background sin bloquear la respuesta
+    setImmediate(async () => {
+      try {
+        const session = dbOps.getSession(session_id)
+        if (!session) return
+        const events      = dbOps.getSessionEvents(session_id)
+        const projectName = session.project_path ? path.basename(session.project_path) : undefined
+        const summary     = await summarizeSession(events, session.total_cost_usd ?? 0, projectName)
+        if (summary) {
+          dbOps.updateSessionSummary(session_id, summary)
+          broadcast({ type: 'summary_ready', payload: { session_id, summary } })
+        }
+      } catch { /* ignorar errores del summarizer */ }
+    })
+  }
 
   res.json({ ok: true })
 })
@@ -239,6 +282,9 @@ app.get('/history', (_req: Request, res: Response) => {
     const mode = hasAgent && hasSkill ? 'agentes+skills'
       : hasAgent ? 'agentes' : hasSkill ? 'skills' : 'directo'
 
+    // Git info cacheada para este proyecto
+    const gitInfo = s.project_path ? getCachedGitInfo(s.project_path) : null
+
     byDate.get(date)!.push({
       id:             s.id,
       project_path:   s.project_path ?? null,
@@ -253,6 +299,11 @@ app.get('/history', (_req: Request, res: Response) => {
       done_count:       s.done_count      ?? 0,
       top_tools:        s.top_tools_csv   ? (s.top_tools_csv as string).split(',') : [],
       mode,
+      ai_summary:   (s as any).ai_summary ?? null,
+      git_branch:   gitInfo?.branch       ?? null,
+      git_dirty:    gitInfo?.dirty        ?? false,
+      git_ahead:    gitInfo?.ahead        ?? 0,
+      git_behind:   gitInfo?.behind       ?? 0,
     })
   }
 
@@ -267,6 +318,22 @@ app.get('/history', (_req: Request, res: Response) => {
     .sort((a, b) => b.date.localeCompare(a.date))
 
   res.json({ days })
+})
+
+// ─── GET /git?path=... — git info para un proyecto ────────────────────────────
+
+app.get('/git', (req: Request, res: Response) => {
+  const projectPath = req.query.path as string | undefined
+  if (!projectPath) { res.status(400).json({ error: 'Falta parámetro path' }); return }
+  res.json(getCachedGitInfo(projectPath) ?? null)
+})
+
+// ─── GET /pr?path=... — estado del PR para un proyecto ────────────────────────
+
+app.get('/pr', (req: Request, res: Response) => {
+  const projectPath = req.query.path as string | undefined
+  if (!projectPath) { res.status(400).json({ error: 'Falta parámetro path' }); return }
+  res.json(getCachedPRStatus(projectPath) ?? null)
 })
 
 // ─── GET /meta-stats — KPIs de contexto ──────────────────────────────────────

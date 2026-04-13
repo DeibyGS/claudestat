@@ -60,6 +60,29 @@ export interface SessionSummary {
   done_count:     number
   top_tools:      string[]
   mode:           SessionMode
+  // Phase 5
+  ai_summary?:  string | null
+  git_branch?:  string | null
+  git_dirty?:   boolean
+  git_ahead?:   number
+  git_behind?:  number
+}
+
+export interface GitInfo {
+  branch:    string
+  dirty:     boolean
+  ahead:     number
+  behind:    number
+  hasRemote: boolean
+}
+
+export interface PRStatus {
+  number:  number
+  title:   string
+  state:   'OPEN' | 'CLOSED' | 'MERGED'
+  url:     string
+  branch:  string
+  ciState: 'SUCCESS' | 'FAILURE' | 'PENDING' | null
 }
 
 export interface DaySessions {

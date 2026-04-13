@@ -21,8 +21,9 @@ fs.mkdirSync(CLAUDETRACE_DIR, { recursive: true })
 
 const db = new DatabaseSync(DB_PATH)
 
-// Migración: añadir project_path a instalaciones previas (seguro si ya existe)
+// Migraciones: añadir columnas nuevas sin romper instalaciones previas
 try { db.exec(`ALTER TABLE sessions ADD COLUMN project_path TEXT`) } catch { /* ya existe */ }
+try { db.exec(`ALTER TABLE sessions ADD COLUMN ai_summary   TEXT`) } catch { /* ya existe */ }
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
@@ -69,6 +70,7 @@ export interface SessionRow {
   total_cache_creation?: number
   efficiency_score?: number
   loops_detected?: number
+  ai_summary?: string
 }
 
 export interface EventRow {
@@ -149,7 +151,7 @@ const stmts = {
   `),
 
   getRecentSessions: db.prepare(`
-    SELECT s.*,
+    SELECT s.*, s.ai_summary,
       (SELECT COUNT(*) FROM events e WHERE e.session_id = s.id AND e.type = 'Done') as done_count,
       (SELECT GROUP_CONCAT(tool_name) FROM (
         SELECT tool_name FROM events WHERE session_id = s.id AND type = 'Done' AND tool_name IS NOT NULL
@@ -160,6 +162,10 @@ const stmts = {
     FROM sessions s
     WHERE s.started_at >= ?
     ORDER BY s.started_at DESC
+  `),
+
+  updateSessionSummary: db.prepare(`
+    UPDATE sessions SET ai_summary = ? WHERE id = ?
   `),
 
   getProjectAggregates: db.prepare(`
@@ -253,5 +259,9 @@ export const dbOps = {
 
   getProjectAggregates(): any[] {
     return stmts.getProjectAggregates.all() as any[]
+  },
+
+  updateSessionSummary(sessionId: string, summary: string) {
+    stmts.updateSessionSummary.run(summary, sessionId)
   }
 }

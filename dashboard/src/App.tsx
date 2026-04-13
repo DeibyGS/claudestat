@@ -199,6 +199,9 @@ function handleMessage(prev: AppState, msg: any): AppState {
     }
     return { ...prev, cost }
   }
+  // summary_ready — el daemon generó un resumen IA para la sesión activa
+  // Refrescamos el historial en el próximo render (el usuario lo verá al abrir History)
+  if (msg.type === 'summary_ready') return prev  // no-op aquí, historia se refresca al cambiar tab
   return prev
 }
 

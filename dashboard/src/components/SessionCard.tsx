@@ -86,13 +86,34 @@ export function SessionCard({ session: s, isActive }: Props) {
         <span style={S.dim}>{s.done_count} tools</span>
       </div>
 
-      {/* Línea 3: top tools */}
-      {s.top_tools.length > 0 && (
+      {/* Línea 3: top tools + git branch */}
+      {(s.top_tools.length > 0 || s.git_branch) && (
         <div style={S.row}>
-          <span style={S.dim}>top:</span>
-          {s.top_tools.map((t, i) => (
-            <span key={i} style={S.tool}>{t}</span>
-          ))}
+          {s.git_branch && (
+            <span style={S.badge('#8b949e')}>
+              🌿 {s.git_branch}
+              {s.git_dirty  ? <span style={{ color: '#d29922' }}>*</span> : null}
+              {(s.git_ahead  ?? 0) > 0 ? <span style={{ color: '#58a6ff' }}> ↑{s.git_ahead}</span>  : null}
+              {(s.git_behind ?? 0) > 0 ? <span style={{ color: '#d29922' }}> ↓{s.git_behind}</span> : null}
+            </span>
+          )}
+          {s.top_tools.length > 0 && (
+            <>
+              {s.git_branch && <span style={S.sep}>│</span>}
+              <span style={S.dim}>top:</span>
+              {s.top_tools.map((t, i) => (
+                <span key={i} style={S.tool}>{t}</span>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Línea 4: AI summary */}
+      {s.ai_summary && (
+        <div style={{ ...S.row, marginTop: 2 }}>
+          <span style={{ color: '#7d8590', fontSize: 10 }}>✨</span>
+          <span style={{ color: '#9198a1', fontSize: 11, fontStyle: 'italic' }}>{s.ai_summary}</span>
         </div>
       )}
     </div>

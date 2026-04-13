@@ -29,9 +29,9 @@ const PLAN_LIMITS: Record<ClaudePlan, {
   weeklyHoursOpus:   number
 }> = {
   free:  { prompts5h: 10,  weeklyHoursSonnet: 40,  weeklyHoursOpus: 0  },
-  pro:   { prompts5h: 40,  weeklyHoursSonnet: 80,  weeklyHoursOpus: 0  },
-  max5:  { prompts5h: 200, weeklyHoursSonnet: 280, weeklyHoursOpus: 35 },
-  max20: { prompts5h: 800, weeklyHoursSonnet: 480, weeklyHoursOpus: 40 },
+  pro:   { prompts5h: 45,  weeklyHoursSonnet: 80,  weeklyHoursOpus: 0  },
+  max5:  { prompts5h: 225, weeklyHoursSonnet: 280, weeklyHoursOpus: 35 },
+  max20: { prompts5h: 900, weeklyHoursSonnet: 480, weeklyHoursOpus: 40 },
 }
 
 // ─── Tipos públicos ───────────────────────────────────────────────────────────
@@ -41,11 +41,13 @@ export interface QuotaData {
   cyclePrompts:    number   // prompts enviados en el ciclo actual
   cycleLimit:      number   // límite del plan para este ciclo
   cyclePct:        number   // porcentaje usado (0–100)
-  cycleResetMs:    number   // ms hasta el próximo reset
-  cycleStartTs:    number   // timestamp (ms) de inicio del ciclo actual
-  // Semanal por modelo
+  cycleResetMs:    number   // ms hasta el próximo reset (calculado desde resetAt)
+  cycleResetAt:    number   // timestamp absoluto del próximo reset (rolling window)
+  cycleStartTs:    number   // timestamp (ms) del primer mensaje del ciclo actual
+  // Semanal por modelo (horas de actividad en ventanas de 5 min)
   weeklyHoursSonnet: number
   weeklyHoursOpus:   number
+  weeklyHoursHaiku:  number
   weeklyLimitSonnet: number
   weeklyLimitOpus:   number
   // Burn rate
@@ -61,8 +63,32 @@ const CYCLE_MS    = 5 * 60 * 60 * 1000   // 5 horas en ms
 const WEEK_MS     = 7 * 24 * 60 * 60 * 1000
 const WINDOW_5MIN = 5 * 60 * 1000        // ventana de 5 min para agrupar actividad por modelo
 
-function getCycleStart(now: number): number {
-  return Math.floor(now / CYCLE_MS) * CYCLE_MS
+/**
+ * Calcula el timestamp de reset usando ventana rolling real.
+ *
+ * Claude Code NO usa floor(now/5h) desde epoch UTC — usa una ventana rolling
+ * que empieza desde el primer mensaje del ciclo actual.
+ *
+ * Enfoque: buscar el primer mensaje humano en los últimos 5h de actividad.
+ * resetAt = primerMensaje.ts + 5h
+ *
+ * Si no hay mensajes en las últimas 5h → el ciclo ya reseteó, el próximo
+ * reset es en 5h desde el primer mensaje futuro (mostramos ~5h).
+ */
+function computeResetAt(entries: ParsedEntry[], now: number): number {
+  const fiveHoursAgo = now - CYCLE_MS
+  const recentHuman  = entries
+    .filter(e => e.type === 'human' && e.ts >= fiveHoursAgo)
+    .sort((a, b) => a.ts - b.ts)
+
+  if (recentHuman.length > 0) {
+    // Rolling window: el ciclo comenzó con el primer mensaje
+    return recentHuman[0].ts + CYCLE_MS
+  }
+
+  // Sin actividad en las últimas 5h → ciclo libre, no hay reset pendiente cercano
+  // Mostramos ~5h como estimado conservador
+  return now + CYCLE_MS
 }
 
 function getWeekStart(now: number): number {
@@ -149,7 +175,7 @@ function detectPlan(entries: ParsedEntry[]): ClaudePlan {
   const countsByCycle = new Map<number, number>()
   for (const e of entries) {
     if (e.type !== 'human') continue
-    const cycle = getCycleStart(e.ts)
+    const cycle = Math.floor(e.ts / CYCLE_MS) * CYCLE_MS
     countsByCycle.set(cycle, (countsByCycle.get(cycle) ?? 0) + 1)
   }
   const maxSeen = countsByCycle.size > 0 ? Math.max(...countsByCycle.values()) : 0
@@ -207,7 +233,6 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
     return cache.data
   }
 
-  const cycleStart  = getCycleStart(now)
   const weekStart   = getWeekStart(now)
   const thirtyMinAgo = now - 30 * 60 * 1000
 
@@ -218,25 +243,31 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
   const plan   = forcePlan ?? detectPlan(entries)
   const limits = PLAN_LIMITS[plan]
 
-  // ─ Ciclo 5h: prompts del usuario en la ventana actual ─
+  // ─ Ciclo 5h: prompts del usuario en la ventana actual (rolling window) ─
+  const cycleResetAt = computeResetAt(entries, now)
+  const cycleStart   = cycleResetAt - CYCLE_MS   // inicio del ciclo actual
+
   const cyclePrompts = entries.filter(e => e.type === 'human' && e.ts >= cycleStart).length
   const cyclePct     = Math.min(100, Math.round(cyclePrompts / limits.prompts5h * 100))
-  const cycleResetMs = (cycleStart + CYCLE_MS) - now
+  const cycleResetMs = Math.max(0, cycleResetAt - now)
 
   // ─ Semanal por modelo: ventanas de 5 min con actividad ─
   // Contamos ventanas de 5 min distintas con al menos 1 respuesta por modelo
   const sonnetWindows = new Set<number>()
   const opusWindows   = new Set<number>()
+  const haikuWindows  = new Set<number>()
 
   for (const e of entries) {
     if (e.type !== 'assistant' || e.ts < weekStart) continue
     const win = Math.floor(e.ts / WINDOW_5MIN) * WINDOW_5MIN
-    if (e.model?.includes('opus')) opusWindows.add(win)
-    else                           sonnetWindows.add(win)
+    if      (e.model?.includes('opus'))  opusWindows.add(win)
+    else if (e.model?.includes('haiku')) haikuWindows.add(win)
+    else                                 sonnetWindows.add(win)
   }
 
   const weeklyHoursSonnet = parseFloat((sonnetWindows.size * 5 / 60).toFixed(1))
   const weeklyHoursOpus   = parseFloat((opusWindows.size   * 5 / 60).toFixed(1))
+  const weeklyHoursHaiku  = parseFloat((haikuWindows.size  * 5 / 60).toFixed(1))
 
   // ─ Burn rate: tokens/min en los últimos 30 min ─
   const recentAssistant = entries.filter(e => e.type === 'assistant' && e.ts >= thirtyMinAgo)
@@ -252,9 +283,11 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
     cycleLimit:        limits.prompts5h,
     cyclePct,
     cycleResetMs,
+    cycleResetAt,
     cycleStartTs:      cycleStart,
     weeklyHoursSonnet,
     weeklyHoursOpus,
+    weeklyHoursHaiku,
     weeklyLimitSonnet: limits.weeklyHoursSonnet,
     weeklyLimitOpus:   limits.weeklyHoursOpus,
     burnRateTokensPerMin,

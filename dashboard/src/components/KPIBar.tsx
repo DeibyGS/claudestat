@@ -120,6 +120,33 @@ function KPICard({
   )
 }
 
+/** Mini barra horizontal para mostrar uso de un modelo (horas / límite) */
+function ModelBar({ label, color, hours, limit }: { label: string; color: string; hours: number; limit: number }) {
+  const pct = limit > 0 ? Math.min(100, Math.round(hours / limit * 100)) : null
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+      <span style={{ color, fontSize: 9, fontWeight: 700, width: 42, flexShrink: 0 }}>{label}</span>
+      <span style={{ color: '#e6edf3', fontSize: 10, fontWeight: 600, width: 32, textAlign: 'right', flexShrink: 0 }}>
+        {hours > 0 ? `${hours}h` : '—'}
+      </span>
+      {pct !== null ? (
+        <>
+          <div style={{ width: 50, height: 4, background: '#21262d', borderRadius: 2, overflow: 'hidden', flexShrink: 0 }}>
+            <div style={{
+              width: `${pct}%`, height: '100%',
+              background: pct > 85 ? '#f85149' : pct > 65 ? '#d29922' : color,
+              borderRadius: 2,
+            }} />
+          </div>
+          <span style={{ color: '#7d8590', fontSize: 9 }}>{pct}%</span>
+        </>
+      ) : (
+        <span style={{ color: '#7d8590', fontSize: 9 }}>sin límite</span>
+      )}
+    </div>
+  )
+}
+
 const STATE_META: Record<SessionState, { label: string; color: string; pulse: boolean }> = {
   working:           { label: 'working', color: '#3fb950', pulse: true  },
   waiting_for_input: { label: 'waiting', color: '#58a6ff', pulse: false },
@@ -130,9 +157,10 @@ const PLAN_LABEL: Record<string, string> = {
   free: 'Free', pro: 'Pro', max5: 'Max 5×', max20: 'Max 20×',
 }
 
-function fmtResetTime(ms: number): { relative: string; absolute: string } {
-  const absTs  = Date.now() + ms
-  const absStr = new Date(absTs).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })
+function fmtResetTime(resetAt: number): { relative: string; absolute: string } {
+  const now    = Date.now()
+  const ms     = resetAt - now
+  const absStr = new Date(resetAt).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })
   if (ms <= 0) return { relative: 'ahora', absolute: absStr }
   const h = Math.floor(ms / 3_600_000)
   const m = Math.floor((ms % 3_600_000) / 60_000)
@@ -209,10 +237,10 @@ export function KPIBar({ meta, history, cost, quota, sessionState = 'idle' }: Pr
               <span style={{ ...S.sub, marginLeft: 5 }}>{quota.cyclePct}%</span>
             </div>
             {(() => {
-              const reset = fmtResetTime(quota.cycleResetMs)
+              const reset = fmtResetTime(quota.cycleResetAt ?? (Date.now() + quota.cycleResetMs))
               return (
-                <div style={S.sub} title="Estimado — puede diferir ±30 min de la web de Claude">
-                  reset en {reset.relative} · {reset.absolute} ~
+                <div style={S.sub} title="Rolling window desde el primer mensaje — más preciso que época UTC">
+                  reset en {reset.relative} · {reset.absolute}
                 </div>
               )
             })()}
@@ -231,20 +259,47 @@ export function KPIBar({ meta, history, cost, quota, sessionState = 'idle' }: Pr
         </div>
       )}
 
-      {/* KPI: Burn rate + semanal */}
+      {/* KPI: Modelos (uso semanal por modelo) */}
       {quota && (
         <div style={S.card}>
           <div>
+            <div style={S.label}>🤖 Modelos · esta semana</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
+              {/* Sonnet — siempre visible */}
+              <ModelBar
+                label="Sonnet"
+                color="#58a6ff"
+                hours={quota.weeklyHoursSonnet}
+                limit={quota.weeklyLimitSonnet}
+              />
+              {/* Opus — solo si tiene límite (plan Max) */}
+              {quota.weeklyLimitOpus > 0 && (
+                <ModelBar
+                  label="Opus"
+                  color="#d29922"
+                  hours={quota.weeklyHoursOpus}
+                  limit={quota.weeklyLimitOpus}
+                />
+              )}
+              {/* Haiku — si se usó o siempre */}
+              <ModelBar
+                label="Haiku"
+                color="#3fb950"
+                hours={quota.weeklyHoursHaiku ?? 0}
+                limit={0}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* KPI: Burn rate */}
+      {quota && quota.burnRateTokensPerMin > 0 && (
+        <div style={S.card}>
+          <div>
             <div style={S.label}>🔥 Burn rate</div>
-            <div style={S.value}>
-              {quota.burnRateTokensPerMin > 0
-                ? `${quota.burnRateTokensPerMin.toLocaleString()} tok/min`
-                : '—'}
-            </div>
-            <div style={S.sub}>
-              sem: {quota.weeklyHoursSonnet}h Sonnet
-              {quota.weeklyHoursOpus > 0 ? ` · ${quota.weeklyHoursOpus}h Opus` : ''}
-            </div>
+            <div style={S.value}>{quota.burnRateTokensPerMin.toLocaleString()} tok/min</div>
+            <div style={S.sub}>últimos 30 min</div>
           </div>
         </div>
       )}

@@ -100,6 +100,12 @@ export interface HandoffProgress {
   nextTask: string | null
 }
 
+export interface ModelUsage {
+  opusTokens:   number
+  sonnetTokens: number
+  haikuTokens:  number
+}
+
 export interface ProjectSummary {
   path:           string
   name:           string
@@ -110,6 +116,7 @@ export interface ProjectSummary {
   avg_efficiency: number | null
   has_handoff:    boolean
   progress:       HandoffProgress
+  model_usage?:   ModelUsage
 }
 
 // ─── Meta-stats (KPIs de contexto) ────────────────────────────────────────────
@@ -149,9 +156,11 @@ export interface QuotaData {
   cycleLimit:      number
   cyclePct:        number
   cycleResetMs:    number
+  cycleResetAt:    number   // timestamp absoluto del próximo reset
   cycleStartTs:    number
   weeklyHoursSonnet: number
   weeklyHoursOpus:   number
+  weeklyHoursHaiku:  number
   weeklyLimitSonnet: number
   weeklyLimitOpus:   number
   burnRateTokensPerMin: number

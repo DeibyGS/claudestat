@@ -25,11 +25,18 @@ export interface ProjectScanResult {
   jsonlStats:   JSONLStats     // datos históricos leídos directamente de los JSONL
 }
 
+export interface ModelUsage {
+  opusTokens:   number
+  sonnetTokens: number
+  haikuTokens:  number
+}
+
 export interface JSONLStats {
   session_count:  number
   total_cost_usd: number
   total_tokens:   number
   last_active:    number | null
+  modelUsage:     ModelUsage
 }
 
 // ─── Decode ───────────────────────────────────────────────────────────────────
@@ -152,6 +159,7 @@ function calcCost(model: string, usage: { input_tokens: number; output_tokens: n
 export function getJSONLStats(encodedDir: string): JSONLStats {
   const dirPath = path.join(PROJECTS_DIR, encodedDir)
   let sessionCount = 0, totalCost = 0, totalTokens = 0, lastActive: number | null = null
+  const modelUsage: ModelUsage = { opusTokens: 0, sonnetTokens: 0, haikuTokens: 0 }
 
   try {
     const files = fs.readdirSync(dirPath)
@@ -179,8 +187,12 @@ export function getJSONLStats(encodedDir: string): JSONLStats {
             if (!usage) continue
 
             hasAssistant = true
+            const tokens = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
             totalCost   += calcCost(model, usage)
-            totalTokens += (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
+            totalTokens += tokens
+            if      (model.includes('opus'))  modelUsage.opusTokens   += tokens
+            else if (model.includes('haiku')) modelUsage.haikuTokens  += tokens
+            else                              modelUsage.sonnetTokens += tokens
           } catch { /* línea malformada */ }
         }
 
@@ -189,7 +201,7 @@ export function getJSONLStats(encodedDir: string): JSONLStats {
     }
   } catch { /* directorio no encontrado */ }
 
-  return { session_count: sessionCount, total_cost_usd: totalCost, total_tokens: totalTokens, last_active: lastActive }
+  return { session_count: sessionCount, total_cost_usd: totalCost, total_tokens: totalTokens, last_active: lastActive, modelUsage }
 }
 
 // ─── Inferencia de raíz de proyecto desde JSONL ───────────────────────────────
@@ -273,6 +285,7 @@ function getJSONLStatsByProject(dirPath: string): Map<string, JSONLStats> {
 
       // ── Calcular coste y tokens de este JSONL completo ───────────────────
       let cost = 0, tokens = 0, hasAssistant = false
+      const mu: ModelUsage = { opusTokens: 0, sonnetTokens: 0, haikuTokens: 0 }
       for (const raw of lines) {
         try {
           const obj = JSON.parse(raw.trim())
@@ -281,8 +294,12 @@ function getJSONLStatsByProject(dirPath: string): Map<string, JSONLStats> {
           const model = obj.message?.model ?? 'claude-sonnet-4-6'
           if (!usage) continue
           hasAssistant = true
+          const t = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
           cost   += calcCost(model, usage)
-          tokens += (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
+          tokens += t
+          if      (model.includes('opus'))  mu.opusTokens   += t
+          else if (model.includes('haiku')) mu.haikuTokens  += t
+          else                              mu.sonnetTokens += t
         } catch { /* ignorar */ }
       }
       if (!hasAssistant) continue
@@ -293,11 +310,14 @@ function getJSONLStatsByProject(dirPath: string): Map<string, JSONLStats> {
         existing.session_count++
         existing.total_cost_usd += cost
         existing.total_tokens   += tokens
+        existing.modelUsage.opusTokens   += mu.opusTokens
+        existing.modelUsage.sonnetTokens += mu.sonnetTokens
+        existing.modelUsage.haikuTokens  += mu.haikuTokens
         if (stat.mtimeMs > (existing.last_active ?? 0)) existing.last_active = stat.mtimeMs
       } else {
         result.set(projectRoot, {
           session_count: 1, total_cost_usd: cost,
-          total_tokens: tokens, last_active: stat.mtimeMs,
+          total_tokens: tokens, last_active: stat.mtimeMs, modelUsage: mu,
         })
       }
     } catch { /* archivo inaccesible */ }
@@ -327,6 +347,85 @@ function findBestProjectRoot(dir: string): string {
   if (byMarker) return byMarker
   // 3. Fallback: usar el dir tal cual
   return dir
+}
+
+// ─── Auto-crear HANDOFF para proyectos sin uno ───────────────────────────────
+
+/**
+ * Detecta el stack tecnológico de un proyecto desde los archivos presentes.
+ * Retorna una lista de strings legibles como "Node.js", "Python", etc.
+ */
+function detectStack(projectPath: string): string[] {
+  const markers: [string, string][] = [
+    ['package.json',     'Node.js'],
+    ['pyproject.toml',   'Python'],
+    ['requirements.txt', 'Python'],
+    ['go.mod',           'Go'],
+    ['Cargo.toml',       'Rust'],
+    ['pom.xml',          'Java / Maven'],
+    ['build.gradle',     'Java / Gradle'],
+    ['Gemfile',          'Ruby'],
+    ['pubspec.yaml',     'Flutter / Dart'],
+    ['build.gradle.kts', 'Kotlin'],
+    ['AndroidManifest.xml', 'Android'],
+    ['Info.plist',       'iOS / macOS'],
+    ['*.sln',            '.NET'],
+  ]
+  const detected: string[] = []
+  for (const [file, label] of markers) {
+    if (file.includes('*')) {
+      try {
+        const ext = file.replace('*.', '.')
+        if (fs.readdirSync(projectPath).some(f => f.endsWith(ext))) detected.push(label)
+      } catch { /* ignorar */ }
+    } else {
+      if (fs.existsSync(path.join(projectPath, file))) detected.push(label)
+    }
+  }
+  return [...new Set(detected)]  // deduplicar
+}
+
+/**
+ * Genera y escribe un HANDOFF.md mínimo para proyectos que no tienen uno.
+ * El archivo se marca como auto-generado para que el usuario lo complete.
+ * No sobreescribe si ya existe.
+ */
+export function autoCreateHandoff(projectPath: string, stats: JSONLStats): void {
+  const handoffPath = path.join(projectPath, 'HANDOFF.md')
+  if (fs.existsSync(handoffPath)) return  // ya existe, no tocar
+
+  const name    = path.basename(projectPath)
+  const stack   = detectStack(projectPath)
+  const stackStr = stack.length > 0 ? stack.join(', ') : 'no detectado'
+  const cost    = stats.total_cost_usd.toFixed(2)
+  const tokens  = stats.total_tokens >= 1_000_000
+    ? `${(stats.total_tokens / 1_000_000).toFixed(1)}M`
+    : stats.total_tokens >= 1_000
+    ? `${Math.round(stats.total_tokens / 1_000)}K`
+    : String(stats.total_tokens)
+
+  const content = `# HANDOFF — ${name}
+<!-- Auto-generado por claudetrace. Completá las secciones marcadas con TODO. -->
+
+## Current Status
+- Branch: \`TODO — indicar rama principal\`
+- Stack: ${stackStr}
+- Sesiones con Claude Code: ${stats.session_count} | Coste total: $${cost} | Tokens: ${tokens}
+
+## Pending Tasks
+- [ ] TODO — agregar las tareas pendientes del proyecto
+- [ ] TODO — describir el objetivo actual
+
+## Gotchas / Notas
+- TODO — anotar decisiones importantes, bugs conocidos, contexto crítico
+
+## Session Log
+- **${new Date().toISOString().slice(0, 10)}** — HANDOFF creado automáticamente por claudetrace
+`
+
+  try {
+    fs.writeFileSync(handoffPath, content, 'utf8')
+  } catch { /* sin permisos de escritura — ignorar silenciosamente */ }
 }
 
 // ─── Scanner principal ────────────────────────────────────────────────────────
@@ -383,14 +482,21 @@ export function discoverProjects(): ProjectScanResult[] {
       const existing = projectMap.get(bestKey)
       if (existing) {
         existing.encodedDirs.push(encodedDir)
-        existing.jsonlStats.session_count  += stats.session_count
-        existing.jsonlStats.total_cost_usd += stats.total_cost_usd
-        existing.jsonlStats.total_tokens   += stats.total_tokens
+        existing.jsonlStats.session_count            += stats.session_count
+        existing.jsonlStats.total_cost_usd           += stats.total_cost_usd
+        existing.jsonlStats.total_tokens             += stats.total_tokens
+        existing.jsonlStats.modelUsage.opusTokens   += stats.modelUsage.opusTokens
+        existing.jsonlStats.modelUsage.sonnetTokens += stats.modelUsage.sonnetTokens
+        existing.jsonlStats.modelUsage.haikuTokens  += stats.modelUsage.haikuTokens
         if (stats.last_active && (!existing.jsonlStats.last_active || stats.last_active > existing.jsonlStats.last_active)) {
           existing.jsonlStats.last_active = stats.last_active
         }
       } else {
-        projectMap.set(bestKey, { encodedDirs: [encodedDir], jsonlStats: { ...stats }, bestPath: best })
+        projectMap.set(bestKey, {
+          encodedDirs: [encodedDir],
+          jsonlStats:  { ...stats, modelUsage: { ...stats.modelUsage } },
+          bestPath:    best,
+        })
       }
     }
 
@@ -410,13 +516,18 @@ export function discoverProjects(): ProjectScanResult[] {
 
   for (const [, { bestPath: rootPath, encodedDirs, jsonlStats }] of projectMap) {
     const handoffPath = path.join(rootPath, 'HANDOFF.md')
+
+    // Auto-crear HANDOFF si el proyecto no tiene uno
+    if (!fs.existsSync(handoffPath)) {
+      autoCreateHandoff(rootPath, jsonlStats)
+    }
+
     const hasHandoff  = fs.existsSync(handoffPath)
     const progress    = hasHandoff
       ? parseHandoffProgress(fs.readFileSync(handoffPath, 'utf8'))
       : { done: 0, total: 0, pct: 0, nextTask: null }
 
     // last_active = max(JSONL mtime, HANDOFF.md mtime)
-    // Esto cubre el caso donde el HANDOFF fue editado manualmente sin sesión activa
     if (hasHandoff) {
       try {
         const handoffMtime = fs.statSync(handoffPath).mtimeMs
@@ -445,9 +556,12 @@ export function discoverProjects(): ProjectScanResult[] {
     const key      = inodeKey(r.path)
     const existing = dedup.get(key)
     if (existing) {
-      existing.jsonlStats.session_count  += r.jsonlStats.session_count
-      existing.jsonlStats.total_cost_usd += r.jsonlStats.total_cost_usd
-      existing.jsonlStats.total_tokens   += r.jsonlStats.total_tokens
+      existing.jsonlStats.session_count            += r.jsonlStats.session_count
+      existing.jsonlStats.total_cost_usd           += r.jsonlStats.total_cost_usd
+      existing.jsonlStats.total_tokens             += r.jsonlStats.total_tokens
+      existing.jsonlStats.modelUsage.opusTokens   += r.jsonlStats.modelUsage.opusTokens
+      existing.jsonlStats.modelUsage.sonnetTokens += r.jsonlStats.modelUsage.sonnetTokens
+      existing.jsonlStats.modelUsage.haikuTokens  += r.jsonlStats.modelUsage.haikuTokens
       if ((r.jsonlStats.last_active ?? 0) > (existing.jsonlStats.last_active ?? 0))
         existing.jsonlStats.last_active = r.jsonlStats.last_active
     } else {

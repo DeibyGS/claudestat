@@ -300,7 +300,8 @@ app.get('/projects', (_req: Request, res: Response) => {
       last_active:    useJSONL ? jStats.last_active     : base.last_active,
       has_handoff:    scan.hasHandoff,
       progress:       scan.progress,
-      jsonl_source:   useJSONL,   // indicador para el frontend si quiere mostrar "datos históricos"
+      model_usage:    jStats.modelUsage,  // siempre desde JSONL — más preciso que la DB
+      jsonl_source:   useJSONL,
     })
   }
 

@@ -41,6 +41,28 @@ const sseClients = new Map<string, Response>()
 // Clave: session_id  Valor: {type, ts} del último evento recibido vía /event
 const sessionLastEvent = new Map<string, { type: string; ts: number }>()
 
+// ─── Cache de proyectos ───────────────────────────────────────────────────────
+// Pre-computado al arrancar el daemon y refrescado cada 2 minutos en background.
+// Esto garantiza que la primera apertura del tab Proyectos sea instantánea
+// y que los cambios de HANDOFF.md se reflejen sin reiniciar.
+
+let _projectsCache: ReturnType<typeof discoverProjects> | null = null
+let _projectsCacheTs = 0
+const PROJECTS_CACHE_TTL = 2 * 60_000  // 2 minutos
+
+function getProjectsCached(): ReturnType<typeof discoverProjects> {
+  if (_projectsCache && Date.now() - _projectsCacheTs < PROJECTS_CACHE_TTL) {
+    return _projectsCache
+  }
+  _projectsCache = discoverProjects()
+  _projectsCacheTs = Date.now()
+  return _projectsCache
+}
+
+function invalidateProjectsCache() {
+  _projectsCache = null
+}
+
 // Caché de git info por project path — TTL 30s
 const gitCache = new Map<string, { data: GitInfo | null; ts: number }>()
 // Caché de PR status por project path — TTL 5min (llamada de red)
@@ -210,8 +232,8 @@ app.get('/projects', (_req: Request, res: Response) => {
   // Proyectos del DB (ya etiquetados)
   const dbAggregates: any[] = dbOps.getProjectAggregates()
 
-  // Proyectos descubiertos del filesystem (tienen HANDOFF.md)
-  const scanned = discoverProjects()
+  // Proyectos descubiertos del filesystem (cacheados — pre-computados al arrancar)
+  const scanned = getProjectsCached()
 
   // Obtener proyecto activo
   const latestSession = dbOps.getLatestSession()
@@ -495,6 +517,20 @@ export function startDaemon() {
 
     // Etiquetar sesiones históricas que no tienen proyecto asignado
     migrateSessionProjects()
+
+    // Pre-scan de proyectos al arrancar — garantiza respuesta inmediata en el tab
+    // Se ejecuta en background para no retrasar el inicio del servidor
+    setImmediate(() => {
+      getProjectsCached()
+      console.log(`[daemon] ${_projectsCache?.length ?? 0} proyectos escaneados`)
+    })
+
+    // Refresh automático del cache de proyectos cada 2 minutos
+    // Recoge cambios en HANDOFF.md aunque el daemon lleve horas corriendo
+    setInterval(() => {
+      invalidateProjectsCache()
+      getProjectsCached()
+    }, PROJECTS_CACHE_TTL)
 
     // Iniciar el watcher de JSONL para enriquecimiento de coste
     startEnricher(onCostUpdate, onCompactDetected)

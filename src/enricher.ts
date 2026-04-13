@@ -136,7 +136,11 @@ function processJSONL(filePath: string): CostUpdate | null {
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects')
 
-export type CostUpdateCallback = (sessionId: string, cost: CostUpdate) => void
+export type CostUpdateCallback    = (sessionId: string, cost: CostUpdate) => void
+export type CompactDetectedCallback = (sessionId: string) => void
+
+// Rastrear el último context_used por sesión para detectar auto-compact
+const prevContextBySession = new Map<string, number>()
 
 /**
  * Inicia el watcher sobre ~/.claude/projects/.
@@ -144,7 +148,7 @@ export type CostUpdateCallback = (sessionId: string, cost: CostUpdate) => void
  *
  * Usamos chokidar porque fs.watch con {recursive:true} no funciona en Linux.
  */
-export function startEnricher(onUpdate: CostUpdateCallback) {
+export function startEnricher(onUpdate: CostUpdateCallback, onCompact?: CompactDetectedCallback) {
   if (!fs.existsSync(PROJECTS_DIR)) {
     console.warn(`[enricher] Directorio no encontrado: ${PROJECTS_DIR}`)
     return
@@ -168,6 +172,19 @@ export function startEnricher(onUpdate: CostUpdateCallback) {
 
     const cost = processJSONL(filePath)
     if (cost && cost.cost_usd >= 0) {
+      // Detectar auto-compact: el contexto baja drásticamente en la misma sesión
+      // (Claude compacta y reinicia desde ~0 tokens activos)
+      const prev = prevContextBySession.get(sessionId)
+      if (
+        onCompact &&
+        prev !== undefined &&
+        prev > 140_000 &&
+        cost.context_used < prev * 0.5
+      ) {
+        onCompact(sessionId)
+      }
+      prevContextBySession.set(sessionId, cost.context_used)
+
       onUpdate(sessionId, cost)
     }
   })

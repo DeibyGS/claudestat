@@ -84,20 +84,38 @@ export function ProjectCard({ project: p, isActive }: Props) {
         <div style={S.path}>{p.path}</div>
       </div>
 
-      {/* Progress bar (solo si tiene HANDOFF) */}
+      {/* Progress (solo si tiene HANDOFF) */}
       {p.has_handoff ? (
         <div style={S.progressWrap}>
-          <div style={S.progressRow}>
-            <span style={S.progressLabel}>
-              progreso: {p.progress.done}/{p.progress.total} tareas
-            </span>
-            <span style={S.progressPct(p.progress.pct)}>{p.progress.pct}%</span>
-          </div>
-          <div style={S.barTrack}>
-            <div style={S.barFill(p.progress.pct)} />
-          </div>
-          {p.progress.nextTask && (
-            <div style={S.nextTask}>→ próximo: {p.progress.nextTask}</div>
+          {p.progress.total === 0 ? (
+            // HANDOFF sin sección de tareas
+            <span style={{ ...S.progressLabel, fontStyle: 'italic' }}>sin tareas registradas</span>
+          ) : p.progress.done === 0 ? (
+            // Tareas detectadas pero todas pendientes — evitar barra vacía con "0%"
+            <>
+              <span style={{ ...S.progressLabel }}>
+                {p.progress.total} tarea{p.progress.total > 1 ? 's' : ''} pendiente{p.progress.total > 1 ? 's' : ''}
+              </span>
+              {p.progress.nextTask && (
+                <div style={S.nextTask}>→ próximo: {p.progress.nextTask}</div>
+              )}
+            </>
+          ) : (
+            // Progreso parcial o completo — mostrar barra
+            <>
+              <div style={S.progressRow}>
+                <span style={S.progressLabel}>
+                  {p.progress.done}/{p.progress.total} tareas
+                </span>
+                <span style={S.progressPct(p.progress.pct)}>{p.progress.pct}%</span>
+              </div>
+              <div style={S.barTrack}>
+                <div style={S.barFill(p.progress.pct)} />
+              </div>
+              {p.progress.nextTask && (
+                <div style={S.nextTask}>→ próximo: {p.progress.nextTask}</div>
+              )}
+            </>
           )}
         </div>
       ) : (

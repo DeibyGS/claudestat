@@ -442,18 +442,21 @@ export function autoCreateHandoff(projectPath: string, stats: JSONLStats): void 
 
 ## Current Status
 - Branch: \`TODO — indicar rama principal\`
-- Stack: ${stackStr}
-- Sesiones con Claude Code: ${stats.session_count} | Coste total: $${cost} | Tokens: ${tokens}
+- Last: auto-generado por claudetrace (${stats.session_count} sesión${stats.session_count !== 1 ? 'es' : ''} · $${cost} · ${tokens} tokens)
+- State: stack detectado: ${stackStr}
 
 ## Pending Tasks
-- [ ] TODO — agregar las tareas pendientes del proyecto
-- [ ] TODO — describir el objetivo actual
+- [ ] TODO — describir la próxima tarea concreta
+- [ ] TODO — agregar objetivos del proyecto
 
-## Gotchas / Notas
-- TODO — anotar decisiones importantes, bugs conocidos, contexto crítico
+## Completed
+- [x] Proyecto detectado y registrado por claudetrace
+
+## Gotchas
+- TODO — anotar decisiones importantes, bugs conocidos, restricciones
 
 ## Session Log
-- **${new Date().toISOString().slice(0, 10)}** — HANDOFF creado automáticamente por claudetrace
+- **${new Date().toISOString().slice(0, 10)}** — HANDOFF auto-generado por claudetrace con ${stats.session_count} sesión${stats.session_count !== 1 ? 'es' : ''} y $${cost} de coste acumulado
 `
 
   try {

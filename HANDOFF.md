@@ -67,6 +67,7 @@ CLI watch (src/watch.ts)
   - `hooks/event.js` actualizado — PreToolUse consulta kill-switch; exit(2) si blocked
   - `claudetrace status` — imprime cuota 5h, plan, horas Sonnet/Opus, burn rate en colores
   - `claudetrace config` — ver/editar thresholds, kill switch, plan desde terminal
+- [x] Pulido: rolling window reset, model breakdown (3 modelos), auto-HANDOFF, parser mejorado, auto_handoff flag, formato estándar HANDOFF en CLAUDE.md
 - [ ] **Phase 7** — Publish
   - README completo: instalación, uso, screenshots, arquitectura
   - npm publish como `claudetrace`
@@ -92,4 +93,4 @@ CLI watch (src/watch.ts)
 - **2026-04-13** — Phase 5: git.ts + github.ts + summarizer.ts. db.ts + ai_summary column. SessionCard con branch badge + AI summary. Endpoints /git y /pr. Summarizer opcional (ANTHROPIC_API_KEY, usa Haiku).
 - **2026-04-13** — Bugs post-deploy: project cache con TTL 2min en daemon + pre-scan al arrancar. ProjectCard: 3 estados (sin tareas / todo pendiente / parcial). App.tsx: fetch proyectos al montar + refresh 60s. Quota reset: muestra hora absoluta local + "~". Contexto: se limpia tras compact_detected en lugar de quedarse congelado.
 - **2026-04-14** — Phase 6: config.ts (~/.claudetrace/config.json, thresholds/plan/kill switch), GET /kill-switch en daemon, SSE quota_warning (yellow/orange/red) en Stop, hook PreToolUse bloqueante con exit(2), claudetrace status + claudetrace config CLI.
-- **2026-04-14** — Pulido: reset time por rolling window (primer mensaje) en vez de epoch UTC. Model breakdown Opus/Sonnet/Haiku en quota-tracker + project-scanner + KPIBar (barras por modelo) + ProjectCard (barra segmentada). Auto-crear HANDOFF.md para proyectos sin uno (detecta stack, incluye stats). Límites plan actualizados (Pro 40→45, Max5 200→225, Max20 800→900).
+- **2026-04-14** — Pulido sesión 1: rolling window reset, Opus/Sonnet/Haiku en KPIBar+ProjectCard, auto-HANDOFF con detección de stack, fix parser (secciones Pending/Completed), auto_handoff por comentario HTML, formato estándar HANDOFF en CLAUDE.md global + Engram.

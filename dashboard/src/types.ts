@@ -40,3 +40,27 @@ export interface AppState {
   cost?:      CostInfo
   weeklyData: DayStats[]
 }
+
+// ─── Meta-stats (KPIs de contexto) ────────────────────────────────────────────
+
+export interface MetaAlert {
+  level:   'info' | 'warning' | 'critical'
+  message: string
+  metric:  string
+}
+
+export interface MetaStats {
+  ts:               number
+  handoffTokens:    number
+  engramTokens:     number
+  engramFileCount:  number
+  configTokens:     number
+  alerts:           MetaAlert[]
+}
+
+export interface MetaSnapshot {
+  ts:            number
+  handoffTokens: number
+  engramTokens:  number
+  configTokens:  number
+}

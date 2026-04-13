@@ -25,7 +25,7 @@ export interface IntelligenceReport {
 
 // ─── Detección de loops ───────────────────────────────────────────────────────
 
-const LOOP_THRESHOLD  = 4         // calls para considerar loop
+const LOOP_THRESHOLD  = 8         // calls para considerar loop (8 evita falsos positivos en sesiones intensas)
 const LOOP_WINDOW_MS  = 60_000    // ventana de tiempo: 60 segundos
 const LOOP_COOLDOWN_MS = 15_000   // tiempo mínimo entre alertas del mismo tool
 
@@ -82,8 +82,8 @@ export function calcEfficiencyScore(
 ): number {
   let score = 100
 
-  // Penalizar cada loop detectado
-  score -= loops.length * 20
+  // Penalizar cada loop detectado — máximo -40 para no colapsar el score en sesiones largas
+  score -= Math.min(loops.length * 20, 40)
 
   // Penalizar tool calls excesivos
   const toolCallCount = events.filter(e => e.type === 'Done').length

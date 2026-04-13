@@ -1,36 +1,34 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AppState, TraceEvent, CostInfo } from './types'
+import type { AppState, TraceEvent, CostInfo, MetaStats, MetaSnapshot } from './types'
 import { TracePanel }  from './components/TracePanel'
 import { DAGView }     from './components/DAGView'
 import { StatsFooter } from './components/StatsFooter'
 import { Header }      from './components/Header'
+import { KPIBar }      from './components/KPIBar'
 
 const EMPTY: AppState = {
   sessionId: '', cwd: '', startedAt: Date.now(), events: [], weeklyData: []
 }
 
 export default function App() {
-  const [state,      setState]     = useState<AppState>(EMPTY)
-  const [connected,  setConnected] = useState(false)
+  const [state,       setState]      = useState<AppState>(EMPTY)
+  const [connected,   setConnected]  = useState(false)
+  const [metaStats,   setMetaStats]  = useState<MetaStats | undefined>()
+  const [metaHistory, setMetaHistory] = useState<MetaSnapshot[]>([])
   const stateRef = useRef(state)
   stateRef.current = state
 
+  // ── SSE stream ──────────────────────────────────────────────────────────────
   useEffect(() => {
     let es: EventSource
     let retryTimer: ReturnType<typeof setTimeout>
 
     function connect() {
       es = new EventSource('/stream')
-
       es.addEventListener('open', () => setConnected(true))
-
       es.addEventListener('message', (e: MessageEvent) => {
-        try {
-          const msg = JSON.parse(e.data)
-          setState(prev => handleMessage(prev, msg))
-        } catch { /* ignore malformed */ }
+        try { setState(prev => handleMessage(prev, JSON.parse(e.data))) } catch { /* malformed */ }
       })
-
       es.addEventListener('error', () => {
         setConnected(false)
         es.close()
@@ -42,16 +40,27 @@ export default function App() {
     return () => { es?.close(); clearTimeout(retryTimer) }
   }, [])
 
-  const style: React.CSSProperties = {
-    display: 'grid',
-    gridTemplateRows: 'auto 1fr auto',
-    height: '100vh',
-    overflow: 'hidden',
-  }
+  // ── Polling de meta-stats cada 30s ──────────────────────────────────────────
+  useEffect(() => {
+    async function fetchMeta() {
+      try {
+        const res = await fetch('/meta-stats')
+        if (!res.ok) return
+        const data = await res.json()
+        setMetaStats(data.current)
+        setMetaHistory(data.history ?? [])
+      } catch { /* daemon no disponible */ }
+    }
+
+    fetchMeta()  // carga inicial
+    const interval = setInterval(fetchMeta, 30_000)
+    return () => clearInterval(interval)
+  }, [])
 
   return (
-    <div style={style}>
+    <div style={{ display: 'grid', gridTemplateRows: 'auto auto 1fr auto', height: '100vh', overflow: 'hidden' }}>
       <Header state={state} connected={connected} />
+      <KPIBar meta={metaStats} history={metaHistory} cost={state.cost} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', overflow: 'hidden' }}>
         <TracePanel events={state.events} startedAt={state.startedAt} cost={state.cost} />

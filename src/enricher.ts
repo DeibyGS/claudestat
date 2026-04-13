@@ -174,3 +174,26 @@ export function startEnricher(onUpdate: CostUpdateCallback) {
 
   console.log(`[enricher] Observando ${PROJECTS_DIR}`)
 }
+
+/**
+ * Busca y procesa el JSONL de una sesión específica.
+ * Usado al conectar un nuevo cliente SSE para entregar el contexto actual
+ * sin esperar al próximo cambio en el archivo.
+ */
+export function processLatestForSession(sessionId: string, onUpdate: CostUpdateCallback): void {
+  try {
+    if (!fs.existsSync(PROJECTS_DIR)) return
+    for (const dir of fs.readdirSync(PROJECTS_DIR)) {
+      const dirPath = path.join(PROJECTS_DIR, dir)
+      try {
+        if (!fs.statSync(dirPath).isDirectory()) continue
+      } catch { continue }
+      const filePath = path.join(dirPath, `${sessionId}.jsonl`)
+      if (fs.existsSync(filePath)) {
+        const cost = processJSONL(filePath)
+        if (cost && cost.cost_usd >= 0) onUpdate(sessionId, cost)
+        return
+      }
+    }
+  } catch { /* ignore — sesión nueva sin JSONL todavía */ }
+}

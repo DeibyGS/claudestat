@@ -6,13 +6,20 @@
  * - Análisis de inteligencia (loops + eficiencia) al recibir cada cost update
  * - Endpoint GET /intelligence/:sessionId
  * - Endpoint GET /sessions para el dashboard futuro
+ *
+ * Phase 3 agrega:
+ * - Sirve el dashboard React desde dashboard/dist
+ * - Endpoint GET /meta-stats: KPIs de HANDOFF, Engram, config y alertas
+ * - Procesa JSONL al conectar nuevo cliente SSE (contexto inmediato)
  */
 
 import express, { type Request, type Response } from 'express'
 import path   from 'path'
-import { dbOps }                                 from './db'
-import { startEnricher, type CostUpdateCallback } from './enricher'
-import { analyzeSession }                         from './intelligence'
+import { dbOps }                                              from './db'
+import { startEnricher, processLatestForSession,
+         type CostUpdateCallback }                            from './enricher'
+import { analyzeSession }                                     from './intelligence'
+import { computeMetaStats, getMetaHistory }                   from './meta-stats'
 
 const PORT = 7337
 const app  = express()
@@ -77,9 +84,27 @@ app.get('/stream', (req: Request, res: Response) => {
   if (latestSession) {
     const events = dbOps.getSessionEvents(latestSession.id)
     res.write(`data: ${JSON.stringify({ type: 'init', session: latestSession, events })}\n\n`)
+
+    // Procesar el JSONL de la sesión activa para entregar contexto inmediato
+    // (sin esperar al próximo mensaje de Claude)
+    setImmediate(() => processLatestForSession(latestSession.id, onCostUpdate))
   }
 
   req.on('close', () => sseClients.delete(clientId))
+})
+
+// ─── GET /meta-stats — KPIs de contexto ──────────────────────────────────────
+
+app.get('/meta-stats', (_req: Request, res: Response) => {
+  const latestSession = dbOps.getLatestSession()
+  const contextPct = latestSession?.total_cost_usd
+    ? undefined   // se calcula en el frontend desde cost.context_used / cost.context_window
+    : undefined
+
+  const current = computeMetaStats(latestSession?.cwd ?? undefined, contextPct)
+  const history  = getMetaHistory()
+
+  res.json({ current, history })
 })
 
 // ─── GET /intelligence/:sessionId — reporte de inteligencia ──────────────────

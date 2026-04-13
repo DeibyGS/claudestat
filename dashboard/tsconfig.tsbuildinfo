@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/components/dagview.tsx","./src/components/header.tsx","./src/components/statsfooter.tsx","./src/components/tracepanel.tsx"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/components/dagview.tsx","./src/components/header.tsx","./src/components/kpibar.tsx","./src/components/statsfooter.tsx","./src/components/tracepanel.tsx"],"version":"5.9.3"}

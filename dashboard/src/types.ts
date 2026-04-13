@@ -33,12 +33,13 @@ export interface DayStats {
 }
 
 export interface AppState {
-  sessionId:  string
-  cwd:        string
-  startedAt:  number
-  events:     TraceEvent[]
-  cost?:      CostInfo
-  weeklyData: DayStats[]
+  sessionId:    string
+  cwd:          string
+  startedAt:    number
+  events:       TraceEvent[]
+  cost?:        CostInfo
+  weeklyData:   DayStats[]
+  sessionState: SessionState
 }
 
 // ─── Historial y proyectos ────────────────────────────────────────────────────
@@ -110,4 +111,27 @@ export interface MetaSnapshot {
   handoffTokens: number
   engramTokens:  number
   configTokens:  number
+}
+
+// ─── Session state machine ────────────────────────────────────────────────────
+
+export type SessionState = 'working' | 'waiting_for_input' | 'idle'
+
+// ─── Quota ────────────────────────────────────────────────────────────────────
+
+export type ClaudePlan = 'free' | 'pro' | 'max5' | 'max20'
+
+export interface QuotaData {
+  cyclePrompts:    number
+  cycleLimit:      number
+  cyclePct:        number
+  cycleResetMs:    number
+  cycleStartTs:    number
+  weeklyHoursSonnet: number
+  weeklyHoursOpus:   number
+  weeklyLimitSonnet: number
+  weeklyLimitOpus:   number
+  burnRateTokensPerMin: number
+  detectedPlan:    ClaudePlan
+  computedAt:      number
 }

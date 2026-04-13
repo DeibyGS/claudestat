@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type {
   AppState, TraceEvent, CostInfo,
-  MetaStats, MetaSnapshot, DaySessions, ProjectSummary
+  MetaStats, MetaSnapshot, DaySessions, ProjectSummary,
+  QuotaData, SessionState
 } from './types'
 import { type Tab, Header }    from './components/Header'
 import { KPIBar }              from './components/KPIBar'
@@ -12,7 +13,7 @@ import { HistoryView }         from './components/HistoryView'
 import { ProjectsView }        from './components/ProjectsView'
 
 const EMPTY: AppState = {
-  sessionId: '', cwd: '', startedAt: Date.now(), events: [], weeklyData: []
+  sessionId: '', cwd: '', startedAt: Date.now(), events: [], weeklyData: [], sessionState: 'idle'
 }
 
 export default function App() {
@@ -24,6 +25,8 @@ export default function App() {
   const [historyDays,  setHistoryDays] = useState<DaySessions[]>([])
   const [projects,     setProjects]    = useState<ProjectSummary[]>([])
   const [activeProject,setActiveProject] = useState<string | null>(null)
+  const [compacting,   setCompacting]  = useState(false)
+  const [quota,        setQuota]       = useState<QuotaData | undefined>()
   const stateRef = useRef(state)
   stateRef.current = state
 
@@ -35,7 +38,15 @@ export default function App() {
       es = new EventSource('/stream')
       es.addEventListener('open', () => setConnected(true))
       es.addEventListener('message', (e: MessageEvent) => {
-        try { setState(prev => handleMessage(prev, JSON.parse(e.data))) } catch {}
+        try {
+          const msg = JSON.parse(e.data)
+          if (msg.type === 'compact_detected') {
+            setCompacting(true)
+            setTimeout(() => setCompacting(false), 15_000)
+            return
+          }
+          setState(prev => handleMessage(prev, msg))
+        } catch {}
       })
       es.addEventListener('error', () => {
         setConnected(false); es.close()
@@ -61,6 +72,20 @@ export default function App() {
     const t = setInterval(fetchMeta, 30_000)
     return () => clearInterval(t)
   }, [])
+
+  // ── Quota polling (cada 30s + al cambiar de estado de sesión) ───────────────
+  useEffect(() => {
+    async function fetchQuota() {
+      try {
+        const r = await fetch('/quota')
+        if (!r.ok) return
+        setQuota(await r.json())
+      } catch {}
+    }
+    fetchQuota()
+    const t = setInterval(fetchQuota, 30_000)
+    return () => clearInterval(t)
+  }, [state.sessionState])
 
   // ── Fetch por tab ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -96,7 +121,8 @@ export default function App() {
 
       {activeTab === 'live' && (
         <>
-          <KPIBar meta={metaStats} history={metaHistory} cost={state.cost} />
+          <KPIBar meta={metaStats} history={metaHistory} cost={state.cost} quota={quota} sessionState={state.sessionState} />
+          {compacting && <CompactBanner />}
           <div style={liveLayout}>
             <TracePanel events={state.events} startedAt={state.startedAt} cost={state.cost} />
             <DAGView    events={state.events} startedAt={state.startedAt} />
@@ -128,11 +154,17 @@ function handleMessage(prev: AppState, msg: any): AppState {
     const s = msg.session
     return {
       ...prev,
-      sessionId: s.id, cwd: s.cwd || '',
-      startedAt: s.started_at,
-      events:    (msg.events || []) as TraceEvent[],
-      cost:      buildCost(s),
+      sessionId:    s.id, cwd: s.cwd || '',
+      startedAt:    s.started_at,
+      events:       (msg.events || []) as TraceEvent[],
+      cost:         buildCost(s),
+      sessionState: (s.state as SessionState) ?? 'idle',
     }
+  }
+  if (msg.type === 'state_change') {
+    const p = msg.payload
+    if (p.session_id !== prev.sessionId) return prev
+    return { ...prev, sessionState: p.state as SessionState }
   }
   if (msg.type === 'event') {
     const evt = msg.payload as TraceEvent & { session_id: string }
@@ -168,6 +200,32 @@ function handleMessage(prev: AppState, msg: any): AppState {
     return { ...prev, cost }
   }
   return prev
+}
+
+// ─── Banner de auto-compact ────────────────────────────────────────────────────
+
+function CompactBanner() {
+  return (
+    <div style={{
+      background: '#161b22',
+      borderBottom: '1px solid #d2992255',
+      padding: '6px 16px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      animation: 'pulse 1.5s ease-in-out infinite',
+    }}>
+      <span style={{ fontSize: 16 }}>⚡</span>
+      <div>
+        <span style={{ color: '#d29922', fontWeight: 700, fontSize: 12 }}>
+          Claude está compactando el contexto
+        </span>
+        <span style={{ color: '#7d8590', fontSize: 11, marginLeft: 8 }}>
+          — el historial de herramientas se resume automáticamente para liberar espacio
+        </span>
+      </div>
+    </div>
+  )
 }
 
 function buildCost(session: any): CostInfo | undefined {

@@ -1,10 +1,12 @@
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
-import type { MetaStats, MetaSnapshot, MetaAlert, CostInfo } from '../types'
+import type { MetaStats, MetaSnapshot, MetaAlert, CostInfo, QuotaData, SessionState } from '../types'
 
 interface Props {
-  meta?:    MetaStats
-  history:  MetaSnapshot[]
-  cost?:    CostInfo
+  meta?:         MetaStats
+  history:       MetaSnapshot[]
+  cost?:         CostInfo
+  quota?:        QuotaData
+  sessionState?: SessionState
 }
 
 const ENGRAM_LIMIT = 1_000_000
@@ -118,7 +120,25 @@ function KPICard({
   )
 }
 
-export function KPIBar({ meta, history, cost }: Props) {
+const STATE_META: Record<SessionState, { label: string; color: string; pulse: boolean }> = {
+  working:           { label: 'working', color: '#3fb950', pulse: true  },
+  waiting_for_input: { label: 'waiting', color: '#58a6ff', pulse: false },
+  idle:              { label: 'idle',    color: '#7d8590', pulse: false },
+}
+
+const PLAN_LABEL: Record<string, string> = {
+  free: 'Free', pro: 'Pro', max5: 'Max 5×', max20: 'Max 20×',
+}
+
+function fmtResetTime(ms: number): string {
+  if (ms <= 0) return 'ahora'
+  const h = Math.floor(ms / 3_600_000)
+  const m = Math.floor((ms % 3_600_000) / 60_000)
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+export function KPIBar({ meta, history, cost, quota, sessionState = 'idle' }: Props) {
   // Contexto: viene de cost (datos del último mensaje del JSONL — puede tener lag de ~1 respuesta)
   const contextPct = cost?.context_used && cost.context_window
     ? Math.round(cost.context_used / cost.context_window * 100)
@@ -149,8 +169,76 @@ export function KPIBar({ meta, history, cost }: Props) {
     alerts.push({ level: 'warning', message: `Contexto al ${contextPct}% — revisar terminal Claude Code`, metric: 'context' })
   }
 
+  const sm = STATE_META[sessionState]
+
   return (
+    <>
+    <style>{`@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(1.4)} }`}</style>
     <div style={S.bar}>
+
+      {/* KPI: Estado de sesión */}
+      <div style={{ ...S.card, minWidth: 100 }}>
+        <div>
+          <div style={S.label}>⚡ Estado</div>
+          <div style={{ ...S.value, color: sm.color, display: 'flex', alignItems: 'center', gap: 5 }}>
+            {sm.pulse && (
+              <span style={{
+                width: 7, height: 7, borderRadius: '50%',
+                background: sm.color, display: 'inline-block',
+                boxShadow: `0 0 6px ${sm.color}`,
+                animation: 'pulse 1.2s ease-in-out infinite',
+              }} />
+            )}
+            {sm.label}
+          </div>
+        </div>
+      </div>
+
+      {/* KPI: Quota 5h */}
+      {quota && (
+        <div style={S.card}>
+          <div>
+            <div style={S.label}>📊 Cuota 5h · {PLAN_LABEL[quota.detectedPlan] ?? quota.detectedPlan}</div>
+            <div style={{
+              ...S.value,
+              color: quota.cyclePct > 85 ? '#f85149' : quota.cyclePct > 65 ? '#d29922' : '#e6edf3',
+            }}>
+              {quota.cyclePrompts}/{quota.cycleLimit}
+              <span style={{ ...S.sub, marginLeft: 5 }}>{quota.cyclePct}%</span>
+            </div>
+            <div style={S.sub}>reset en {fmtResetTime(quota.cycleResetMs)}</div>
+          </div>
+          {/* Mini progress bar */}
+          <div style={{ width: 6, height: 36, background: '#21262d', borderRadius: 3, overflow: 'hidden', flexShrink: 0 }}>
+            <div style={{
+              width: '100%',
+              height: `${quota.cyclePct}%`,
+              background: quota.cyclePct > 85 ? '#f85149' : quota.cyclePct > 65 ? '#d29922' : '#3fb950',
+              borderRadius: 3,
+              transition: 'height 0.3s ease',
+              boxShadow: `0 0 4px ${quota.cyclePct > 85 ? '#f85149' : '#3fb95088'}`,
+            }} />
+          </div>
+        </div>
+      )}
+
+      {/* KPI: Burn rate + semanal */}
+      {quota && (
+        <div style={S.card}>
+          <div>
+            <div style={S.label}>🔥 Burn rate</div>
+            <div style={S.value}>
+              {quota.burnRateTokensPerMin > 0
+                ? `${quota.burnRateTokensPerMin.toLocaleString()} tok/min`
+                : '—'}
+            </div>
+            <div style={S.sub}>
+              sem: {quota.weeklyHoursSonnet}h Sonnet
+              {quota.weeklyHoursOpus > 0 ? ` · ${quota.weeklyHoursOpus}h Opus` : ''}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* KPI: Contexto sesión */}
       <div style={S.card}>
@@ -227,5 +315,6 @@ export function KPIBar({ meta, history, cost }: Props) {
       </div>
 
     </div>
+    </>
   )
 }

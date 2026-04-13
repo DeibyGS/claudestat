@@ -19,10 +19,13 @@ import fs     from 'fs'
 import os     from 'os'
 import { dbOps, type EventRow }                               from './db'
 import { startEnricher, processLatestForSession,
-         type CostUpdateCallback }                            from './enricher'
+         type CostUpdateCallback,
+         type CompactDetectedCallback }                       from './enricher'
 import { analyzeSession }                                     from './intelligence'
 import { computeMetaStats, getMetaHistory }                   from './meta-stats'
 import { discoverProjects, parseHandoffProgress }             from './project-scanner'
+import { deriveSessionState, STATE_META }                     from './session-state'
+import { computeQuota, invalidateQuotaCache }                 from './quota-tracker'
 
 const PORT = 7337
 const app  = express()
@@ -30,6 +33,10 @@ app.use(express.json())
 
 // Clientes SSE conectados — uno por cada `claudetrace watch` abierto
 const sseClients = new Map<string, Response>()
+
+// Estado de sesión en memoria — se deriva a demanda, no se persiste en DB.
+// Clave: session_id  Valor: {type, ts} del último evento recibido vía /event
+const sessionLastEvent = new Map<string, { type: string; ts: number }>()
 
 function broadcast(msg: object) {
   const data = `data: ${JSON.stringify(msg)}\n\n`
@@ -81,6 +88,15 @@ app.post('/event', (req: Request, res: Response) => {
     } catch { /* ignorar errores de parsing */ }
   }
 
+  // Actualizar estado de sesión en memoria + broadcast state_change via SSE
+  sessionLastEvent.set(session_id, { type, ts })
+  const state     = deriveSessionState(type, ts)
+  const stateMeta = STATE_META[state]
+  broadcast({ type: 'state_change', payload: { session_id, state, ...stateMeta } })
+
+  // Si es un nuevo prompt del usuario → invalidar caché de quota
+  if (type === 'Stop') invalidateQuotaCache()
+
   res.json({ ok: true })
 })
 
@@ -98,8 +114,10 @@ app.get('/stream', (req: Request, res: Response) => {
   // Estado inicial: sesión más reciente con todos sus eventos
   const latestSession = dbOps.getLatestSession()
   if (latestSession) {
-    const events = dbOps.getSessionEvents(latestSession.id)
-    res.write(`data: ${JSON.stringify({ type: 'init', session: latestSession, events })}\n\n`)
+    const events  = dbOps.getSessionEvents(latestSession.id)
+    const lastEvt = sessionLastEvent.get(latestSession.id)
+    const state   = deriveSessionState(lastEvt?.type, lastEvt?.ts ?? latestSession.last_event_at ?? latestSession.started_at)
+    res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events })}\n\n`)
 
     // Procesar el JSONL de la sesión activa para entregar contexto inmediato
     // (sin esperar al próximo mensaje de Claude)
@@ -174,15 +192,26 @@ app.get('/projects', (_req: Request, res: Response) => {
   }
 
   for (const scan of scanned) {
-    const existing = projectMap.get(scan.path) ?? {
+    const dbEntry    = projectMap.get(scan.path)
+    const useJSONL   = !dbEntry || dbEntry.session_count === 0
+    const jStats     = scan.jsonlStats
+
+    const base = dbEntry ?? {
       path: scan.path, name: scan.name,
       session_count: 0, total_cost_usd: 0, total_tokens: 0,
       last_active: null, avg_efficiency: null,
     }
+
     projectMap.set(scan.path, {
-      ...existing,
-      has_handoff: scan.hasHandoff,
-      progress:    scan.progress,
+      ...base,
+      // Si la DB no tiene sesiones, usar datos de JSONL históricos
+      session_count:  useJSONL ? jStats.session_count  : base.session_count,
+      total_cost_usd: useJSONL ? jStats.total_cost_usd : base.total_cost_usd,
+      total_tokens:   useJSONL ? jStats.total_tokens   : base.total_tokens,
+      last_active:    useJSONL ? jStats.last_active     : base.last_active,
+      has_handoff:    scan.hasHandoff,
+      progress:       scan.progress,
+      jsonl_source:   useJSONL,   // indicador para el frontend si quiere mostrar "datos históricos"
     })
   }
 
@@ -267,10 +296,29 @@ app.get('/intelligence/:sessionId', (req: Request, res: Response) => {
   res.json({ sessionId, ...report })
 })
 
+// ─── GET /quota — datos de cuota y burn rate ──────────────────────────────────
+
+app.get('/quota', (_req: Request, res: Response) => {
+  try {
+    const data = computeQuota()
+    res.json(data)
+  } catch (err) {
+    res.status(500).json({ error: 'Error calculando quota' })
+  }
+})
+
 // ─── GET /sessions — listado para dashboard futuro ────────────────────────────
 
 app.get('/sessions', (_req: Request, res: Response) => {
-  res.json(dbOps.getAllSessions())
+  const sessions = dbOps.getAllSessions()
+  // Enriquecer cada sesión con el estado derivado en tiempo real
+  const enriched = sessions.map(s => {
+    const lastEvt = sessionLastEvent.get(s.id)
+    const ts      = lastEvt?.ts ?? s.last_event_at ?? s.started_at
+    const state   = deriveSessionState(lastEvt?.type, ts)
+    return { ...s, state }
+  })
+  res.json(enriched)
 })
 
 // ─── GET /health ──────────────────────────────────────────────────────────────
@@ -323,13 +371,40 @@ const onCostUpdate: CostUpdateCallback = (sessionId, cost) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
+// ─── Callback de auto-compact ────────────────────────────────────────────────
+
+const onCompactDetected: CompactDetectedCallback = (sessionId) => {
+  broadcast({ type: 'compact_detected', payload: { session_id: sessionId, ts: Date.now() } })
+  console.log(`[daemon] Auto-compact detectado para sesión ${sessionId.slice(0, 8)}`)
+}
+
+// ─── Migración de arranque: etiquetar sesiones históricas ────────────────────
+
+function migrateSessionProjects() {
+  const sessions = dbOps.getAllSessions()
+  let tagged = 0
+  for (const session of sessions) {
+    if ((session as any).project_path) continue
+    const events = dbOps.getSessionEvents(session.id)
+    const projectCwd = inferProjectCwd(events)
+    if (projectCwd) {
+      dbOps.updateSessionProject(session.id, projectCwd)
+      tagged++
+    }
+  }
+  if (tagged > 0) console.log(`[daemon] ${tagged} sesiones etiquetadas con proyecto`)
+}
+
 export function startDaemon() {
   app.listen(PORT, () => {
     console.log(`\n● claudetrace daemon  →  http://localhost:${PORT}`)
     console.log(`  Esperando eventos de Claude Code...\n`)
     console.log(`  En otra terminal: \x1b[36mclaudetrace watch\x1b[0m\n`)
 
+    // Etiquetar sesiones históricas que no tienen proyecto asignado
+    migrateSessionProjects()
+
     // Iniciar el watcher de JSONL para enriquecimiento de coste
-    startEnricher(onCostUpdate)
+    startEnricher(onCostUpdate, onCompactDetected)
   })
 }

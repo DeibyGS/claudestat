@@ -43,6 +43,12 @@ export default function App() {
           if (msg.type === 'compact_detected') {
             setCompacting(true)
             setTimeout(() => setCompacting(false), 15_000)
+            // Limpiar contexto: tras compactación el dato anterior ya no es válido.
+            // El siguiente cost_update traerá el valor real post-compact.
+            setState(prev => prev.cost
+              ? { ...prev, cost: { ...prev.cost, context_used: undefined, context_window: undefined } }
+              : prev
+            )
             return
           }
           setState(prev => handleMessage(prev, msg))

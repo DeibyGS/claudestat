@@ -130,12 +130,14 @@ const PLAN_LABEL: Record<string, string> = {
   free: 'Free', pro: 'Pro', max5: 'Max 5×', max20: 'Max 20×',
 }
 
-function fmtResetTime(ms: number): string {
-  if (ms <= 0) return 'ahora'
+function fmtResetTime(ms: number): { relative: string; absolute: string } {
+  const absTs  = Date.now() + ms
+  const absStr = new Date(absTs).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })
+  if (ms <= 0) return { relative: 'ahora', absolute: absStr }
   const h = Math.floor(ms / 3_600_000)
   const m = Math.floor((ms % 3_600_000) / 60_000)
-  if (h > 0) return `${h}h ${m}m`
-  return `${m}m`
+  const relative = h > 0 ? `${h}h ${m}m` : `${m}m`
+  return { relative, absolute: absStr }
 }
 
 export function KPIBar({ meta, history, cost, quota, sessionState = 'idle' }: Props) {
@@ -206,7 +208,14 @@ export function KPIBar({ meta, history, cost, quota, sessionState = 'idle' }: Pr
               {quota.cyclePrompts}/{quota.cycleLimit}
               <span style={{ ...S.sub, marginLeft: 5 }}>{quota.cyclePct}%</span>
             </div>
-            <div style={S.sub}>reset en {fmtResetTime(quota.cycleResetMs)}</div>
+            {(() => {
+              const reset = fmtResetTime(quota.cycleResetMs)
+              return (
+                <div style={S.sub} title="Estimado — puede diferir ±30 min de la web de Claude">
+                  reset en {reset.relative} · {reset.absolute} ~
+                </div>
+              )
+            })()}
           </div>
           {/* Mini progress bar */}
           <div style={{ width: 6, height: 36, background: '#21262d', borderRadius: 3, overflow: 'hidden', flexShrink: 0 }}>

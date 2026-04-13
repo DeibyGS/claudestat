@@ -15,7 +15,8 @@
 
 import express, { type Request, type Response } from 'express'
 import path   from 'path'
-import { dbOps }                                              from './db'
+import fs     from 'fs'
+import { dbOps, type EventRow }                               from './db'
 import { startEnricher, processLatestForSession,
          type CostUpdateCallback }                            from './enricher'
 import { analyzeSession }                                     from './intelligence'
@@ -93,15 +94,49 @@ app.get('/stream', (req: Request, res: Response) => {
   req.on('close', () => sseClients.delete(clientId))
 })
 
+// ─── Inferencia de directorio de proyecto ────────────────────────────────────
+
+/**
+ * Deduce el directorio del proyecto activo mirando los eventos de herramientas.
+ *
+ * Estrategia: busca eventos Read/Write/Edit recientes, extrae el file_path,
+ * y sube el árbol de directorios hasta encontrar un HANDOFF.md.
+ * Esto funciona aunque Claude Code haya sido lanzado desde ~ (home dir).
+ */
+function inferProjectCwd(events: EventRow[]): string | undefined {
+  const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep'])
+
+  for (const ev of [...events].reverse()) {
+    if (!FILE_TOOLS.has(ev.tool_name || '')) continue
+    if (!ev.tool_input) continue
+    try {
+      const inp  = JSON.parse(ev.tool_input)
+      const filePath = (inp.file_path || inp.path) as string | undefined
+      if (!filePath?.startsWith('/')) continue
+
+      // Subir hasta 6 niveles buscando HANDOFF.md
+      let dir = path.dirname(filePath)
+      for (let i = 0; i < 6; i++) {
+        if (fs.existsSync(path.join(dir, 'HANDOFF.md'))) return dir
+        const parent = path.dirname(dir)
+        if (parent === dir) break
+        dir = parent
+      }
+    } catch { /* tool_input malformado — ignorar */ }
+  }
+  return undefined
+}
+
 // ─── GET /meta-stats — KPIs de contexto ──────────────────────────────────────
 
 app.get('/meta-stats', (_req: Request, res: Response) => {
   const latestSession = dbOps.getLatestSession()
-  const contextPct = latestSession?.total_cost_usd
-    ? undefined   // se calcula en el frontend desde cost.context_used / cost.context_window
-    : undefined
+  const events        = latestSession ? dbOps.getSessionEvents(latestSession.id) : []
 
-  const current = computeMetaStats(latestSession?.cwd ?? undefined, contextPct)
+  // Inferir el directorio del proyecto desde los eventos (más fiable que el cwd del daemon)
+  const projectCwd = inferProjectCwd(events) ?? latestSession?.cwd ?? undefined
+
+  const current = computeMetaStats(projectCwd)
   const history  = getMetaHistory()
 
   res.json({ current, history })

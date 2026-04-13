@@ -121,23 +121,26 @@ app.post('/event', (req: Request, res: Response) => {
   const stateMeta = STATE_META[state]
   broadcast({ type: 'state_change', payload: { session_id, state, ...stateMeta } })
 
-  // Al terminar un turno (Stop) → invalidar quota cache + generar summary IA en background
+  // Al terminar un turno (Stop) → invalidar quota cache
   if (type === 'Stop') {
     invalidateQuotaCache()
-    // Generar resumen IA en background sin bloquear la respuesta
-    setImmediate(async () => {
-      try {
-        const session = dbOps.getSession(session_id)
-        if (!session) return
-        const events      = dbOps.getSessionEvents(session_id)
-        const projectName = session.project_path ? path.basename(session.project_path) : undefined
-        const summary     = await summarizeSession(events, session.total_cost_usd ?? 0, projectName)
-        if (summary) {
-          dbOps.updateSessionSummary(session_id, summary)
-          broadcast({ type: 'summary_ready', payload: { session_id, summary } })
-        }
-      } catch { /* ignorar errores del summarizer */ }
-    })
+    // Generar resumen IA solo si el usuario lo activa explícitamente
+    // Activar: CLAUDETRACE_AI_SUMMARY=true claudetrace start
+    if (process.env.CLAUDETRACE_AI_SUMMARY === 'true') {
+      setImmediate(async () => {
+        try {
+          const session = dbOps.getSession(session_id)
+          if (!session) return
+          const events      = dbOps.getSessionEvents(session_id)
+          const projectName = session.project_path ? path.basename(session.project_path) : undefined
+          const summary     = await summarizeSession(events, session.total_cost_usd ?? 0, projectName)
+          if (summary) {
+            dbOps.updateSessionSummary(session_id, summary)
+            broadcast({ type: 'summary_ready', payload: { session_id, summary } })
+          }
+        } catch { /* ignorar errores del summarizer */ }
+      })
+    }
   }
 
   res.json({ ok: true })
@@ -462,6 +465,28 @@ function migrateSessionProjects() {
   if (tagged > 0) console.log(`[daemon] ${tagged} sesiones etiquetadas con proyecto`)
 }
 
+/**
+ * Genera summaries IA para las últimas N sesiones que no tienen uno.
+ * Se ejecuta en background al arrancar el daemon — no bloquea el inicio.
+ */
+async function migrateSessionSummaries(limit = 5) {
+  const sessions = dbOps.getAllSessions()
+    .filter(s => !(s as any).ai_summary)
+    .slice(0, limit)
+
+  for (const s of sessions) {
+    try {
+      const events      = dbOps.getSessionEvents(s.id)
+      const projectName = s.project_path ? path.basename(s.project_path) : undefined
+      const summary     = await summarizeSession(events, s.total_cost_usd ?? 0, projectName)
+      if (summary) {
+        dbOps.updateSessionSummary(s.id, summary)
+        console.log(`[daemon] Summary generado para sesión ${s.id.slice(0, 8)}: "${summary}"`)
+      }
+    } catch { /* ignorar errores individuales */ }
+  }
+}
+
 export function startDaemon() {
   app.listen(PORT, () => {
     console.log(`\n● claudetrace daemon  →  http://localhost:${PORT}`)
@@ -473,5 +498,10 @@ export function startDaemon() {
 
     // Iniciar el watcher de JSONL para enriquecimiento de coste
     startEnricher(onCostUpdate, onCompactDetected)
+
+    // Summaries IA solo si opt-in explícito (CLAUDETRACE_AI_SUMMARY=true)
+    if (process.env.CLAUDETRACE_AI_SUMMARY === 'true') {
+      migrateSessionSummaries(5).catch(() => {})
+    }
   })
 }

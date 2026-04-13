@@ -100,6 +100,17 @@ export default function App() {
     }
   }, [activeTab])
 
+  // ── Projects auto-refresh (60s) — cubre ediciones manuales de HANDOFF ──────
+  useEffect(() => {
+    const t = setInterval(() => {
+      fetch('/projects').then(r => r.json()).then(d => {
+        setProjects(d.projects ?? [])
+        setActiveProject(d.active_project ?? null)
+      }).catch(() => {})
+    }, 60_000)
+    return () => clearInterval(t)
+  }, [])
+
   // Actualizar active project cuando llega nuevo evento
   useEffect(() => {
     fetch('/projects').then(r => r.json()).then(d => {

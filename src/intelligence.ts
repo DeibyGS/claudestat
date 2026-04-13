@@ -25,9 +25,9 @@ export interface IntelligenceReport {
 
 // ─── Detección de loops ───────────────────────────────────────────────────────
 
-const LOOP_THRESHOLD  = 8         // calls para considerar loop (8 evita falsos positivos en sesiones intensas)
-const LOOP_WINDOW_MS  = 60_000    // ventana de tiempo: 60 segundos
-const LOOP_COOLDOWN_MS = 15_000   // tiempo mínimo entre alertas del mismo tool
+const LOOP_THRESHOLD   = 8          // calls para considerar loop
+const LOOP_WINDOW_MS   = 120_000    // ventana de tiempo: 2 minutos (antes 60s → demasiados falsos positivos en coding)
+const LOOP_COOLDOWN_MS = 120_000    // cooldown entre alertas del mismo tool: 2 min (antes 15s → re-alertaba constantemente)
 
 /**
  * Detecta loops: cuando el mismo tool se llama ≥ LOOP_THRESHOLD veces
@@ -68,12 +68,17 @@ export function detectLoops(events: EventRow[]): LoopAlert[] {
 
 /**
  * Calcula un score de 0-100 basado en:
- * - Loops detectados         → -20 por loop
- * - Tool calls excesivos     → -5 por cada 5 calls sobre el umbral (30)
- * - Coste alto por sesión    → -10 si >$1, -20 si >$5
+ * - Loops detectados     → -10 por loop, cap -25
+ * - Tool calls excesivos → -5 por cada 50 calls sobre el umbral (150), cap -20
+ * - Coste alto           → -5 si >$2, -10 si >$10, -20 si >$30
  *
- * Un score de 100 = sesión perfectamente eficiente.
- * Un score de 0   = sesión con múltiples problemas.
+ * Principio: una sesión de coding larga y productiva (88-200 tools) NO debería
+ * llegar a 0. El score 0 se reserva para sesiones con loops masivos + coste alto.
+ *
+ * Ejemplos calibrados:
+ *   88 tools, 5 loops, $6.49  → 100 - 25 - 0 - 5  = 70
+ *  236 tools, 2 loops, $25.34 → 100 - 20 - 9 - 10  = 61
+ *   20 tools, 0 loops, $0.30  → 100 - 0  - 0 - 0   = 100
  */
 export function calcEfficiencyScore(
   events: EventRow[],
@@ -82,18 +87,19 @@ export function calcEfficiencyScore(
 ): number {
   let score = 100
 
-  // Penalizar cada loop detectado — máximo -40 para no colapsar el score en sesiones largas
-  score -= Math.min(loops.length * 20, 40)
+  // Loops: señal fuerte de ineficiencia, pero no colapsa el score
+  score -= Math.min(loops.length * 10, 25)
 
-  // Penalizar tool calls excesivos
+  // Tool calls: solo penalizar si supera un umbral alto (sesiones muy largas)
   const toolCallCount = events.filter(e => e.type === 'Done').length
-  if (toolCallCount > 30) {
-    score -= Math.floor((toolCallCount - 30) / 5) * 5
+  if (toolCallCount > 150) {
+    score -= Math.min(Math.floor((toolCallCount - 150) / 50) * 5, 20)
   }
 
-  // Penalizar coste alto
-  if (costUsd > 5.0) score -= 20
-  else if (costUsd > 1.0) score -= 10
+  // Coste: escala progresiva, no binaria
+  if      (costUsd > 30) score -= 20
+  else if (costUsd > 10) score -= 10
+  else if (costUsd > 2)  score -= 5
 
   return Math.max(0, Math.min(100, score))
 }

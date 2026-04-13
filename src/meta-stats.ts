@@ -166,11 +166,12 @@ export function computeMetaStats(sessionCwd?: string, contextPct?: number): Meta
     })
   }
 
+  // Umbrales conservadores: dato del JSONL tiene ~1 respuesta de lag vs Claude Code real-time
   if (contextPct !== undefined) {
-    if (contextPct > 90) {
-      alerts.push({ level: 'critical', message: `Auto-compact inminente — solo ${100 - contextPct}% restante`, metric: 'context' })
-    } else if (contextPct > 75) {
-      alerts.push({ level: 'warning', message: `Contexto al ${contextPct}% — auto-compact pronto`, metric: 'context' })
+    if (contextPct > 85) {
+      alerts.push({ level: 'critical', message: `Auto-compact muy pronto — ${100 - contextPct}% libre (dato aproximado)`, metric: 'context' })
+    } else if (contextPct > 65) {
+      alerts.push({ level: 'warning', message: `Contexto al ${contextPct}% usado — revisar terminal Claude Code`, metric: 'context' })
     }
   }
 

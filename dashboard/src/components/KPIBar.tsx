@@ -119,13 +119,14 @@ function KPICard({
 }
 
 export function KPIBar({ meta, history, cost }: Props) {
-  // Contexto: viene de cost, no de meta-stats
+  // Contexto: viene de cost (datos del último mensaje del JSONL — puede tener lag de ~1 respuesta)
   const contextPct = cost?.context_used && cost.context_window
     ? Math.round(cost.context_used / cost.context_window * 100)
     : null
   const remaining  = contextPct !== null ? 100 - contextPct : null
+  // Umbral conservador: alerta temprana a 60% libre porque el dato lleva ~1 respuesta de lag
   const ctxColor   = remaining === null ? '#7d8590'
-    : remaining < 20 ? '#f85149' : remaining < 40 ? '#d29922' : '#3fb950'
+    : remaining < 15 ? '#f85149' : remaining < 35 ? '#d29922' : '#3fb950'
 
   // Engramar: porcentaje del límite estimado 1M
   const engramPct  = meta ? Math.round(meta.engramTokens / ENGRAM_LIMIT * 100) : null
@@ -141,10 +142,11 @@ export function KPIBar({ meta, history, cost }: Props) {
   // Combinar alertas: del meta + del contexto
   const alerts: MetaAlert[] = []
   if (meta?.alerts) alerts.push(...meta.alerts)
-  if (contextPct !== null && contextPct > 90) {
-    alerts.push({ level: 'critical', message: `Auto-compact inminente — ${remaining}% restante`, metric: 'context' })
-  } else if (contextPct !== null && contextPct > 75) {
-    alerts.push({ level: 'warning', message: `Contexto al ${contextPct}% — auto-compact pronto`, metric: 'context' })
+  // Umbrales conservadores: dato tiene ~1 respuesta de lag vs Claude Code real-time
+  if (contextPct !== null && contextPct > 85) {
+    alerts.push({ level: 'critical', message: `Auto-compact muy pronto — ${remaining}% libre (dato: último msg)`, metric: 'context' })
+  } else if (contextPct !== null && contextPct > 65) {
+    alerts.push({ level: 'warning', message: `Contexto al ${contextPct}% — revisar terminal Claude Code`, metric: 'context' })
   }
 
   return (
@@ -157,8 +159,13 @@ export function KPIBar({ meta, history, cost }: Props) {
           <div style={{ ...S.value, color: ctxColor }}>
             {remaining !== null ? `${remaining}% libre` : '—'}
           </div>
-          {cost?.context_used && (
-            <div style={S.sub}>{fmtTok(cost.context_used)} / {fmtTok(cost.context_window ?? 200_000)}</div>
+          {cost?.context_used ? (
+            <div style={S.sub}>
+              {fmtTok(cost.context_used)} / {fmtTok(cost.context_window ?? 200_000)}
+              <span style={{ color: '#7d859066', marginLeft: 4 }}>~último msg</span>
+            </div>
+          ) : (
+            <div style={S.sub}>calculando…</div>
           )}
         </div>
         {/* Mini progress bar vertical */}

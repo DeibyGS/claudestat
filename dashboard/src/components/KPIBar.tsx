@@ -281,13 +281,14 @@ export function KPIBar({ meta, history, cost, quota, sessionState = 'idle' }: Pr
                   limit={quota.weeklyLimitOpus}
                 />
               )}
-              {/* Haiku — si se usó o siempre */}
-              <ModelBar
-                label="Haiku"
-                color="#3fb950"
-                hours={quota.weeklyHoursHaiku ?? 0}
-                limit={0}
-              />
+              {/* Haiku — solo si realmente se usó (no tiene límite semanal oficial) */}
+              {(quota.weeklyHoursHaiku ?? 0) > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <span style={{ color: '#3fb950', fontSize: 9, fontWeight: 700, width: 42, flexShrink: 0 }}>Haiku</span>
+                  <span style={{ color: '#e6edf3', fontSize: 10, fontWeight: 600 }}>{quota.weeklyHoursHaiku}h</span>
+                  <span style={{ color: '#7d8590', fontSize: 9 }}>sin límite</span>
+                </div>
+              )}
             </div>
           </div>
         </div>

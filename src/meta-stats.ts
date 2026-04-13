@@ -40,6 +40,36 @@ const history: MetaSnapshot[] = []
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Decodifica el cwd real desde la ruta interna de Claude Code.
+ *
+ * El daemon guarda el cwd extrayéndolo de transcript_path, que tiene forma:
+ *   /Users/db/.claude/projects/-Users-db-Documents-GitHub-claudetrace
+ *
+ * Donde "-Users-db-Documents-GitHub-claudetrace" es el cwd real con
+ * cada '/' reemplazado por '-'. Este helper lo decodifica de vuelta.
+ *
+ * Caso ambiguo: directorios con '-' en el nombre → acepta falsos positivos
+ * pero en la práctica funciona para la mayoría de paths.
+ */
+function resolveProjectCwd(storedCwd: string): string {
+  const homeDir = os.homedir()
+  const projectsDir = path.join(homeDir, '.claude', 'projects')
+
+  if (!storedCwd.startsWith(projectsDir + '/')) return storedCwd  // ya es un path real
+
+  const encodedPath = storedCwd.slice(projectsDir.length + 1)  // "-Users-db-Documents-..."
+  const encodedHome = homeDir.replace(/\//g, '-')              // "-Users-db"
+
+  if (encodedPath.startsWith(encodedHome)) {
+    const rest = encodedPath.slice(encodedHome.length)  // "-Documents-GitHub-claudetrace"
+    return homeDir + rest.replace(/-/g, '/')            // "/Users/db/Documents/GitHub/claudetrace"
+  }
+
+  // Fallback genérico: reemplazar '-' por '/'
+  return '/' + encodedPath.replace(/-/g, '/').slice(0)
+}
+
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4)
 }
@@ -75,10 +105,13 @@ function fmtTok(n: number): string {
 export function computeMetaStats(sessionCwd?: string, contextPct?: number): MetaStats {
   const ts = Date.now()
 
+  // Decodificar el path real si viene como ruta interna de Claude Code
+  const projectCwd = sessionCwd ? resolveProjectCwd(sessionCwd) : undefined
+
   // ── HANDOFF.md del proyecto activo ────────────────────────────────────────
   let handoffTokens = 0
-  if (sessionCwd) {
-    const hp = path.join(sessionCwd, 'HANDOFF.md')
+  if (projectCwd) {
+    const hp = path.join(projectCwd, 'HANDOFF.md')
     const content = readFile(hp)
     if (content) handoffTokens = estimateTokens(content)
   }
@@ -96,10 +129,10 @@ export function computeMetaStats(sessionCwd?: string, contextPct?: number): Meta
     path.join(os.homedir(), '.claude', 'CLAUDE.md'),
   ]
   // CLAUDE.md y AGENTS.md del proyecto activo (si existen)
-  if (sessionCwd) {
+  if (projectCwd) {
     configFiles.push(
-      path.join(sessionCwd, 'CLAUDE.md'),
-      path.join(sessionCwd, 'AGENTS.md'),
+      path.join(projectCwd, 'CLAUDE.md'),
+      path.join(projectCwd, 'AGENTS.md'),
     )
   }
   for (const f of configFiles) {

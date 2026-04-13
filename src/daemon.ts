@@ -26,6 +26,7 @@ import { computeMetaStats, getMetaHistory }                   from './meta-stats
 import { discoverProjects, parseHandoffProgress }             from './project-scanner'
 import { deriveSessionState, STATE_META }                     from './session-state'
 import { computeQuota, invalidateQuotaCache }                 from './quota-tracker'
+import { readConfig, getWarnLevel }                           from './config'
 import { getGitInfo, type GitInfo }                           from './git'
 import { getPRStatus, type PRStatus }                         from './github'
 import { summarizeSession }                                   from './summarizer'
@@ -143,9 +144,29 @@ app.post('/event', (req: Request, res: Response) => {
   const stateMeta = STATE_META[state]
   broadcast({ type: 'state_change', payload: { session_id, state, ...stateMeta } })
 
-  // Al terminar un turno (Stop) → invalidar quota cache
+  // Al terminar un turno (Stop) → invalidar quota cache + emitir warnings
   if (type === 'Stop') {
     invalidateQuotaCache()
+    // Emitir warning SSE si la cuota supera algún threshold configurado
+    setImmediate(() => {
+      try {
+        const cfg  = readConfig()
+        const data = computeQuota(cfg.plan ?? undefined)
+        const level = getWarnLevel(data.cyclePct, cfg.warnThresholds)
+        if (level) {
+          broadcast({
+            type: 'quota_warning',
+            payload: {
+              level,
+              cyclePct:  data.cyclePct,
+              cycleLimit: data.cycleLimit,
+              resetMs:   data.cycleResetMs,
+              blocked:   cfg.killSwitchEnabled && data.cyclePct >= cfg.killSwitchThreshold,
+            }
+          })
+        }
+      } catch { /* ignorar errores al calcular quota */ }
+    })
     // Generar resumen IA solo si el usuario lo activa explícitamente
     // Activar: CLAUDETRACE_AI_SUMMARY=true claudetrace start
     if (process.env.CLAUDETRACE_AI_SUMMARY === 'true') {
@@ -392,12 +413,40 @@ app.get('/intelligence/:sessionId', (req: Request, res: Response) => {
 
 app.get('/quota', (_req: Request, res: Response) => {
   try {
-    const data = computeQuota()
+    const cfg  = readConfig()
+    const data = computeQuota(cfg.plan ?? undefined)
     res.json(data)
   } catch (err) {
     res.status(500).json({ error: 'Error calculando quota' })
   }
 })
+
+// ─── GET /kill-switch — consultado por el hook PreToolUse ─────────────────────
+// Si está bloqueado, el hook hace exit(2) y Claude Code cancela la acción.
+
+app.get('/kill-switch', (_req: Request, res: Response) => {
+  try {
+    const cfg  = readConfig()
+    const data = computeQuota(cfg.plan ?? undefined)
+
+    const blocked = cfg.killSwitchEnabled && data.cyclePct >= cfg.killSwitchThreshold
+    const reason  = blocked
+      ? `Cuota 5h al ${data.cyclePct}% (límite: ${cfg.killSwitchThreshold}%). Reset en ${formatMs(data.cycleResetMs)}.`
+      : undefined
+
+    res.json({ blocked, reason, cyclePct: data.cyclePct })
+  } catch {
+    res.json({ blocked: false })  // si hay error, no bloquear
+  }
+})
+
+/** Formatea ms a "Xh Ym" legible */
+function formatMs(ms: number): string {
+  const totalMin = Math.ceil(ms / 60_000)
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  return h > 0 ? `${h}h ${m}m` : `${m}m`
+}
 
 // ─── GET /sessions — listado para dashboard futuro ────────────────────────────
 

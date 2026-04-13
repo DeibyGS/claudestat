@@ -2,8 +2,10 @@
 
 ## Current Status
 - Branch: `master`
-- Último commit: `feat: Phase 1 MVP — real-time execution trace CLI`
-- **Phase 1 COMPLETADA y funcional**
+- Último commit: `feat: Phase 3 — dashboard Vite + React integrado en daemon`
+- **Phase 1 ✅ COMPLETADA** — hooks + daemon + CLI renderer
+- **Phase 2 ✅ COMPLETADA** — SQLite, loop detection, enricher JSONL, visual upgrade CLI
+- **Phase 3 ✅ COMPLETADA** — Dashboard React en http://localhost:7337
 - Hooks instalados en `~/.claude/settings.json` (SessionStart, PreToolUse, PostToolUse, Stop)
 
 ## Arquitectura Phase 1
@@ -36,13 +38,8 @@ CLI watch (src/watch.ts)
 3. Usar Claude Code normalmente → el trace aparece en tiempo real
 
 ## Pending Tasks
-- [ ] **Phase 2** — SQLite persistence + inteligencia
-  - Migrar store en memoria a SQLite (node:sqlite o better-sqlite3)
-  - Algoritmo de detección de loops (mismo tool >3 veces en 60s)
-  - Scoring de eficiencia por sesión
-  - Enriquecimiento con coste desde JSONL de Claude Code
-- [x] Visual upgrade: contexto, bloques, modo, tokens K/M, loop badge, eficiencia bar
-- [ ] **Phase 3** — Dashboard web
+- [x] **Phase 2** — SQLite, loop detection, enricher JSONL, visual upgrade CLI
+- [x] **Phase 3** — Dashboard web
   - Servidor React (Vite)
   - Grafo DAG en tiempo real (React Flow o D3)
   - WebSocket upgrade del SSE
@@ -64,3 +61,5 @@ CLI watch (src/watch.ts)
 ## Session Log
 - **2026-04-13** — Proyecto iniciado. Análisis de ecosistema. Phase 1 MVP: daemon HTTP+SSE, store en memoria, CLI renderer, hooks.
 - **2026-04-13** — Phase 2: SQLite (node:sqlite), loop detection, enricher JSONL + pricing. Visual upgrade: barra de contexto, bloques por respuesta, detección de modo, tokens K/M, badge de loop, barra eficiencia.
+- **2026-04-13** — Phase 3: Dashboard Vite+React integrado en daemon puerto 7337. Componentes: Header (context bar), TracePanel (trace en vivo), DAGView (React Flow), StatsFooter (cost + Recharts weekly bar). Fix bugs: efficiency 0/100, semanal sin datos.
+- **2026-04-13** — KPIBar + fixes: LOOP_THRESHOLD 4→8, loop penalty cap -40, processLatestForSession para contexto inmediato, meta-stats.ts + /meta-stats endpoint, KPIBar con sparklines (Engram/HANDOFF/Config/Contexto) + alertas semaforizadas.

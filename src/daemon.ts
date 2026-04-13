@@ -16,11 +16,13 @@
 import express, { type Request, type Response } from 'express'
 import path   from 'path'
 import fs     from 'fs'
+import os     from 'os'
 import { dbOps, type EventRow }                               from './db'
 import { startEnricher, processLatestForSession,
          type CostUpdateCallback }                            from './enricher'
 import { analyzeSession }                                     from './intelligence'
 import { computeMetaStats, getMetaHistory }                   from './meta-stats'
+import { discoverProjects, parseHandoffProgress }             from './project-scanner'
 
 const PORT = 7337
 const app  = express()
@@ -66,6 +68,19 @@ app.post('/event', (req: Request, res: Response) => {
     broadcast({ type: 'event', payload: req.body })
   }
 
+  // Intentar etiquetar la sesión con su proyecto (solo en eventos de herramientas de archivo)
+  const FILE_TOOLS = new Set(['Read','Write','Edit','Glob','Grep'])
+  if (FILE_TOOLS.has(tool_name || '') && tool_input) {
+    try {
+      const inp      = typeof tool_input === 'string' ? JSON.parse(tool_input) : tool_input
+      const filePath = (inp.file_path || inp.path) as string | undefined
+      if (filePath?.startsWith('/')) {
+        const projectCwd = findProjectCwdForFile(filePath)
+        if (projectCwd) dbOps.updateSessionProject(session_id, projectCwd)
+      }
+    } catch { /* ignorar errores de parsing */ }
+  }
+
   res.json({ ok: true })
 })
 
@@ -94,38 +109,136 @@ app.get('/stream', (req: Request, res: Response) => {
   req.on('close', () => sseClients.delete(clientId))
 })
 
-// ─── Inferencia de directorio de proyecto ────────────────────────────────────
+// ─── Helpers de proyecto ─────────────────────────────────────────────────────
 
-/**
- * Deduce el directorio del proyecto activo mirando los eventos de herramientas.
- *
- * Estrategia: busca eventos Read/Write/Edit recientes, extrae el file_path,
- * y sube el árbol de directorios hasta encontrar un HANDOFF.md.
- * Esto funciona aunque Claude Code haya sido lanzado desde ~ (home dir).
- */
+/** Sube el árbol desde un file_path hasta encontrar HANDOFF.md → directorio del proyecto */
+function findProjectCwdForFile(filePath: string): string | undefined {
+  let dir = path.dirname(filePath)
+  for (let i = 0; i < 6; i++) {
+    if (fs.existsSync(path.join(dir, 'HANDOFF.md'))) return dir
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return undefined
+}
+
+/** Infiere el proyecto activo mirando los eventos de archivo de una sesión */
 function inferProjectCwd(events: EventRow[]): string | undefined {
   const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep'])
-
   for (const ev of [...events].reverse()) {
     if (!FILE_TOOLS.has(ev.tool_name || '')) continue
     if (!ev.tool_input) continue
     try {
-      const inp  = JSON.parse(ev.tool_input)
+      const inp      = JSON.parse(ev.tool_input)
       const filePath = (inp.file_path || inp.path) as string | undefined
       if (!filePath?.startsWith('/')) continue
-
-      // Subir hasta 6 niveles buscando HANDOFF.md
-      let dir = path.dirname(filePath)
-      for (let i = 0; i < 6; i++) {
-        if (fs.existsSync(path.join(dir, 'HANDOFF.md'))) return dir
-        const parent = path.dirname(dir)
-        if (parent === dir) break
-        dir = parent
-      }
-    } catch { /* tool_input malformado — ignorar */ }
+      const cwd = findProjectCwdForFile(filePath)
+      if (cwd) return cwd
+    } catch { /* ignorar */ }
   }
   return undefined
 }
+
+// ─── GET /projects — listado de proyectos con stats ──────────────────────────
+
+app.get('/projects', (_req: Request, res: Response) => {
+  // Proyectos del DB (ya etiquetados)
+  const dbAggregates: any[] = dbOps.getProjectAggregates()
+
+  // Proyectos descubiertos del filesystem (tienen HANDOFF.md)
+  const scanned = discoverProjects()
+
+  // Obtener proyecto activo
+  const latestSession = dbOps.getLatestSession()
+  const latestEvents  = latestSession ? dbOps.getSessionEvents(latestSession.id) : []
+  const activeProject = latestSession?.project_path
+    ?? inferProjectCwd(latestEvents)
+    ?? null
+
+  // Merge: DB stats + filesystem scan
+  const projectMap = new Map<string, any>()
+
+  for (const agg of dbAggregates) {
+    projectMap.set(agg.project_path, {
+      path:           agg.project_path,
+      name:           path.basename(agg.project_path),
+      session_count:  agg.session_count,
+      total_cost_usd: agg.total_cost_usd,
+      total_tokens:   (agg.total_input_tokens ?? 0) + (agg.total_output_tokens ?? 0),
+      last_active:    agg.last_active,
+      avg_efficiency: agg.avg_efficiency ? Math.round(agg.avg_efficiency) : null,
+      progress: { done: 0, total: 0, pct: 0, nextTask: null },
+      has_handoff: false,
+    })
+  }
+
+  for (const scan of scanned) {
+    const existing = projectMap.get(scan.path) ?? {
+      path: scan.path, name: scan.name,
+      session_count: 0, total_cost_usd: 0, total_tokens: 0,
+      last_active: null, avg_efficiency: null,
+    }
+    projectMap.set(scan.path, {
+      ...existing,
+      has_handoff: scan.hasHandoff,
+      progress:    scan.progress,
+    })
+  }
+
+  const projects = [...projectMap.values()]
+    .sort((a, b) => (b.last_active ?? 0) - (a.last_active ?? 0))
+
+  res.json({ projects, active_project: activeProject })
+})
+
+// ─── GET /history — sesiones agrupadas por día ────────────────────────────────
+
+app.get('/history', (_req: Request, res: Response) => {
+  const sessions = dbOps.getRecentSessions(30)
+
+  // Agrupar por fecha local (YYYY-MM-DD)
+  const byDate = new Map<string, any[]>()
+
+  for (const s of sessions) {
+    const date = new Date(s.started_at).toISOString().slice(0, 10)
+    if (!byDate.has(date)) byDate.set(date, [])
+
+    // Detectar modo desde los contadores precalculados en la query
+    const hasAgent = (s.agent_count ?? 0) > 0
+    const hasSkill = (s.skill_count  ?? 0) > 0
+    const mode = hasAgent && hasSkill ? 'agentes+skills'
+      : hasAgent ? 'agentes' : hasSkill ? 'skills' : 'directo'
+
+    byDate.get(date)!.push({
+      id:             s.id,
+      project_path:   s.project_path ?? null,
+      project_name:   s.project_path ? path.basename(s.project_path) : null,
+      started_at:     s.started_at,
+      last_event_at:  s.last_event_at ?? s.started_at,
+      duration_ms:    (s.last_event_at ?? s.started_at) - s.started_at,
+      total_cost_usd: s.total_cost_usd    ?? 0,
+      total_tokens:   (s.total_input_tokens ?? 0) + (s.total_output_tokens ?? 0),
+      efficiency_score: s.efficiency_score ?? 100,
+      loops_detected:   s.loops_detected  ?? 0,
+      done_count:       s.done_count      ?? 0,
+      top_tools:        s.top_tools_csv   ? (s.top_tools_csv as string).split(',') : [],
+      mode,
+    })
+  }
+
+  const days = [...byDate.entries()]
+    .map(([date, sessions]) => ({
+      date,
+      sessions,
+      total_cost:    sessions.reduce((s, x) => s + x.total_cost_usd, 0),
+      total_tokens:  sessions.reduce((s, x) => s + x.total_tokens,   0),
+      total_duration_ms: sessions.reduce((s, x) => s + x.duration_ms, 0),
+    }))
+    .sort((a, b) => b.date.localeCompare(a.date))
+
+  res.json({ days })
+})
 
 // ─── GET /meta-stats — KPIs de contexto ──────────────────────────────────────
 

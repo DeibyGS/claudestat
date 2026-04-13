@@ -21,10 +21,14 @@ fs.mkdirSync(CLAUDETRACE_DIR, { recursive: true })
 
 const db = new DatabaseSync(DB_PATH)
 
+// Migración: añadir project_path a instalaciones previas (seguro si ya existe)
+try { db.exec(`ALTER TABLE sessions ADD COLUMN project_path TEXT`) } catch { /* ya existe */ }
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     id                     TEXT    PRIMARY KEY,
     cwd                    TEXT,
+    project_path           TEXT,
     started_at             INTEGER NOT NULL,
     last_event_at          INTEGER,
     total_cost_usd         REAL    DEFAULT 0,
@@ -55,6 +59,7 @@ db.exec(`
 export interface SessionRow {
   id: string
   cwd?: string
+  project_path?: string
   started_at: number
   last_event_at?: number
   total_cost_usd?: number
@@ -137,6 +142,39 @@ const stmts = {
 
   getSession: db.prepare(`
     SELECT * FROM sessions WHERE id = ?
+  `),
+
+  updateSessionProject: db.prepare(`
+    UPDATE sessions SET project_path = ? WHERE id = ? AND project_path IS NULL
+  `),
+
+  getRecentSessions: db.prepare(`
+    SELECT s.*,
+      (SELECT COUNT(*) FROM events e WHERE e.session_id = s.id AND e.type = 'Done') as done_count,
+      (SELECT GROUP_CONCAT(tool_name) FROM (
+        SELECT tool_name FROM events WHERE session_id = s.id AND type = 'Done' AND tool_name IS NOT NULL
+        GROUP BY tool_name ORDER BY COUNT(*) DESC LIMIT 3
+      )) as top_tools_csv,
+      (SELECT COUNT(*) FROM events WHERE session_id = s.id AND tool_name = 'Agent') as agent_count,
+      (SELECT COUNT(*) FROM events WHERE session_id = s.id AND tool_name = 'Skill')  as skill_count
+    FROM sessions s
+    WHERE s.started_at >= ?
+    ORDER BY s.started_at DESC
+  `),
+
+  getProjectAggregates: db.prepare(`
+    SELECT
+      project_path,
+      COUNT(*) as session_count,
+      COALESCE(SUM(total_cost_usd),    0) as total_cost_usd,
+      COALESCE(SUM(total_input_tokens),0) as total_input_tokens,
+      COALESCE(SUM(total_output_tokens),0)as total_output_tokens,
+      MAX(last_event_at) as last_active,
+      AVG(CASE WHEN efficiency_score > 0 THEN efficiency_score END) as avg_efficiency
+    FROM sessions
+    WHERE project_path IS NOT NULL
+    GROUP BY project_path
+    ORDER BY last_active DESC
   `)
 }
 
@@ -202,5 +240,18 @@ export const dbOps = {
 
   getAllSessions(): SessionRow[] {
     return stmts.getAllSessions.all() as SessionRow[]
+  },
+
+  updateSessionProject(sessionId: string, projectPath: string) {
+    stmts.updateSessionProject.run(projectPath, sessionId)
+  },
+
+  getRecentSessions(days: number): any[] {
+    const since = Date.now() - days * 24 * 60 * 60 * 1000
+    return stmts.getRecentSessions.all(since) as any[]
+  },
+
+  getProjectAggregates(): any[] {
+    return stmts.getProjectAggregates.all() as any[]
   }
 }

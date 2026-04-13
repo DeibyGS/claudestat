@@ -41,6 +41,53 @@ export interface AppState {
   weeklyData: DayStats[]
 }
 
+// ─── Historial y proyectos ────────────────────────────────────────────────────
+
+export type SessionMode = 'directo' | 'agentes' | 'skills' | 'agentes+skills'
+
+export interface SessionSummary {
+  id:             string
+  project_path:   string | null
+  project_name:   string | null
+  started_at:     number
+  last_event_at:  number
+  duration_ms:    number
+  total_cost_usd: number
+  total_tokens:   number
+  efficiency_score: number
+  loops_detected: number
+  done_count:     number
+  top_tools:      string[]
+  mode:           SessionMode
+}
+
+export interface DaySessions {
+  date:              string
+  sessions:          SessionSummary[]
+  total_cost:        number
+  total_tokens:      number
+  total_duration_ms: number
+}
+
+export interface HandoffProgress {
+  done:     number
+  total:    number
+  pct:      number
+  nextTask: string | null
+}
+
+export interface ProjectSummary {
+  path:           string
+  name:           string
+  session_count:  number
+  total_cost_usd: number
+  total_tokens:   number
+  last_active:    number | null
+  avg_efficiency: number | null
+  has_handoff:    boolean
+  progress:       HandoffProgress
+}
+
 // ─── Meta-stats (KPIs de contexto) ────────────────────────────────────────────
 
 export interface MetaAlert {

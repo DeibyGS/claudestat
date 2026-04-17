@@ -1,19 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
+import { Zap } from 'lucide-react'
 import type {
-  AppState, TraceEvent, CostInfo,
+  AppState, TraceEvent, CostInfo, BlockCost,
   MetaStats, MetaSnapshot, DaySessions, ProjectSummary,
   QuotaData, SessionState
 } from './types'
 import { type Tab, Header }    from './components/Header'
-import { KPIBar }              from './components/KPIBar'
+import { ConfigPanel }        from './components/ConfigPanel'
 import { TracePanel }          from './components/TracePanel'
-import { DAGView }             from './components/DAGView'
-import { StatsFooter }         from './components/StatsFooter'
 import { HistoryView }         from './components/HistoryView'
 import { ProjectsView }        from './components/ProjectsView'
+import { UsageView }           from './components/UsageView'
 
 const EMPTY: AppState = {
-  sessionId: '', cwd: '', startedAt: Date.now(), events: [], weeklyData: [], sessionState: 'idle'
+  sessionId: '', cwd: '', startedAt: Date.now(), events: [], weeklyData: [], sessionState: 'idle', blockCosts: []
 }
 
 export default function App() {
@@ -27,8 +27,39 @@ export default function App() {
   const [activeProject,setActiveProject] = useState<string | null>(null)
   const [compacting,   setCompacting]  = useState(false)
   const [quota,        setQuota]       = useState<QuotaData | undefined>()
+  const [configOpen,   setConfigOpen]  = useState(false)
   const stateRef = useRef(state)
   stateRef.current = state
+
+  // ── Título dinámico del browser tab ───────────────────────────────────────
+  useEffect(() => {
+    const events = state.events
+    // El último PreToolUse sin Done posterior = tool en progreso
+    const last = [...events].reverse().find(e => e.type === 'PreToolUse' || e.type === 'Done' || e.type === 'Stop')
+    if (last?.type === 'PreToolUse' && last.tool_name) {
+      let label = last.tool_name.toLowerCase()
+      if (last.tool_input) {
+        try {
+          const inp = JSON.parse(last.tool_input)
+          const det = inp.file_path ? inp.file_path.split('/').pop()
+            : inp.command ? inp.command.slice(0, 30)
+            : inp.pattern ? inp.pattern.slice(0, 30)
+            : null
+          if (det) label += ` ${det}`
+        } catch {}
+      }
+      document.title = `claudetrace — ${label}`
+    } else {
+      document.title = 'claudetrace'
+    }
+  }, [state.events])
+
+  // ── Notificaciones del sistema ────────────────────────────────────────────
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission()
+    }
+  }, [])
 
   // ── SSE stream ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -40,6 +71,21 @@ export default function App() {
       es.addEventListener('message', (e: MessageEvent) => {
         try {
           const msg = JSON.parse(e.data)
+
+          // Notificaciones del sistema
+          if ('Notification' in window && Notification.permission === 'granted') {
+            if (msg.type === 'quota_warning' && (msg.payload?.level === 'orange' || msg.payload?.level === 'red')) {
+              new Notification('claudetrace — Cuota alta', {
+                body: `Cuota al ${msg.payload.cyclePct}% — ${msg.payload.level === 'red' ? 'Kill switch próximo' : 'Atención requerida'}`,
+              })
+            }
+            if (msg.type === 'compact_detected') {
+              new Notification('claudetrace — Auto-compact', {
+                body: 'Claude está compactando el contexto de la sesión',
+              })
+            }
+          }
+
           if (msg.type === 'compact_detected') {
             setCompacting(true)
             setTimeout(() => setCompacting(false), 15_000)
@@ -129,7 +175,7 @@ export default function App() {
   }, [state.events.length])
 
   const liveLayout: React.CSSProperties = {
-    display: 'grid', gridTemplateColumns: '380px 1fr', overflow: 'hidden', flex: 1
+    flex: 1, overflow: 'hidden', display: 'flex',
   }
 
   return (
@@ -138,17 +184,23 @@ export default function App() {
         state={state} connected={connected}
         activeTab={activeTab} onTabChange={setActiveTab}
         activeProject={activeProject}
+        onOpenConfig={() => setConfigOpen(true)}
+        quota={quota}
       />
+      {configOpen && <ConfigPanel onClose={() => setConfigOpen(false)} />}
 
       {activeTab === 'live' && (
         <>
-          <KPIBar meta={metaStats} history={metaHistory} cost={state.cost} quota={quota} sessionState={state.sessionState} />
           {compacting && <CompactBanner />}
           <div style={liveLayout}>
-            <TracePanel events={state.events} startedAt={state.startedAt} cost={state.cost} />
-            <DAGView    events={state.events} startedAt={state.startedAt} />
+            <TracePanel
+              events={state.events} startedAt={state.startedAt}
+              cost={state.cost} blockCosts={state.blockCosts}
+              meta={metaStats} quota={quota}
+              sessionState={state.sessionState}
+              weeklyData={state.weeklyData}
+            />
           </div>
-          <StatsFooter cost={state.cost} weeklyData={state.weeklyData} />
         </>
       )}
 
@@ -160,7 +212,13 @@ export default function App() {
 
       {activeTab === 'projects' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <ProjectsView projects={projects} activeProject={activeProject} />
+          <ProjectsView projects={projects} activeProject={activeProject} weeklyData={state.weeklyData} />
+        </div>
+      )}
+
+      {activeTab === 'usage' && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <UsageView quota={quota} cost={state.cost} />
         </div>
       )}
     </div>
@@ -180,6 +238,7 @@ function handleMessage(prev: AppState, msg: any): AppState {
       events:       (msg.events || []) as TraceEvent[],
       cost:         buildCost(s),
       sessionState: (s.state as SessionState) ?? 'idle',
+      blockCosts:   (msg.blockCosts || []) as BlockCost[],
     }
   }
   if (msg.type === 'state_change') {
@@ -217,8 +276,15 @@ function handleMessage(prev: AppState, msg: any): AppState {
       cache_creation: p.cache_creation, efficiency_score: p.efficiency_score,
       context_used: p.context_used, context_window: p.context_window,
       loops: p.loops || [], summary: p.summary,
+      model: p.model,
     }
     return { ...prev, cost }
+  }
+  if (msg.type === 'block_cost') {
+    const p = msg.payload
+    if (p.session_id !== prev.sessionId) return prev
+    const entry: BlockCost = { inputUsd: p.inputUsd, outputUsd: p.outputUsd, totalUsd: p.totalUsd, inputTokens: p.inputTokens ?? 0, outputTokens: p.outputTokens ?? 0 }
+    return { ...prev, blockCosts: [...prev.blockCosts, entry] }
   }
   // summary_ready — el daemon generó un resumen IA para la sesión activa
   // Refrescamos el historial en el próximo render (el usuario lo verá al abrir History)
@@ -239,7 +305,7 @@ function CompactBanner() {
       gap: 10,
       animation: 'pulse 1.5s ease-in-out infinite',
     }}>
-      <span style={{ fontSize: 16 }}>⚡</span>
+      <Zap size={14} color="#d29922" />
       <div>
         <span style={{ color: '#d29922', fontWeight: 700, fontSize: 12 }}>
           Claude está compactando el contexto

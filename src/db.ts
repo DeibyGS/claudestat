@@ -85,6 +85,14 @@ export interface EventRow {
   duration_ms?: number
 }
 
+export interface BlockCostEntry {
+  inputUsd:    number   // costo de los tokens de entrada (prompt + contexto)
+  outputUsd:   number   // costo de los tokens de salida (respuesta de Claude)
+  totalUsd:    number
+  inputTokens: number   // tokens de entrada de este bloque
+  outputTokens: number  // tokens de salida de este bloque
+}
+
 export interface CostUpdate {
   input_tokens: number
   output_tokens: number
@@ -93,6 +101,8 @@ export interface CostUpdate {
   cost_usd: number
   context_used: number    // tokens del último request (≈ contexto activo actual)
   context_window: number  // tamaño máximo del modelo (ej: 200000)
+  lastEntry?: BlockCostEntry  // costo desglosado del último request (para block_cost SSE)
+  lastModel?: string          // modelo del último request (para mostrar en header)
 }
 
 // ─── Prepared statements (se compilan una vez al iniciar) ─────────────────────
@@ -181,6 +191,42 @@ const stmts = {
     WHERE project_path IS NOT NULL
     GROUP BY project_path
     ORDER BY last_active DESC
+  `),
+
+  // Tool usage counts for a specific project — used by pattern analyzer
+  getProjectToolCounts: db.prepare(`
+    SELECT e.tool_name, COUNT(*) as count
+    FROM events e
+    JOIN sessions s ON e.session_id = s.id
+    WHERE s.project_path = ? AND e.type = 'Done' AND e.tool_name IS NOT NULL
+    GROUP BY e.tool_name
+    ORDER BY count DESC
+  `),
+
+  // Session-level aggregates for pattern analysis (cache, loops, cost, efficiency)
+  getProjectSessionStats: db.prepare(`
+    SELECT
+      COUNT(*)                                         as session_count,
+      AVG(total_cache_read)                            as avg_cache_read,
+      AVG(total_input_tokens + total_cache_read)       as avg_total_input,
+      AVG(loops_detected)                              as avg_loops,
+      AVG(total_cost_usd)                              as avg_cost_usd,
+      AVG(CASE WHEN efficiency_score > 0 THEN efficiency_score END) as avg_efficiency
+    FROM sessions
+    WHERE project_path = ?
+  `),
+
+  // Coste oculto: dinero estimado perdido en loops en los últimos N días
+  // loop_waste = sum( cost * max(0, 1 - efficiency/100) )
+  getHiddenCostStats: db.prepare(`
+    SELECT
+      COALESCE(SUM(total_cost_usd * MAX(0.0, 1.0 - COALESCE(efficiency_score, 100) / 100.0)), 0) AS loop_waste_usd,
+      COALESCE(SUM(total_cost_usd), 0)                                                            AS total_cost_usd,
+      COUNT(CASE WHEN loops_detected > 0 THEN 1 END)                                              AS loop_sessions,
+      COALESCE(SUM(loops_detected), 0)                                                            AS total_loops,
+      COUNT(*)                                                                                     AS total_sessions
+    FROM sessions
+    WHERE started_at >= ?
   `)
 }
 
@@ -261,7 +307,23 @@ export const dbOps = {
     return stmts.getProjectAggregates.all() as any[]
   },
 
+  getProjectToolCounts(projectPath: string): { tool_name: string; count: number }[] {
+    return stmts.getProjectToolCounts.all(projectPath) as { tool_name: string; count: number }[]
+  },
+
+  getProjectSessionStats(projectPath: string): any {
+    return stmts.getProjectSessionStats.get(projectPath)
+  },
+
   updateSessionSummary(sessionId: string, summary: string) {
     stmts.updateSessionSummary.run(summary, sessionId)
+  },
+
+  getHiddenCostStats(days: number): {
+    loop_waste_usd: number; total_cost_usd: number
+    loop_sessions:  number; total_loops:    number; total_sessions: number
+  } {
+    const since = Date.now() - days * 24 * 60 * 60 * 1000
+    return stmts.getHiddenCostStats.get(since) as any
   }
 }

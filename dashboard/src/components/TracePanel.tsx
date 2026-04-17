@@ -11,6 +11,14 @@ import {
 } from 'lucide-react'
 import type { TraceEvent, CostInfo, BlockCost, MetaStats, MetaAlert, QuotaData, SessionState, DayStats } from '../types'
 
+interface HiddenCostStats {
+  loop_waste_usd: number
+  total_cost_usd: number
+  loop_sessions:  number
+  total_loops:    number
+  total_sessions: number
+}
+
 interface Props {
   events:        TraceEvent[]
   startedAt:     number
@@ -20,6 +28,7 @@ interface Props {
   quota?:        QuotaData
   sessionState?: SessionState
   weeklyData:    DayStats[]
+  hiddenCost?:   HiddenCostStats
 }
 
 // ─── Icon + Color maps ────────────────────────────────────────────────────────
@@ -678,10 +687,11 @@ function AnimatedCost({ usd }: { usd: number }) {
   return <>{fmtUsd(displayed)}</>
 }
 
-function SidebarStats({ cost, weeklyData, events }: {
-  cost?:      CostInfo
-  weeklyData: DayStats[]
-  events:     TraceEvent[]
+function SidebarStats({ cost, weeklyData, events, hiddenCost }: {
+  cost?:       CostInfo
+  weeklyData:  DayStats[]
+  events:      TraceEvent[]
+  hiddenCost?: HiddenCostStats
 }) {
   const score = cost
     ? (cost.efficiency_score === 0 && cost.cost_usd < 0.001 ? 100 : cost.efficiency_score)
@@ -756,6 +766,33 @@ function SidebarStats({ cost, weeklyData, events }: {
           <div>
             <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 11 }}>{fmtTok(totalWeekly)}</div>
             <div style={{ color: '#484f58', fontSize: 9 }}>7 días</div>
+          </div>
+        </div>
+      )}
+
+      {/* Coste oculto semanal */}
+      {hiddenCost && hiddenCost.total_loops > 0 && (
+        <div style={{
+          borderTop: '1px solid #21262d', paddingTop: 6, marginTop: 2,
+          display: 'flex', flexDirection: 'column', gap: 3,
+        }}
+          title={`Estimación: ${hiddenCost.loop_sessions} sesiones con loops esta semana.\n${hiddenCost.total_loops} loops detectados en ${hiddenCost.total_sessions} sesiones.`}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Flame size={9} color="#d29922" />
+            <span style={{ fontSize: 9, color: '#7d8590', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>coste oculto 7d</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{
+              background: '#3d2600', color: '#d29922', border: '1px solid #d2992244',
+              borderRadius: 4, padding: '1px 7px', fontSize: 11, fontWeight: 700,
+            }}>
+              ~{fmtUsd(hiddenCost.loop_waste_usd)}
+            </span>
+            <span style={{ fontSize: 9, color: '#484f58' }}>perdido en loops</span>
+          </div>
+          <div style={{ fontSize: 9, color: '#3d444d' }}>
+            {hiddenCost.total_loops} loop{hiddenCost.total_loops > 1 ? 's' : ''} · {hiddenCost.loop_sessions}/{hiddenCost.total_sessions} sesiones
           </div>
         </div>
       )}
@@ -1376,7 +1413,7 @@ function BlockDetailPanel({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quota, sessionState = 'idle', weeklyData = [] }: Props) {
+export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quota, sessionState = 'idle', weeklyData = [], hiddenCost }: Props) {
   const listRef        = useRef<HTMLDivElement>(null)
   // null = auto-follow last block
   const [pinned, setPinned] = useState<number | null>(null)
@@ -1469,7 +1506,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
         </div>
 
         {/* Session stats at bottom */}
-        <SidebarStats cost={cost} weeklyData={weeklyData} events={events} />
+        <SidebarStats cost={cost} weeklyData={weeklyData} events={events} hiddenCost={hiddenCost} />
       </div>
 
       {/* ── Right: block detail (full width) ── */}

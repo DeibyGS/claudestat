@@ -28,6 +28,10 @@ export default function App() {
   const [compacting,   setCompacting]  = useState(false)
   const [quota,        setQuota]       = useState<QuotaData | undefined>()
   const [configOpen,   setConfigOpen]  = useState(false)
+  const [hiddenCost,   setHiddenCost]  = useState<{
+    loop_waste_usd: number; total_cost_usd: number
+    loop_sessions:  number; total_loops:    number; total_sessions: number
+  } | undefined>()
   const stateRef = useRef(state)
   stateRef.current = state
 
@@ -107,6 +111,20 @@ export default function App() {
     }
     connect()
     return () => { es?.close(); clearTimeout(retryTimer) }
+  }, [])
+
+  // ── Hidden cost polling (cada 5 min) ───────────────────────────────────────
+  useEffect(() => {
+    async function fetchHiddenCost() {
+      try {
+        const r = await fetch('/hidden-cost')
+        if (!r.ok) return
+        setHiddenCost(await r.json())
+      } catch {}
+    }
+    fetchHiddenCost()
+    const t = setInterval(fetchHiddenCost, 5 * 60_000)
+    return () => clearInterval(t)
   }, [])
 
   // ── Meta-stats polling ──────────────────────────────────────────────────────
@@ -199,6 +217,7 @@ export default function App() {
               meta={metaStats} quota={quota}
               sessionState={state.sessionState}
               weeklyData={state.weeklyData}
+              hiddenCost={hiddenCost}
             />
           </div>
         </>

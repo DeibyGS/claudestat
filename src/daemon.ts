@@ -18,7 +18,7 @@ import path   from 'path'
 import fs     from 'fs'
 import os     from 'os'
 import { dbOps, type EventRow }                               from './db'
-import { startEnricher, processLatestForSession,
+import { startEnricher, processLatestForSession, getAllBlockCostsForSession,
          type CostUpdateCallback,
          type CompactDetectedCallback }                       from './enricher'
 import { analyzeSession }                                     from './intelligence'
@@ -26,9 +26,10 @@ import { computeMetaStats, getMetaHistory }                   from './meta-stats
 import { discoverProjects, parseHandoffProgress }             from './project-scanner'
 import { deriveSessionState, STATE_META }                     from './session-state'
 import { computeQuota, invalidateQuotaCache }                 from './quota-tracker'
-import { readConfig, getWarnLevel }                           from './config'
+import { readConfig, writeConfig, getWarnLevel }              from './config'
 import { getGitInfo, type GitInfo }                           from './git'
 import { getPRStatus, type PRStatus }                         from './github'
+import { analyzePatterns }                                    from './pattern-analyzer'
 import { summarizeSession }                                   from './summarizer'
 
 const PORT = 7337
@@ -114,7 +115,12 @@ app.post('/event', (req: Request, res: Response) => {
       typeof tool_response === 'string' ? tool_response : JSON.stringify(tool_response ?? ''),
       ts
     )
-    broadcast({ type: 'event', payload: { type: 'Done', session_id, tool_name, tool_input, ts, pairedId } })
+    // Truncar tool_response a 4000 chars para no saturar SSE con archivos grandes
+    const rawResp  = typeof tool_response === 'string' ? tool_response : JSON.stringify(tool_response ?? '')
+    const tool_output = rawResp.length > 4000
+      ? rawResp.slice(0, 4000) + `\n…[truncado: ${rawResp.length} chars]`
+      : rawResp
+    broadcast({ type: 'event', payload: { type: 'Done', session_id, tool_name, tool_input, tool_output, ts, pairedId } })
   } else {
     dbOps.insertEvent({
       session_id, type,
@@ -203,10 +209,11 @@ app.get('/stream', (req: Request, res: Response) => {
   // Estado inicial: sesión más reciente con todos sus eventos
   const latestSession = dbOps.getLatestSession()
   if (latestSession) {
-    const events  = dbOps.getSessionEvents(latestSession.id)
-    const lastEvt = sessionLastEvent.get(latestSession.id)
-    const state   = deriveSessionState(lastEvt?.type, lastEvt?.ts ?? latestSession.last_event_at ?? latestSession.started_at)
-    res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events })}\n\n`)
+    const events     = dbOps.getSessionEvents(latestSession.id)
+    const lastEvt    = sessionLastEvent.get(latestSession.id)
+    const state      = deriveSessionState(lastEvt?.type, lastEvt?.ts ?? latestSession.last_event_at ?? latestSession.started_at)
+    const blockCosts = getAllBlockCostsForSession(latestSession.id)
+    res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events, blockCosts })}\n\n`)
 
     // Procesar el JSONL de la sesión activa para entregar contexto inmediato
     // (sin esperar al próximo mensaje de Claude)
@@ -247,6 +254,46 @@ function inferProjectCwd(events: EventRow[]): string | undefined {
   return undefined
 }
 
+/**
+ * Determina el proyecto activo por mayoría de operaciones de archivo
+ * en una ventana de tiempo reciente. Evita que un único archivo tocado
+ * de otro proyecto cambie el badge.
+ *
+ * - Mínimo 2 hits en la ventana para declarar un proyecto como activo.
+ * - Si hay empate, gana el que tuvo actividad más reciente.
+ */
+function inferActiveProjectByMajority(events: EventRow[], windowMs: number): string | undefined {
+  const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep'])
+  const cutoff     = Date.now() - windowMs
+
+  const hits = new Map<string, { count: number; lastTs: number }>()
+
+  for (const ev of events) {
+    if ((ev.ts ?? 0) < cutoff) continue
+    if (!FILE_TOOLS.has(ev.tool_name || '')) continue
+    if (!ev.tool_input) continue
+    try {
+      const inp      = JSON.parse(ev.tool_input)
+      const filePath = (inp.file_path || inp.path) as string | undefined
+      if (!filePath?.startsWith('/')) continue
+      const project = findProjectCwdForFile(filePath)
+      if (!project) continue
+      const entry = hits.get(project) ?? { count: 0, lastTs: 0 }
+      hits.set(project, { count: entry.count + 1, lastTs: Math.max(entry.lastTs, ev.ts ?? 0) })
+    } catch { /* ignorar */ }
+  }
+
+  if (hits.size === 0) return undefined
+
+  // Ordenar por hits desc, luego por timestamp desc en caso de empate
+  const sorted = [...hits.entries()].sort(([, a], [, b]) =>
+    b.count !== a.count ? b.count - a.count : b.lastTs - a.lastTs
+  )
+
+  const [topProject, topStats] = sorted[0]
+  return topStats.count >= 2 ? topProject : undefined
+}
+
 // ─── GET /projects — listado de proyectos con stats ──────────────────────────
 
 app.get('/projects', (_req: Request, res: Response) => {
@@ -256,10 +303,11 @@ app.get('/projects', (_req: Request, res: Response) => {
   // Proyectos descubiertos del filesystem (cacheados — pre-computados al arrancar)
   const scanned = getProjectsCached()
 
-  // Obtener proyecto activo
+  // Obtener proyecto activo — mayoría en ventana de 10 min, luego fallbacks
   const latestSession = dbOps.getLatestSession()
   const latestEvents  = latestSession ? dbOps.getSessionEvents(latestSession.id) : []
-  const activeProject = latestSession?.project_path
+  const activeProject = inferActiveProjectByMajority(latestEvents, 10 * 60_000)
+    ?? latestSession?.project_path
     ?? inferProjectCwd(latestEvents)
     ?? null
 
@@ -293,20 +341,29 @@ app.get('/projects', (_req: Request, res: Response) => {
 
     projectMap.set(scan.path, {
       ...base,
-      // Si la DB no tiene sesiones, usar datos de JSONL históricos
+      // session_count and last_active: prefer DB when available (live tracking)
       session_count:  useJSONL ? jStats.session_count  : base.session_count,
-      total_cost_usd: useJSONL ? jStats.total_cost_usd : base.total_cost_usd,
-      total_tokens:   useJSONL ? jStats.total_tokens   : base.total_tokens,
       last_active:    useJSONL ? jStats.last_active     : base.last_active,
+      // cost and tokens: always from JSONL — covers full history, not just since claudetrace install
+      total_cost_usd: jStats.total_cost_usd,
+      total_tokens:   jStats.total_tokens,
       has_handoff:    scan.hasHandoff,
       auto_handoff:   scan.autoHandoff,
       progress:       scan.progress,
-      model_usage:    jStats.modelUsage,  // siempre desde JSONL — más preciso que la DB
+      model_usage:    jStats.modelUsage,
       jsonl_source:   useJSONL,
     })
   }
 
-  const projects = [...projectMap.values()]
+  // Attach pattern insights per project (only if DB has enough data)
+  const projects = [...projectMap.values()].map(p => {
+    const toolCounts  = dbOps.getProjectToolCounts(p.path)
+    const sessionStats = dbOps.getProjectSessionStats(p.path)
+    const insights = (sessionStats && sessionStats.session_count >= 2)
+      ? analyzePatterns(toolCounts, sessionStats)
+      : []
+    return { ...p, insights }
+  })
     .sort((a, b) => (b.last_active ?? 0) - (a.last_active ?? 0))
 
   res.json({ projects, active_project: activeProject })
@@ -464,10 +521,34 @@ app.get('/sessions', (_req: Request, res: Response) => {
   res.json(enriched)
 })
 
+// ─── GET /hidden-cost — coste oculto en loops (últimos 7 días) ───────────────
+
+app.get('/hidden-cost', (_req: Request, res: Response) => {
+  res.json(dbOps.getHiddenCostStats(7))
+})
+
 // ─── GET /health ──────────────────────────────────────────────────────────────
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', port: PORT, clients: sseClients.size })
+})
+
+// ─── GET /config — leer configuración ────────────────────────────────────────
+
+app.get('/config', (_req: Request, res: Response) => {
+  res.json(readConfig())
+})
+
+// ─── PUT /config — guardar configuración ─────────────────────────────────────
+
+app.put('/config', (req: Request, res: Response) => {
+  try {
+    const current = readConfig()
+    writeConfig({ ...current, ...req.body })
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: String(e) })
+  }
 })
 
 // ─── Dashboard React (servir estáticos del build de Vite) ────────────────────
@@ -507,9 +588,25 @@ const onCostUpdate: CostUpdateCallback = (sessionId, cost) => {
       context_window:   cost.context_window,
       efficiency_score: report.efficiencyScore,
       loops:            report.loops,
-      summary:          report.summary
+      summary:          report.summary,
+      model:            cost.lastModel,
     }
   })
+
+  // Emitir desglose de costo del último bloque (input vs output) para el TracePanel
+  if (cost.lastEntry) {
+    broadcast({
+      type: 'block_cost',
+      payload: {
+        session_id:   sessionId,
+        inputUsd:     cost.lastEntry.inputUsd,
+        outputUsd:    cost.lastEntry.outputUsd,
+        totalUsd:     cost.lastEntry.totalUsd,
+        inputTokens:  cost.lastEntry.inputTokens,
+        outputTokens: cost.lastEntry.outputTokens,
+      }
+    })
+  }
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────

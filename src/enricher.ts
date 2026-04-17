@@ -98,6 +98,13 @@ function processJSONL(filePath: string): CostUpdate | null {
     context_used: 0, context_window: 200_000
   }
 
+  // Accumulators for the last entry — overwritten on each iteration
+  let lastInputUsd    = 0
+  let lastOutputUsd   = 0
+  let lastInputTokens  = 0
+  let lastOutputTokens = 0
+  let lastModel: string | undefined = undefined   // stays undefined until first real assistant line
+
   for (const raw of fileContent.split('\n')) {
     const line = raw.trim()
     if (!line) continue
@@ -107,7 +114,7 @@ function processJSONL(filePath: string): CostUpdate | null {
 
       const msg   = obj.message
       const usage = msg?.usage as UsageEntry | undefined
-      const model = (msg?.model as string) ?? 'claude-sonnet-4-6'
+      const model = (msg?.model as string) ?? undefined
 
       if (!usage) continue
 
@@ -115,21 +122,161 @@ function processJSONL(filePath: string): CostUpdate | null {
       totals.output_tokens  += usage.output_tokens                 ?? 0
       totals.cache_read     += usage.cache_read_input_tokens       ?? 0
       totals.cache_creation += usage.cache_creation_input_tokens   ?? 0
-      totals.cost_usd       += calcCost(model, usage)
+      const resolvedModel = model ?? 'claude-sonnet-4-6'
+      totals.cost_usd       += calcCost(resolvedModel, usage)
 
-      // El contexto del ÚLTIMO mensaje es el más relevante — cuánto contexto
-      // está activo ahora mismo. Es la suma de lo que Claude "ve" en este request.
+      // The context of the LAST message is most relevant — how much context Claude "sees" now
       totals.context_used   = (usage.input_tokens ?? 0)
                             + (usage.cache_read_input_tokens ?? 0)
                             + (usage.cache_creation_input_tokens ?? 0)
-      totals.context_window = CONTEXT_WINDOW[model] ?? 200_000
+      totals.context_window = CONTEXT_WINDOW[resolvedModel] ?? 200_000
+
+      // Store cost breakdown for THIS entry (overwritten until the last one)
+      const price   = PRICING[resolvedModel] ?? DEFAULT_PRICING
+      const M       = 1_000_000
+      lastInputUsd     = ((usage.input_tokens                  ?? 0) * price.input       +
+                          (usage.cache_read_input_tokens       ?? 0) * price.cacheRead   +
+                          (usage.cache_creation_input_tokens   ?? 0) * price.cacheCreate) / M
+      lastOutputUsd    = ((usage.output_tokens                 ?? 0) * price.output)     / M
+      lastInputTokens  = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
+      lastOutputTokens = usage.output_tokens ?? 0
+      lastModel        = model ?? lastModel   // keep previous model if current line has none
     } catch {
       // Línea malformada — ignorar y continuar
     }
   }
 
+  if (lastInputUsd + lastOutputUsd > 0) {
+    totals.lastEntry = {
+      inputUsd:     lastInputUsd,
+      outputUsd:    lastOutputUsd,
+      totalUsd:     lastInputUsd + lastOutputUsd,
+      inputTokens:  lastInputTokens,
+      outputTokens: lastOutputTokens,
+    }
+  }
+  totals.lastModel = lastModel
+
   fileOffsets.set(filePath, currentSize)
   return totals
+}
+
+// ─── Todos los block costs históricos de una sesión ──────────────────────────
+
+import type { BlockCostEntry } from './db'
+
+/**
+ * Lee el JSONL completo de una sesión y devuelve los costos de CADA bloque
+ * (una entrada por mensaje `assistant`). Usado en el init SSE para restaurar
+ * los blockCosts históricos cuando el dashboard se reconecta.
+ */
+export function getAllBlockCostsForSession(sessionId: string): BlockCostEntry[] {
+  try {
+    if (!fs.existsSync(PROJECTS_DIR)) return []
+    for (const dir of fs.readdirSync(PROJECTS_DIR)) {
+      const dirPath = path.join(PROJECTS_DIR, dir)
+      try { if (!fs.statSync(dirPath).isDirectory()) continue } catch { continue }
+      const filePath = path.join(dirPath, `${sessionId}.jsonl`)
+      if (!fs.existsSync(filePath)) continue
+
+      const result: BlockCostEntry[] = []
+      const content = fs.readFileSync(filePath, 'utf8')
+      for (const raw of content.split('\n')) {
+        const line = raw.trim()
+        if (!line) continue
+        try {
+          const obj = JSON.parse(line)
+          if (obj.type !== 'assistant') continue
+          const usage = obj.message?.usage
+          const model = (obj.message?.model as string) ?? 'claude-sonnet-4-6'
+          if (!usage) continue
+          const price     = PRICING[model] ?? DEFAULT_PRICING
+          const M         = 1_000_000
+          const inputUsd  = ((usage.input_tokens                  ?? 0) * price.input       +
+                             (usage.cache_read_input_tokens       ?? 0) * price.cacheRead   +
+                             (usage.cache_creation_input_tokens   ?? 0) * price.cacheCreate) / M
+          const outputUsd = ((usage.output_tokens ?? 0) * price.output) / M
+          const inputTokens  = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
+          const outputTokens = usage.output_tokens ?? 0
+          if (inputUsd + outputUsd > 0) result.push({ inputUsd, outputUsd, totalUsd: inputUsd + outputUsd, inputTokens, outputTokens })
+        } catch {}
+      }
+      return result
+    }
+  } catch {}
+  return []
+}
+
+// ─── Prompts del usuario por sesión ──────────────────────────────────────────
+
+export interface SessionPrompt {
+  index: number   // 1-based — corresponde al bloque del mismo índice
+  ts:    number   // timestamp ms
+  text:  string   // texto del prompt (truncado a 400 chars)
+}
+
+/**
+ * Lee los mensajes humanos del JSONL de una sesión.
+ * El mensaje #N corresponde al bloque #N del trace.
+ */
+export function getSessionPrompts(sessionId: string): SessionPrompt[] {
+  try {
+    if (!fs.existsSync(PROJECTS_DIR)) return []
+    for (const dir of fs.readdirSync(PROJECTS_DIR)) {
+      const dirPath = path.join(PROJECTS_DIR, dir)
+      try { if (!fs.statSync(dirPath).isDirectory()) continue } catch { continue }
+
+      // Buscar también en subdirectorios (subagents)
+      const candidates = [
+        path.join(dirPath, `${sessionId}.jsonl`),
+      ]
+      for (const file of candidates) {
+        if (!fs.existsSync(file)) continue
+        const results: SessionPrompt[] = []
+        const content = fs.readFileSync(file, 'utf8')
+        let index = 0
+        for (const raw of content.split('\n')) {
+          const line = raw.trim()
+          if (!line) continue
+          try {
+            const obj = JSON.parse(line)
+            if (obj.type !== 'human' && obj.type !== 'user') continue
+            const ts = obj.timestamp ? new Date(obj.timestamp as string).getTime() : 0
+            if (!ts || isNaN(ts)) continue
+
+            // Extraer solo el texto del usuario (ignorar tool_result y system-reminders)
+            const msgContent = obj.message?.content
+            let text = ''
+            if (typeof msgContent === 'string') {
+              text = msgContent
+            } else if (Array.isArray(msgContent)) {
+              // Filtrar bloques tipo 'text', ignorar 'tool_result'
+              const textBlocks = (msgContent as any[]).filter(c => c?.type === 'text')
+              if (textBlocks.length === 0) continue   // solo tool_result → no es prompt del usuario
+              text = textBlocks.map((c: any) => c.text ?? '').join('\n').trim()
+            }
+
+            // Filtrar mensajes internos del sistema
+            if (
+              text.includes('<command-name>') ||
+              text.includes('<local-command-stdout>') ||
+              text.includes('<system-reminder>') ||
+              text.length === 0
+            ) continue
+
+            index++
+            results.push({
+              index,
+              ts,
+              text: text.length > 400 ? text.slice(0, 397) + '…' : text,
+            })
+          } catch {}
+        }
+        return results
+      }
+    }
+  } catch {}
+  return []
 }
 
 // ─── Watcher ─────────────────────────────────────────────────────────────────
@@ -163,17 +310,17 @@ export function startEnricher(onUpdate: CostUpdateCallback, onCompact?: CompactD
     }
   })
 
-  watcher.on('change', (filePath: string) => {
-    // Extraer sessionId del nombre del archivo: "path/to/{sessionId}.jsonl"
+  const handleFile = (filePath: string) => {
+    // Extract sessionId from filename: "path/to/{sessionId}.jsonl"
     const sessionId = path.basename(filePath, '.jsonl')
 
-    // Ignorar archivos que no tienen formato UUID-like
+    // Ignore files that don't look like session UUIDs
     if (!sessionId.includes('-') || sessionId.length < 10) return
 
     const cost = processJSONL(filePath)
     if (cost && cost.cost_usd >= 0) {
-      // Detectar auto-compact: el contexto baja drásticamente en la misma sesión
-      // (Claude compacta y reinicia desde ~0 tokens activos)
+      // Detect auto-compact: context drops sharply within the same session
+      // (Claude compacts and restarts from near-zero active tokens)
       const prev = prevContextBySession.get(sessionId)
       if (
         onCompact &&
@@ -187,7 +334,13 @@ export function startEnricher(onUpdate: CostUpdateCallback, onCompact?: CompactD
 
       onUpdate(sessionId, cost)
     }
-  })
+  }
+
+  // Listen to both 'change' (appends to existing file) and 'add' (new session file).
+  // Without 'add', the first assistant response in a brand-new session is missed,
+  // leaving lastModel stuck at the Sonnet default.
+  watcher.on('change', handleFile)
+  watcher.on('add',    handleFile)
 
   console.log(`[enricher] Observando ${PROJECTS_DIR}`)
 }

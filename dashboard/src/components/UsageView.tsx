@@ -9,10 +9,13 @@ const PRICE_PER_M = {
 }
 const CACHE_SAVINGS_PER_M = 2.70  // Sonnet: full $3/M → cached $0.30/M → ahorro $2.70/M
 
+interface SessionPrompt { index: number; ts: number; text: string }
+
 interface Props {
   quota?:   QuotaData
   cost?:    CostInfo
   events?:  TraceEvent[]
+  prompts?: SessionPrompt[]
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -33,7 +36,13 @@ function fmtUsd(n: number): string {
 // ─── Coach: detección de loops por bloque ─────────────────────────────────────
 
 type TipLevel = 'error' | 'warning' | 'info' | 'success'
-interface CoachTip { level: TipLevel; title: string; text: string }
+interface CoachTip {
+  level:        TipLevel
+  title:        string
+  text:         string
+  prompt?:      string   // prompt del usuario que originó el problema
+  blockIndex?:  number   // bloque de referencia (para navegación)
+}
 
 interface LoopOccurrence {
   blockIndex: number   // número del bloque (1-based)
@@ -119,7 +128,7 @@ function loopAdvice(toolName: string, multiFile: boolean, detail?: string): stri
   }
 }
 
-function generateTips(cost?: CostInfo, quota?: QuotaData, events?: TraceEvent[]): CoachTip[] {
+function generateTips(cost?: CostInfo, quota?: QuotaData, events?: TraceEvent[], prompts?: SessionPrompt[]): CoachTip[] {
   const tips: CoachTip[] = []
 
   // 1. Loops por bloque (desde eventos — más granular que cost.loops)
@@ -135,14 +144,17 @@ function generateTips(cost?: CostInfo, quota?: QuotaData, events?: TraceEvent[])
     }
 
     for (const [toolName, occs] of byTool) {
-      const blockRefs   = occs.map(o => `#${o.blockIndex}`).join(', ')
-      const totalCount  = occs.reduce((s, o) => s + o.count, 0)
-      // Para el consejo, usar el primer occurrence (más representativo)
-      const first = occs[0]
+      const blockRefs  = occs.map(o => `#${o.blockIndex}`).join(', ')
+      const totalCount = occs.reduce((s, o) => s + o.count, 0)
+      const first      = occs[0]
+      // Prompt que originó el primer bloque con loop (bloque N → prompt índice N)
+      const triggerPrompt = prompts?.find(p => p.index === first.blockIndex)?.text
       tips.push({
-        level: 'error',
-        title: `Loop: ${toolName} ×${totalCount} — bloques ${blockRefs}`,
-        text: loopAdvice(toolName, first.multiFile, first.detail),
+        level:       'error',
+        title:       `Loop: ${toolName} ×${totalCount} — bloques ${blockRefs}`,
+        text:        loopAdvice(toolName, first.multiFile, first.detail),
+        prompt:      triggerPrompt,
+        blockIndex:  first.blockIndex,
       })
     }
   } else if (cost?.loops && cost.loops.length > 0) {
@@ -519,13 +531,36 @@ function CoachPanel({ tips }: { tips: CoachTip[] }) {
               background: s.bg, border: `1px solid ${s.border}`,
               borderLeft: `3px solid ${s.color}`,
               borderRadius: 6, padding: '8px 10px',
-              display: 'flex', gap: 8,
             }}>
-              <s.Icon size={13} color={s.color} style={{ flexShrink: 0, marginTop: 1 }} />
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: s.color, marginBottom: 2 }}>{tip.title}</div>
-                <div style={{ fontSize: 11, color: '#8b949e', lineHeight: 1.5 }}>{tip.text}</div>
+              {/* Header: icono + título */}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <s.Icon size={13} color={s.color} style={{ flexShrink: 0, marginTop: 2 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: s.color, marginBottom: 3 }}>{tip.title}</div>
+                  <div style={{ fontSize: 11, color: '#8b949e', lineHeight: 1.5 }}>{tip.text}</div>
+                </div>
               </div>
+
+              {/* Prompt que lo causó */}
+              {tip.prompt && (
+                <div style={{
+                  marginTop: 8, padding: '6px 10px',
+                  background: '#0d1117', border: '1px solid #30363d',
+                  borderRadius: 5,
+                }}>
+                  <div style={{ fontSize: 9, color: '#484f58', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>
+                    Prompt que lo causó — Bloque #{tip.blockIndex}
+                  </div>
+                  <div style={{
+                    fontSize: 11, color: '#7d8590', fontStyle: 'italic',
+                    lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                    maxHeight: 80, overflow: 'hidden',
+                    WebkitMaskImage: 'linear-gradient(to bottom, black 60%, transparent 100%)',
+                  }}>
+                    "{tip.prompt}"
+                  </div>
+                </div>
+              )}
             </div>
           )
         })}
@@ -536,7 +571,7 @@ function CoachPanel({ tips }: { tips: CoachTip[] }) {
 
 // ─── Componente principal ─────────────────────────────────────────────────────
 
-export function UsageView({ quota, cost, events }: Props) {
+export function UsageView({ quota, cost, events, prompts }: Props) {
   if (!quota) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#484f58', fontSize: 13 }}>
@@ -545,7 +580,7 @@ export function UsageView({ quota, cost, events }: Props) {
     )
   }
 
-  const tips = generateTips(cost, quota, events)
+  const tips = generateTips(cost, quota, events, prompts)
 
   return (
     <div style={{ height: '100%', overflow: 'auto', padding: '16px 20px' }}>

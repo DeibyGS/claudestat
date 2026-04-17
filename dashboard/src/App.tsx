@@ -32,6 +32,7 @@ export default function App() {
     loop_waste_usd: number; total_cost_usd: number
     loop_sessions:  number; total_loops:    number; total_sessions: number
   } | undefined>()
+  const [prompts,      setPrompts]     = useState<Array<{ index: number; ts: number; text: string }>>([]);
   const stateRef = useRef(state)
   stateRef.current = state
 
@@ -112,6 +113,15 @@ export default function App() {
     connect()
     return () => { es?.close(); clearTimeout(retryTimer) }
   }, [])
+
+  // ── Prompts: cargar cuando cambia la sesión ────────────────────────────────
+  useEffect(() => {
+    if (!state.sessionId) return
+    fetch(`/prompts?session_id=${state.sessionId}`)
+      .then(r => r.json())
+      .then(d => setPrompts(d.prompts ?? []))
+      .catch(() => {})
+  }, [state.sessionId])
 
   // ── Hidden cost polling (cada 5 min) ───────────────────────────────────────
   useEffect(() => {
@@ -237,7 +247,7 @@ export default function App() {
 
       {activeTab === 'usage' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <UsageView quota={quota} cost={state.cost} events={state.events} />
+          <UsageView quota={quota} cost={state.cost} events={state.events} prompts={prompts} />
         </div>
       )}
     </div>

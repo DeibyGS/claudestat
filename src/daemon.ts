@@ -19,6 +19,7 @@ import fs     from 'fs'
 import os     from 'os'
 import { dbOps, type EventRow }                               from './db'
 import { startEnricher, processLatestForSession, getAllBlockCostsForSession,
+         getSessionPrompts,
          type CostUpdateCallback,
          type CompactDetectedCallback }                       from './enricher'
 import { analyzeSession }                                     from './intelligence'
@@ -519,6 +520,14 @@ app.get('/sessions', (_req: Request, res: Response) => {
     return { ...s, state }
   })
   res.json(enriched)
+})
+
+// ─── GET /prompts — mensajes del usuario para una sesión ─────────────────────
+
+app.get('/prompts', (req: Request, res: Response) => {
+  const sessionId = req.query.session_id as string | undefined
+  if (!sessionId) return res.status(400).json({ error: 'session_id required' })
+  res.json({ prompts: getSessionPrompts(sessionId) })
 })
 
 // ─── GET /hidden-cost — coste oculto en loops (últimos 7 días) ───────────────

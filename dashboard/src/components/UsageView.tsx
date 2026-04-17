@@ -30,26 +30,133 @@ function fmtUsd(n: number): string {
   return `$${n.toFixed(2)}`
 }
 
-// ─── Coach: generador de tips ──────────────────────────────────────────────────
+// ─── Coach: detección de loops por bloque ─────────────────────────────────────
 
 type TipLevel = 'error' | 'warning' | 'info' | 'success'
 interface CoachTip { level: TipLevel; title: string; text: string }
 
+interface LoopOccurrence {
+  blockIndex: number   // número del bloque (1-based)
+  toolName:   string
+  count:      number
+  detail?:    string   // archivo o comando específico
+  multiFile:  boolean  // true = distintos archivos en el loop
+}
+
+// Detecta corridas consecutivas de la misma tool por bloque
+function detectLoopsFromEvents(events: TraceEvent[], threshold = 3): LoopOccurrence[] {
+  const results: LoopOccurrence[] = []
+  let blockIdx = 0
+  let blockTools: TraceEvent[] = []
+
+  function analyzeBlock(idx: number, tools: TraceEvent[]) {
+    if (tools.length === 0) return
+    let i = 0
+    while (i < tools.length) {
+      const name = tools[i].tool_name!
+      let j = i + 1
+      while (j < tools.length && tools[j].tool_name === name) j++
+      const count = j - i
+      if (count >= threshold) {
+        const slice = tools.slice(i, j)
+        // Extraer detalle según tool
+        let detail: string | undefined
+        let multiFile = false
+        if (['Read', 'Edit', 'Write', 'Glob', 'Grep'].includes(name)) {
+          const files = new Set<string>()
+          for (const t of slice) {
+            try {
+              const inp = JSON.parse(t.tool_input || '{}')
+              const p = inp.file_path || inp.pattern || inp.path || ''
+              if (p) files.add(p.split('/').pop() || p)
+            } catch {}
+          }
+          multiFile = files.size > 1
+          detail = files.size === 1 ? [...files][0] : files.size > 1 ? `${files.size} archivos distintos` : undefined
+        } else if (name === 'Bash') {
+          try {
+            const cmd: string = JSON.parse(slice[0].tool_input || '{}').command || ''
+            detail = cmd.length > 50 ? cmd.slice(0, 48) + '…' : cmd
+          } catch {}
+        }
+        results.push({ blockIndex: idx + 1, toolName: name, count, detail, multiFile })
+      }
+      i = j
+    }
+  }
+
+  for (const ev of events) {
+    if (ev.type === 'Stop') {
+      analyzeBlock(blockIdx, blockTools)
+      blockIdx++
+      blockTools = []
+    } else if ((ev.type === 'Done' || ev.type === 'PreToolUse') && ev.tool_name) {
+      blockTools.push(ev)
+    }
+  }
+  if (blockTools.length > 0) analyzeBlock(blockIdx, blockTools)
+  return results
+}
+
+// Consejo específico por tool type
+function loopAdvice(toolName: string, multiFile: boolean, detail?: string): string {
+  switch (toolName) {
+    case 'Read':
+      if (multiFile)
+        return `Claude está leyendo archivos distintos en secuencia sin procesar la información entre lecturas. Agrupa la exploración con Glob/Grep primero para reducir el número de Reads.`
+      return `"${detail || 'el archivo'}" fue leído varias veces seguidas. Usa offset+limit para leer solo la sección necesaria, o Grep para buscar sin leer el archivo completo. Re-leer el mismo archivo gasta tokens de contexto.`
+    case 'Edit':
+      return `"${detail || 'el archivo'}" fue editado varias veces seguidas. Esto ocurre cuando las instrucciones son imprecisas — Claude intenta la edición, falla o no queda como esperaba, y reintenta. Sé más específico: indica el cambio exacto (old_string → new_string) en vez de describir el resultado.`
+    case 'Write':
+      return `"${detail || 'el archivo'}" fue sobreescrito varias veces. Consolida todos los cambios en una sola instrucción en vez de escribir versiones intermedias.`
+    case 'Bash':
+      return `Comando repetido: "${detail || '…'}". Los loops de Bash suelen ser reintentos por error. Verifica que el comando anterior haya tenido éxito antes de continuar, o pide a Claude que muestre el output del error.`
+    case 'Grep':
+    case 'Glob':
+      return `Búsquedas repetidas con patrones similares. Claude está buscando algo que no encuentra. Intenta un patrón más amplio o usa Read para ver la estructura del directorio directamente.`
+    default:
+      return `La herramienta ${toolName} se ejecutó varias veces seguidas. Revisa si Claude está ignorando resultados anteriores.`
+  }
+}
+
 function generateTips(cost?: CostInfo, quota?: QuotaData, events?: TraceEvent[]): CoachTip[] {
   const tips: CoachTip[] = []
 
-  // 1. Loops activos
-  if (cost?.loops && cost.loops.length > 0) {
+  // 1. Loops por bloque (desde eventos — más granular que cost.loops)
+  if (events && events.length > 0) {
+    const loopOccurrences = detectLoopsFromEvents(events, 3)
+
+    // Agrupar por tool para no repetir el mismo tipo de aviso
+    const byTool = new Map<string, LoopOccurrence[]>()
+    for (const o of loopOccurrences) {
+      const arr = byTool.get(o.toolName) || []
+      arr.push(o)
+      byTool.set(o.toolName, arr)
+    }
+
+    for (const [toolName, occs] of byTool) {
+      const blockRefs   = occs.map(o => `#${o.blockIndex}`).join(', ')
+      const totalCount  = occs.reduce((s, o) => s + o.count, 0)
+      // Para el consejo, usar el primer occurrence (más representativo)
+      const first = occs[0]
+      tips.push({
+        level: 'error',
+        title: `Loop: ${toolName} ×${totalCount} — bloques ${blockRefs}`,
+        text: loopAdvice(toolName, first.multiFile, first.detail),
+      })
+    }
+  } else if (cost?.loops && cost.loops.length > 0) {
+    // Fallback si no tenemos events
     for (const l of cost.loops) {
       tips.push({
         level: 'error',
         title: `Loop: ${l.toolName} ×${l.count}`,
-        text: `La misma herramienta se ejecutó ${l.count} veces seguidas. Comprueba si el resultado anterior fue ignorado o si el prompt está siendo ambiguo.`,
+        text: loopAdvice(l.toolName, false),
       })
     }
   }
 
-  // 2. Re-lecturas (mismo archivo ≥3 veces)
+  // 2. Re-lecturas (mismo archivo ≥3 veces, NO consecutivas — patrón distinto al loop)
   if (events && events.length > 0) {
     const readCounts = new Map<string, number>()
     for (const e of events) {
@@ -62,11 +169,11 @@ function generateTips(cost?: CostInfo, quota?: QuotaData, events?: TraceEvent[])
     }
     const reReads = [...readCounts.entries()].filter(([, c]) => c >= 3)
     if (reReads.length > 0) {
-      const names = reReads.map(([f]) => f.split('/').pop()).join(', ')
+      const names = reReads.map(([f, c]) => `${f.split('/').pop()} (×${c})`).join(', ')
       tips.push({
         level: 'warning',
-        title: `Re-lecturas (${reReads.length} archivo${reReads.length > 1 ? 's' : ''})`,
-        text: `${names} ${reReads.length > 1 ? 'fueron leídos' : 'fue leído'} 3+ veces. Usa offset+limit para leer solo lo necesario, o Grep para buscar sin leer el archivo completo.`,
+        title: `Re-lecturas dispersas: ${reReads.length} archivo${reReads.length > 1 ? 's' : ''}`,
+        text: `${names}. Estas lecturas no son consecutivas pero suman muchos tokens de contexto. Considera guardar mentalmente la estructura antes de seguir editando, o usa Grep en vez de leer el archivo completo.`,
       })
     }
   }

@@ -925,8 +925,13 @@ function BlockListItem({
       </div>
       {/* Row 2: dist bar + intent + duration */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <ToolDistBar stats={stats} />
-        {intent && <IntentBadge intent={intent} />}
+        {block.tools.length === 0
+          ? <span style={{ color: '#484f58', fontSize: 10, fontStyle: 'italic' }}>respuesta de texto</span>
+          : <>
+              <ToolDistBar stats={stats} />
+              {intent && <IntentBadge intent={intent} />}
+            </>
+        }
         <div style={{ flex: 1 }} />
         {dur && <span style={{ color: '#484f58', fontSize: 10, flexShrink: 0 }}>{dur}</span>}
       </div>
@@ -1461,7 +1466,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
 
       {/* ── Left sidebar ── */}
       <div style={{
-        width: 300, flexShrink: 0,
+        width: 360, flexShrink: 0,
         borderRight: '1px solid #21262d',
         display: 'flex', flexDirection: 'column',
         background: '#090d12', overflow: 'hidden',

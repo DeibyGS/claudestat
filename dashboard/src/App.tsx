@@ -237,7 +237,7 @@ export default function App() {
 
       {activeTab === 'usage' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <UsageView quota={quota} cost={state.cost} />
+          <UsageView quota={quota} cost={state.cost} events={state.events} />
         </div>
       )}
     </div>

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { Zap } from 'lucide-react'
+import { AlertTriangle, WifiOff, Zap } from 'lucide-react'
 import type {
   AppState, TraceEvent, CostInfo, BlockCost,
   MetaStats, MetaSnapshot, DaySessions, ProjectSummary,
-  QuotaData, SessionState
+  QuotaData, SessionState, ClaudeStatsData, QuotaStats
 } from './types'
 import { type Tab, Header }    from './components/Header'
 import { ConfigPanel }        from './components/ConfigPanel'
@@ -11,21 +11,26 @@ import { TracePanel }          from './components/TracePanel'
 import { HistoryView }         from './components/HistoryView'
 import { ProjectsView }        from './components/ProjectsView'
 import { UsageView }           from './components/UsageView'
+import { WeeklyReportsView }  from './components/WeeklyReportsView'
+import { SystemView, type SystemConfig } from './components/SystemView'
 
 const EMPTY: AppState = {
-  sessionId: '', cwd: '', startedAt: Date.now(), events: [], weeklyData: [], sessionState: 'idle', blockCosts: []
+  sessionId: '', cwd: '', startedAt: Date.now(), events: [], weeklyData: [],
+  sessionState: 'idle', blockCosts: [], pendingBlockCost: null
 }
 
 export default function App() {
   const [state,        setState]       = useState<AppState>(EMPTY)
-  const [connected,    setConnected]   = useState(false)
+  // 'idle' = antes de conectar, 'connected' = SSE activo, 'error' = daemon caído
+  const [connStatus,   setConnStatus]  = useState<'idle' | 'connected' | 'error'>('idle')
   const [activeTab,    setActiveTab]   = useState<Tab>('live')
   const [metaStats,    setMetaStats]   = useState<MetaStats | undefined>()
   const [metaHistory,  setMetaHistory] = useState<MetaSnapshot[]>([])
   const [historyDays,  setHistoryDays] = useState<DaySessions[]>([])
   const [projects,     setProjects]    = useState<ProjectSummary[]>([])
   const [activeProject,setActiveProject] = useState<string | null>(null)
-  const [compacting,   setCompacting]  = useState(false)
+  const [compacting,      setCompacting]     = useState(false)
+  const [killSwitchActive, setKillSwitchActive] = useState(false)
   const [quota,        setQuota]       = useState<QuotaData | undefined>()
   const [configOpen,   setConfigOpen]  = useState(false)
   const [hiddenCost,   setHiddenCost]  = useState<{
@@ -33,6 +38,9 @@ export default function App() {
     loop_sessions:  number; total_loops:    number; total_sessions: number
   } | undefined>()
   const [prompts,      setPrompts]     = useState<Array<{ index: number; ts: number; text: string }>>([]);
+  const [claudeStats,  setClaudeStats] = useState<ClaudeStatsData | undefined>()
+  const [systemConfig, setSystemConfig] = useState<SystemConfig | undefined>()
+  const [quotaStats,   setQuotaStats]  = useState<QuotaStats | undefined>()
   const stateRef = useRef(state)
   stateRef.current = state
 
@@ -72,10 +80,16 @@ export default function App() {
     let retryTimer: ReturnType<typeof setTimeout>
     function connect() {
       es = new EventSource('/stream')
-      es.addEventListener('open', () => setConnected(true))
+      es.addEventListener('open', () => setConnStatus('connected'))
       es.addEventListener('message', (e: MessageEvent) => {
         try {
           const msg = JSON.parse(e.data)
+
+          // Kill switch — guard evita renders cuando el estado no cambia
+          if (msg.type === 'quota_warning') {
+            const blocked = !!msg.payload?.blocked
+            setKillSwitchActive(prev => prev === blocked ? prev : blocked)
+          }
 
           // Notificaciones del sistema
           if ('Notification' in window && Notification.permission === 'granted') {
@@ -106,12 +120,16 @@ export default function App() {
         } catch {}
       })
       es.addEventListener('error', () => {
-        setConnected(false); es.close()
+        setConnStatus('error'); es.close()
         retryTimer = setTimeout(connect, 2000)
       })
     }
     connect()
     return () => { es?.close(); clearTimeout(retryTimer) }
+  }, [])
+
+  useEffect(() => {
+    fetch('/api/quota-stats').then(r => r.json()).then(setQuotaStats).catch(() => {})
   }, [])
 
   // ── Prompts: cargar cuando cambia la sesión ────────────────────────────────
@@ -134,6 +152,20 @@ export default function App() {
     }
     fetchHiddenCost()
     const t = setInterval(fetchHiddenCost, 5 * 60_000)
+    return () => clearInterval(t)
+  }, [])
+
+  // ── Claude stats polling (stats-cache.json, cada 60s) ─────────────────────
+  useEffect(() => {
+    async function fetchClaudeStats() {
+      try {
+        const r = await fetch('/claude-stats')
+        if (!r.ok) return
+        setClaudeStats(await r.json())
+      } catch {}
+    }
+    fetchClaudeStats()
+    const t = setInterval(fetchClaudeStats, 60_000)
     return () => clearInterval(t)
   }, [])
 
@@ -178,6 +210,9 @@ export default function App() {
         setActiveProject(d.active_project ?? null)
       }).catch(() => {})
     }
+    if (activeTab === 'system') {
+      fetch('/system-config').then(r => r.json()).then(d => setSystemConfig(d)).catch(() => {})
+    }
   }, [activeTab])
 
   // ── Projects: carga inicial + auto-refresh (60s) ────────────────────────────
@@ -209,13 +244,17 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       <Header
-        state={state} connected={connected}
+        state={state} connStatus={connStatus}
         activeTab={activeTab} onTabChange={setActiveTab}
         activeProject={activeProject}
         onOpenConfig={() => setConfigOpen(true)}
         quota={quota}
       />
       {configOpen && <ConfigPanel onClose={() => setConfigOpen(false)} />}
+
+      {/* Alertas globales — visibles en cualquier pestaña */}
+      {connStatus === 'error'  && <DisconnectedBanner />}
+      {killSwitchActive        && <KillSwitchBanner />}
 
       {activeTab === 'live' && (
         <>
@@ -228,6 +267,8 @@ export default function App() {
               sessionState={state.sessionState}
               weeklyData={state.weeklyData}
               hiddenCost={hiddenCost}
+              prompts={prompts}
+              quotaStats={quotaStats}
             />
           </div>
         </>
@@ -247,9 +288,22 @@ export default function App() {
 
       {activeTab === 'usage' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <UsageView quota={quota} cost={state.cost} events={state.events} prompts={prompts} />
+          <UsageView quota={quota} cost={state.cost} events={state.events} prompts={prompts} claudeStats={claudeStats} />
         </div>
       )}
+
+      {activeTab === 'reports' && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <WeeklyReportsView />
+        </div>
+      )}
+
+      {activeTab === 'system' && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <SystemView config={systemConfig} />
+        </div>
+      )}
+
     </div>
   )
 }
@@ -262,12 +316,13 @@ function handleMessage(prev: AppState, msg: any): AppState {
     const s = msg.session
     return {
       ...prev,
-      sessionId:    s.id, cwd: s.cwd || '',
-      startedAt:    s.started_at,
-      events:       (msg.events || []) as TraceEvent[],
-      cost:         buildCost(s),
-      sessionState: (s.state as SessionState) ?? 'idle',
-      blockCosts:   (msg.blockCosts || []) as BlockCost[],
+      sessionId:        s.id, cwd: s.cwd || '',
+      startedAt:        s.started_at,
+      events:           (msg.events || []) as TraceEvent[],
+      cost:             buildCost(s),
+      sessionState:     (s.state as SessionState) ?? 'idle',
+      blockCosts:       (msg.blockCosts || []) as BlockCost[],
+      pendingBlockCost: null,
     }
   }
   if (msg.type === 'state_change') {
@@ -278,8 +333,9 @@ function handleMessage(prev: AppState, msg: any): AppState {
   if (msg.type === 'event') {
     const evt = msg.payload as TraceEvent & { session_id: string }
     if (evt.session_id && evt.session_id !== prev.sessionId && prev.sessionId !== '') {
-      return { ...prev, sessionId: evt.session_id, cwd: evt.cwd || '', startedAt: evt.ts, events: [] }
+      return { ...prev, sessionId: evt.session_id, cwd: evt.cwd || '', startedAt: evt.ts, events: [], blockCosts: [], pendingBlockCost: null }
     }
+    const MAX_EVENTS = 500
     let events = [...prev.events]
     if (evt.type === 'Done' && evt.tool_name) {
       const idx = [...events].reverse().findIndex(e => e.type === 'PreToolUse' && e.tool_name === evt.tool_name)
@@ -290,9 +346,15 @@ function handleMessage(prev: AppState, msg: any): AppState {
     } else {
       events = [...events, evt]
     }
-    const next = { ...prev, events }
+    if (events.length > MAX_EVENTS) events = events.slice(-MAX_EVENTS)
+    const next: AppState = { ...prev, events }
     if (!prev.sessionId && evt.session_id) {
       next.sessionId = evt.session_id; next.cwd = evt.cwd || ''; next.startedAt = evt.ts
+    }
+    // Stop = fin de bloque: guardar coste acumulado y resetear pendiente
+    if (evt.type === 'Stop' && prev.pendingBlockCost) {
+      next.blockCosts       = [...prev.blockCosts, prev.pendingBlockCost]
+      next.pendingBlockCost = null
     }
     return next
   }
@@ -306,6 +368,7 @@ function handleMessage(prev: AppState, msg: any): AppState {
       context_used: p.context_used, context_window: p.context_window,
       loops: p.loops || [], summary: p.summary,
       model: p.model,
+      projected_hourly_usd: p.projected_hourly_usd,
     }
     return { ...prev, cost }
   }
@@ -313,7 +376,16 @@ function handleMessage(prev: AppState, msg: any): AppState {
     const p = msg.payload
     if (p.session_id !== prev.sessionId) return prev
     const entry: BlockCost = { inputUsd: p.inputUsd, outputUsd: p.outputUsd, totalUsd: p.totalUsd, inputTokens: p.inputTokens ?? 0, outputTokens: p.outputTokens ?? 0 }
-    return { ...prev, blockCosts: [...prev.blockCosts, entry] }
+    // Acumular sub-turnos del bloque en curso — se empuja a blockCosts al recibir Stop
+    const pend = prev.pendingBlockCost
+    const merged: BlockCost = pend ? {
+      inputUsd:     pend.inputUsd     + entry.inputUsd,
+      outputUsd:    pend.outputUsd    + entry.outputUsd,
+      totalUsd:     pend.totalUsd     + entry.totalUsd,
+      inputTokens:  pend.inputTokens  + entry.inputTokens,
+      outputTokens: pend.outputTokens + entry.outputTokens,
+    } : entry
+    return { ...prev, pendingBlockCost: merged }
   }
   // summary_ready — el daemon generó un resumen IA para la sesión activa
   // Refrescamos el historial en el próximo render (el usuario lo verá al abrir History)
@@ -321,31 +393,31 @@ function handleMessage(prev: AppState, msg: any): AppState {
   return prev
 }
 
-// ─── Banner de auto-compact ────────────────────────────────────────────────────
+// ─── Banners de alerta ────────────────────────────────────────────────────────
 
-function CompactBanner() {
+function AlertBanner({ icon: Icon, color, title, subtitle }: {
+  icon:     React.ElementType
+  color:    string
+  title:    string
+  subtitle: string
+}) {
   return (
     <div style={{
-      background: '#161b22',
-      borderBottom: '1px solid #d2992255',
-      padding: '6px 16px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10,
+      background: '#161b22', borderBottom: `1px solid ${color}55`,
+      padding: '6px 16px', display: 'flex', alignItems: 'center',
+      justifyContent: 'center', gap: 10, overflow: 'hidden',
       animation: 'pulse 1.5s ease-in-out infinite',
     }}>
-      <Zap size={14} color="#d29922" />
-      <div>
-        <span style={{ color: '#d29922', fontWeight: 700, fontSize: 12 }}>
-          Claude está compactando el contexto
-        </span>
-        <span style={{ color: '#7d8590', fontSize: 11, marginLeft: 8 }}>
-          — el historial de herramientas se resume automáticamente para liberar espacio
-        </span>
-      </div>
+      <Icon size={14} color={color} style={{ flexShrink: 0 }} />
+      <span style={{ color, fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{title}</span>
+      <span style={{ color: '#7d8590', fontSize: 11, whiteSpace: 'nowrap' }}>— {subtitle}</span>
     </div>
   )
 }
+
+const DisconnectedBanner = () => <AlertBanner icon={WifiOff}       color="#f0883e" title="Daemon desconectado"      subtitle="reconectando automáticamente…" />
+const KillSwitchBanner   = () => <AlertBanner icon={AlertTriangle} color="#f85149" title="Kill switch activado"     subtitle="cuota de 5h superada · nuevas tool calls bloqueadas" />
+const CompactBanner      = () => <AlertBanner icon={Zap}           color="#d29922" title="Claude está compactando el contexto" subtitle="el historial de herramientas se resume automáticamente para liberar espacio" />
 
 function buildCost(session: any): CostInfo | undefined {
   if (!session?.total_cost_usd) return undefined

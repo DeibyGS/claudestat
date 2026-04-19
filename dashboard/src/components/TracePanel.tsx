@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { BarChart, Bar, ResponsiveContainer, Cell, Tooltip as RechartsTip } from 'recharts'
 import {
   FileText, FilePlus, Pencil, Terminal, FolderSearch, Search,
@@ -9,7 +9,8 @@ import {
   Activity, Timer, BrainCircuit, Flame, Info, CircleX,
   type LucideIcon,
 } from 'lucide-react'
-import type { TraceEvent, CostInfo, BlockCost, MetaStats, MetaAlert, QuotaData, SessionState, DayStats } from '../types'
+import type { TraceEvent, CostInfo, BlockCost, MetaStats, MetaAlert, QuotaData, SessionState, DayStats, QuotaStats } from '../types'
+import { Tip } from './Tip'
 
 interface HiddenCostStats {
   loop_waste_usd: number
@@ -18,6 +19,8 @@ interface HiddenCostStats {
   total_loops:    number
   total_sessions: number
 }
+
+interface SessionPromptItem { index: number; ts: number; text: string }
 
 interface Props {
   events:        TraceEvent[]
@@ -28,7 +31,9 @@ interface Props {
   quota?:        QuotaData
   sessionState?: SessionState
   weeklyData:    DayStats[]
+  prompts?:      SessionPromptItem[]
   hiddenCost?:   HiddenCostStats
+  quotaStats?:   QuotaStats
 }
 
 // ─── Icon + Color maps ────────────────────────────────────────────────────────
@@ -50,21 +55,50 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   default:   Wrench,
 }
 
+const EFFICIENCY_CTX_WARN = 0.75   // threshold de advertencia de contexto (por debajo del compact 0.85)
+const TOOL_CALL_WARN      = 150    // sesiones con más tool calls que esto se consideran intensivas
+const CTX_CRITICAL_FREE   = 10     // % libre por debajo del cual se muestra alerta inline en sidebar
+const EFFICIENCY_ALERT_COLOR = '#f85149'
+
+// Colores con ratio de contraste ≥ 4.5:1 (WCAG AA) contra el fondo oscuro #0d1117
 const TOOL_COLORS: Record<string, string> = {
-  Read:      '#58a6ff',
-  Write:     '#3fb950',
-  Edit:      '#3fb950',
-  Bash:      '#d29922',
-  Glob:      '#79c0ff',
-  Grep:      '#79c0ff',
-  WebSearch: '#56d364',
-  WebFetch:  '#56d364',
-  Agent:     '#bc8cff',
-  Skill:     '#58a6ff',
-  TodoWrite: '#8b949e',
-  TodoRead:  '#8b949e',
-  Task:      '#8b949e',
-  default:   '#6e7681',
+  Read:      '#58a6ff',  // azul    — 7.9:1
+  Write:     '#3fb950',  // verde   — 8.4:1
+  Edit:      '#3fb950',  // verde   — 8.4:1
+  Bash:      '#d29922',  // ámbar   — 6.9:1
+  Glob:      '#79c0ff',  // azul claro — 10.5:1
+  Grep:      '#79c0ff',  // azul claro — 10.5:1
+  WebSearch: '#56d364',  // verde claro — 11.1:1
+  WebFetch:  '#56d364',  // verde claro — 11.1:1
+  Agent:     '#bc8cff',  // violeta — 6.5:1
+  Skill:     '#58a6ff',  // azul    — 7.9:1
+  TodoWrite: '#8b949e',  // gris    — 6.5:1
+  TodoRead:  '#8b949e',  // gris    — 6.5:1
+  Task:      '#8b949e',  // gris    — 6.5:1
+  default:   '#8b949e',  // era #6e7681 (4.0:1, fallaba WCAG AA) → subido a 6.5:1
+}
+
+// ─── Enmascaramiento de datos sensibles ──────────────────────────────────────
+// Reemplaza valores que parecen secretos (API keys, tokens, passwords) con ****
+// para evitar que aparezcan en claro en el dashboard.
+
+const SECRET_PATTERNS: RegExp[] = [
+  /(?:api[_-]?key|apikey)\s*[:=]\s*["']?([A-Za-z0-9_\-]{16,})["']?/gi,
+  /(?:sk|pk|rk|token|secret|password|passwd|pwd|auth|bearer)\s*[:=]\s*["']?([A-Za-z0-9_\-\.]{16,})["']?/gi,
+  /\b(sk-[A-Za-z0-9]{20,})\b/g,       // OpenAI / Anthropic keys
+  /\b(ghp_[A-Za-z0-9]{36})\b/g,       // GitHub personal access tokens
+  /\b(xoxb-[A-Za-z0-9\-]+)\b/g,       // Slack bot tokens
+  /\bAKIA[0-9A-Z]{16}\b/g,            // AWS Access Key IDs
+]
+
+export function maskSecrets(text: string): string {
+  let result = text
+  for (const re of SECRET_PATTERNS) {
+    result = result.replace(re, (match, captured) =>
+      captured ? match.replace(captured, '****') : '****'
+    )
+  }
+  return result
 }
 
 // ─── Guardrails ───────────────────────────────────────────────────────────────
@@ -326,8 +360,9 @@ function detail(toolName?: string, rawInput?: string): string {
   return ''
 }
 
-function fmtJson(raw?: string): string {
+function fmtJson(raw?: string | object): string {
   if (!raw) return ''
+  if (typeof raw !== 'string') return JSON.stringify(raw, null, 2)
   try { return JSON.stringify(JSON.parse(raw), null, 2) } catch { return raw }
 }
 
@@ -474,24 +509,16 @@ function DetailModal({ ev, onClose }: { ev: TraceEvent; onClose: () => void }) {
               </div>
             )
           })()}
-          <div>
-            <div style={{ fontSize: 10, fontWeight: 700, color: '#3fb950', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>
-              Output
-            </div>
-            {ev.tool_output ? (
-              <pre style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 6, padding: '10px 12px', fontSize: 11, color: '#c9d1d9', margin: 0, overflow: 'auto', maxHeight: 260, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                {ev.tool_output}
-              </pre>
-            ) : (
-              <div style={{ background: '#0d1117', border: '1px solid #21262d30', borderRadius: 6, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
-                <CircleX size={13} color="#484f58" />
-                <div>
-                  <div style={{ color: '#484f58', fontSize: 11, fontWeight: 500 }}>Output no almacenado</div>
-                  <div style={{ color: '#3d444d', fontSize: 10, marginTop: 2 }}>Los outputs solo se capturan en sesiones activas. Los eventos históricos no los incluyen.</div>
-                </div>
+          {ev.tool_output && (
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#3fb950', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>
+                Output
               </div>
-            )}
-          </div>
+              <pre style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 6, padding: '10px 12px', fontSize: 11, color: '#c9d1d9', margin: 0, overflow: 'auto', maxHeight: 260, fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                {maskSecrets(ev.tool_output)}
+              </pre>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -539,11 +566,13 @@ function ModelBarMini({ label, color, hours, limit }: { label: string; color: st
   )
 }
 
-function SidebarKPI({ cost, quota, sessionState = 'idle', meta }: {
+function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStats, startedAt }: {
   cost?:         CostInfo
   quota?:        QuotaData
   sessionState?: SessionState
   meta?:         MetaStats
+  quotaStats?:   QuotaStats
+  startedAt?:    number
 }) {
   const sm = STATE_META[sessionState]
 
@@ -551,107 +580,158 @@ function SidebarKPI({ cost, quota, sessionState = 'idle', meta }: {
   const compactWindow = cost?.context_window ? Math.round(cost.context_window * COMPACT_THRESHOLD) : null
   const contextPct = cost?.context_used && compactWindow
     ? Math.min(100, Math.round(cost.context_used / compactWindow * 100)) : null
-  const remaining  = contextPct !== null ? 100 - contextPct : null
-  const ctxColor   = remaining === null ? '#484f58'
-    : remaining < 15 ? '#f85149' : remaining < 35 ? '#d29922' : '#3fb950'
+  const ctxFree    = contextPct !== null ? 100 - contextPct : null
+  const ctxColor   = ctxFree === null ? '#484f58'
+    : ctxFree < 15 ? '#f85149' : ctxFree < 35 ? '#d29922' : '#3fb950'
+
+  const quotaColor = !quota ? '#484f58'
+    : quota.cyclePct > 85 ? '#f85149' : quota.cyclePct > 65 ? '#d29922' : '#58a6ff'
 
   const alerts: MetaAlert[] = []
   if (meta?.alerts) alerts.push(...meta.alerts)
   if (contextPct !== null && contextPct > 85)
-    alerts.push({ level: 'critical', message: `Auto-compact muy pronto — ${remaining}% libre`, metric: 'context' })
+    alerts.push({ level: 'critical', message: `Auto-compact muy pronto — ${ctxFree}% libre`, metric: 'context' })
   else if (contextPct !== null && contextPct > 65)
     alerts.push({ level: 'warning', message: `Contexto al ${contextPct}%`, metric: 'context' })
 
-  return (
-    <div style={{ padding: '10px 12px 8px', borderBottom: '1px solid #21262d', flexShrink: 0,
-      display: 'flex', flexDirection: 'column', gap: 7 }}>
+  const resetMs = quota
+    ? (quota.cycleResetAt ? quota.cycleResetAt - Date.now() : quota.cycleResetMs)
+    : 0
 
-      {/* Estado + Cuota badge */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+  return (
+    <div style={{ borderBottom: '1px solid #21262d', flexShrink: 0, background: '#090d12' }}>
+
+      {/* ── Fila estado + burn rate ── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '8px 12px 6px',
+        borderBottom: '1px solid #161b22',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {sm.pulse && (
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: sm.color,
-              display: 'inline-block', boxShadow: `0 0 4px ${sm.color}`,
-              animation: 'pulse 1.2s ease-in-out infinite' }} />
+            <span style={{
+              width: 7, height: 7, borderRadius: '50%', background: sm.color,
+              display: 'inline-block', boxShadow: `0 0 5px ${sm.color}`,
+              animation: 'pulse 1.2s ease-in-out infinite', flexShrink: 0,
+            }} />
           )}
-          <span style={{ color: sm.color, fontSize: 11, fontWeight: 700 }}>{sm.label}</span>
-        </div>
-        {quota && (
-          <span style={{ fontSize: 10, fontWeight: 700, flexShrink: 0,
-            color: quota.cyclePct > 85 ? '#f85149' : quota.cyclePct > 65 ? '#d29922' : '#7d8590',
-            background: '#161b22', borderRadius: 3, padding: '1px 6px', border: '1px solid #21262d' }}
-            title={`Cuota 5h est. — ${PLAN_LABEL[quota.detectedPlan] ?? quota.detectedPlan}. Reset en ${fmtResetMs(quota.cycleResetAt ? quota.cycleResetAt - Date.now() : quota.cycleResetMs)}`}
-          >
-            <Timer size={8} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 3 }} />
-            {quota.cyclePrompts}/{quota.cycleLimit} · {quota.cyclePct}%
+          <span style={{ color: sm.color, fontSize: 12, fontWeight: 700, letterSpacing: '-0.2px' }}>
+            {sm.label}
           </span>
+        </div>
+        {quota && quota.burnRateTokensPerMin > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Flame size={9} color="#d29922" />
+            <span style={{ fontSize: 10, color: '#d29922', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+              {cost?.projected_hourly_usd
+                && cost.projected_hourly_usd > 0.001
+                && cost.projected_hourly_usd < 50
+                && startedAt
+                && (Date.now() - startedAt) > 2 * 60_000
+                ? `~${fmtUsd(cost.projected_hourly_usd)}/h`
+                : `${quota.burnRateTokensPerMin.toLocaleString()} tok/min`
+              }
+            </span>
+          </div>
         )}
       </div>
 
-      {/* Context bar */}
-      <div title={`% libre calculado sobre el umbral de auto-compact (~85% de la ventana total).\nSe alinea con "X% until auto-compact" del terminal de Claude Code.\nVentana total: ${fmtTok(cost?.context_window ?? 200_000)} · Umbral: ${fmtTok(compactWindow ?? 170_000)}`}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <BrainCircuit size={9} color="#484f58" />
-            <span style={{ fontSize: 9, color: '#484f58', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Contexto</span>
-          </div>
-          <span style={{ fontSize: 10, color: ctxColor, fontWeight: 600 }}>
-            {remaining !== null ? `~${remaining}% libre` : '—'}
+      {/* ── Contexto ── */}
+      <div style={{ padding: '8px 12px 6px', borderBottom: '1px solid #161b22' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 5 }}>
+          <Tip position="bottom" align="left" content={
+            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+              <div style={{ fontWeight: 700, color: ctxColor, marginBottom: 4 }}>Ventana de contexto</div>
+              <div style={{ color: '#7d8590' }}>% calculado sobre umbral de auto-compact (~85% de la ventana total)</div>
+              <div style={{ color: '#7d8590', marginTop: 4 }}>Igual a "X% until auto-compact" en Claude Code CLI</div>
+              <div style={{ color: '#484f58', marginTop: 6, fontSize: 10 }}>
+                Total: <span style={{ color: '#e6edf3' }}>{fmtTok(cost?.context_window ?? 200_000)}</span>
+                {'  ·  '}Umbral: <span style={{ color: '#e6edf3' }}>{fmtTok(compactWindow ?? 170_000)}</span>
+              </div>
+            </div>
+          }>
+            <span style={{ fontSize: 10, color: '#6e7681', cursor: 'default', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <BrainCircuit size={10} color="#484f58" />
+              Contexto
+            </span>
+          </Tip>
+          <span style={{ fontSize: 13, fontWeight: 700, color: ctxColor, fontVariantNumeric: 'tabular-nums' }}>
+            {ctxFree !== null ? `${ctxFree}% libre` : '—'}
           </span>
         </div>
-        <div style={{ height: 4, background: '#161b22', borderRadius: 2, overflow: 'hidden' }}>
+        <div style={{ height: 5, background: '#161b22', borderRadius: 3, overflow: 'hidden', marginBottom: 4 }}>
           {contextPct !== null && (
             <div style={{
               width: `${contextPct}%`, height: '100%', background: ctxColor,
-              borderRadius: 2, transition: 'width 0.5s',
-              animation: remaining !== null && remaining < 20 ? 'ctxPulse 1.2s ease-in-out infinite' : undefined,
+              borderRadius: 3, transition: 'width 0.5s',
+              boxShadow: ctxFree !== null && ctxFree < 20 ? `0 0 6px ${ctxColor}88` : undefined,
+              animation: ctxFree !== null && ctxFree < 20 ? 'ctxPulse 1.2s ease-in-out infinite' : undefined,
             }} />
           )}
         </div>
         {cost?.context_used && (
-          <div style={{ fontSize: 9, color: '#484f58', marginTop: 2 }}>
-            {fmtTok(cost.context_used)} / {fmtTok(compactWindow ?? 170_000)} · <span style={{ color: '#7d859066' }}>umbral</span>
+          <div style={{ fontSize: 9, color: '#484f58', display: 'flex', gap: 6 }}>
+            <span>{fmtTok(cost.context_used)} usados</span>
+            <span style={{ color: '#3d444d' }}>·</span>
+            <span>compact @{fmtTok(compactWindow ?? 170_000)}</span>
+          </div>
+        )}
+        {ctxFree !== null && ctxFree < CTX_CRITICAL_FREE && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4, padding: '3px 6px', background: `${EFFICIENCY_ALERT_COLOR}15`, border: `1px solid ${EFFICIENCY_ALERT_COLOR}35`, borderRadius: 4 }}>
+            <TriangleAlert size={9} color={EFFICIENCY_ALERT_COLOR} style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: 9, color: EFFICIENCY_ALERT_COLOR, fontWeight: 600 }}>
+              Auto-compact inminente — solo {ctxFree}% libre
+            </span>
           </div>
         )}
       </div>
 
-      {/* Model bars */}
+
+      {/* ── Modelos semana ── */}
       {quota && (quota.weeklyHoursSonnet > 0 || quota.weeklyHoursOpus > 0) && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <span style={{ fontSize: 9, color: '#484f58', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Modelos · semana</span>
-          <ModelBarMini label="Sonnet" color="#58a6ff" hours={quota.weeklyHoursSonnet} limit={quota.weeklyLimitSonnet} />
-          {quota.weeklyLimitOpus > 0 && (
-            <ModelBarMini label="Opus" color="#d29922" hours={quota.weeklyHoursOpus} limit={quota.weeklyLimitOpus} />
-          )}
-          {(quota.weeklyHoursHaiku ?? 0) > 0 && (
-            <ModelBarMini label="Haiku" color="#3fb950" hours={quota.weeklyHoursHaiku!} limit={0} />
-          )}
+        <div style={{ padding: '7px 12px 7px' }}>
+          <div style={{ fontSize: 10, color: '#484f58', marginBottom: 5 }}>Esta semana</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <ModelBarMini label="Sonnet" color="#58a6ff" hours={quota.weeklyHoursSonnet} limit={quota.weeklyLimitSonnet} />
+            {quota.weeklyLimitOpus > 0 && (
+              <ModelBarMini label="Opus" color="#d29922" hours={quota.weeklyHoursOpus} limit={quota.weeklyLimitOpus} />
+            )}
+            {(quota.weeklyHoursHaiku ?? 0) > 0 && (
+              <ModelBarMini label="Haiku" color="#3fb950" hours={quota.weeklyHoursHaiku!} limit={0} />
+            )}
+          </div>
         </div>
       )}
 
-      {/* Burn rate */}
-      {quota && quota.burnRateTokensPerMin > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <Flame size={9} color="#d29922" />
-          <span style={{ fontSize: 10, color: '#d29922', fontWeight: 600 }}>
-            {quota.burnRateTokensPerMin.toLocaleString()} tok/min
-          </span>
-          <span style={{ fontSize: 9, color: '#484f58' }}>· últimos 30m</span>
+      {/* ── P90 reference ── */}
+      {quotaStats && quotaStats.sessionCount >= 5 && (
+        <div style={{ padding: '6px 12px 4px', borderTop: '1px solid #161b22' }}>
+          <div style={{ fontSize: 9, color: '#484f58', marginBottom: 3 }}>Tu uso típico (P90)</div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <span style={{ fontSize: 10, color: '#6e7681' }}>{fmtTok(quotaStats.p90Tokens ?? 0)} tokens</span>
+            <span style={{ color: '#3d444d', fontSize: 10 }}>·</span>
+            <span style={{ fontSize: 10, color: '#6e7681' }}>~${(quotaStats.p90Cost ?? 0).toFixed(2)}</span>
+            <span style={{ color: '#3d444d', fontSize: 10 }}>·</span>
+            <span style={{ fontSize: 9, color: '#3d444d' }}>{quotaStats.sessionCount} sesiones</span>
+          </div>
         </div>
       )}
 
-      {/* Alerts */}
+      {/* ── Alertas ── */}
       {alerts.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <div style={{ padding: '0 12px 8px', display: 'flex', flexDirection: 'column', gap: 3 }}>
           {alerts.slice(0, 2).map((a, i) => {
             const c = ({ info: '#58a6ff', warning: '#d29922', critical: '#f85149' } as const)[a.level]
             const AlertIcon = ALERT_ICON[a.level] ?? Info
             return (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: c,
-                background: c + '15', border: `1px solid ${c}30`, borderRadius: 3, padding: '2px 6px',
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', gap: 5,
+                fontSize: 10, color: c,
+                background: c + '15', border: `1px solid ${c}30`,
+                borderRadius: 4, padding: '3px 8px',
+              }}>
                 <AlertIcon size={9} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.message}</span>
+                <span>{a.message}</span>
               </div>
             )
           })}
@@ -687,11 +767,88 @@ function AnimatedCost({ usd }: { usd: number }) {
   return <>{fmtUsd(displayed)}</>
 }
 
-function SidebarStats({ cost, weeklyData, events, hiddenCost }: {
+// Devuelve bullets explicando por qué la eficiencia es baja.
+// Cada razón es accionable: describe el síntoma + su impacto en tokens/costo.
+function deriveEfficiencyReasons(
+  cost: CostInfo,
+  events: TraceEvent[],
+  prompts: SessionPromptItem[],
+): string[] {
+  const reasons: string[] = []
+  const toolCallCount = events.filter(e => e.type === 'Done').length
+
+  if (cost.loops.length > 0) {
+    const top     = cost.loops.slice(0, 2).map(l => `${l.toolName} ×${l.count}`).join(', ')
+    const extra   = cost.loops.length > 2 ? ` +${cost.loops.length - 2} más` : ''
+    reasons.push(`Bucles detectados: ${top}${extra} — Claude repitio las mismas llamadas sin avanzar`)
+  }
+
+  if (toolCallCount > TOOL_CALL_WARN) {
+    reasons.push(`${toolCallCount} herramientas ejecutadas — sesiones largas acumulan contexto previo y elevan el costo por turno`)
+  }
+
+  const ctxPct = cost.context_used && cost.context_window
+    ? cost.context_used / cost.context_window : 0
+  if (ctxPct > EFFICIENCY_CTX_WARN) {
+    reasons.push(`Contexto al ${Math.round(ctxPct * 100)}% — Claude lee más historial en cada respuesta, disparando los tokens de entrada`)
+  }
+
+  if (prompts.length > 0) {
+    const avgLen = prompts.reduce((s, p) => s + p.text.length, 0) / prompts.length
+    if (avgLen > 600) {
+      reasons.push(`Prompts largos (~${Math.round(avgLen)} chars de media) — mensajes muy detallados aumentan el contexto de entrada`)
+    }
+  }
+
+  if (cost.cost_usd > 10) {
+    reasons.push(`Costo elevado ($${cost.cost_usd.toFixed(2)}) — señal de sesión intensiva; revisar si hay iteraciones innecesarias`)
+  }
+
+  return reasons
+}
+
+function EfficiencyAlert({ cost, events, prompts }: {
+  cost:    CostInfo
+  events:  TraceEvent[]
+  prompts: SessionPromptItem[]
+}) {
+  const [open, setOpen] = useState(false)
+  const reasons = useMemo(
+    () => deriveEfficiencyReasons(cost, events, prompts),
+    [cost, events, prompts],
+  )
+  if (reasons.length === 0) return null
+  const c = EFFICIENCY_ALERT_COLOR
+  return (
+    <div style={{ background: `${c}10`, border: `1px solid ${c}30`, borderLeft: `2px solid ${c}`, borderRadius: 5, padding: '5px 8px' }}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%', padding: 0, display: 'flex', alignItems: 'center', gap: 5 }}
+      >
+        <TriangleAlert size={9} color={c} style={{ flexShrink: 0 }} />
+        <span style={{ fontSize: 10, color: c, fontWeight: 600, flex: 1, textAlign: 'left' }}>Eficiencia baja — {reasons.length} causa{reasons.length > 1 ? 's' : ''}</span>
+        {open ? <ChevronsDownUp size={9} color={c} /> : <ChevronsUpDown size={9} color={c} />}
+      </button>
+      {open && (
+        <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {reasons.map((r, i) => (
+            <div key={i} style={{ display: 'flex', gap: 5, alignItems: 'flex-start' }}>
+              <span style={{ color: c, fontSize: 10, flexShrink: 0, marginTop: 1 }}>·</span>
+              <span style={{ fontSize: 10, color: '#8b949e', lineHeight: 1.5 }}>{r}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [] }: {
   cost?:       CostInfo
   weeklyData:  DayStats[]
   events:      TraceEvent[]
   hiddenCost?: HiddenCostStats
+  prompts?:    SessionPromptItem[]
 }) {
   const score = cost
     ? (cost.efficiency_score === 0 && cost.cost_usd < 0.001 ? 100 : cost.efficiency_score)
@@ -730,16 +887,20 @@ function SidebarStats({ cost, weeklyData, events, hiddenCost }: {
           )}
           {/* Efficiency */}
           {score !== null && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                <Activity size={9} color="#484f58" />
-                <span style={{ fontSize: 9, color: '#484f58', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>eficiencia</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                  <Activity size={9} color="#484f58" />
+                  <span style={{ fontSize: 9, color: '#484f58', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>eficiencia</span>
+                </div>
+                <div style={{ flex: 1, height: 3, background: '#21262d', borderRadius: 2, overflow: 'hidden' }}>
+                  <div style={{ width: `${score}%`, height: '100%', background: scoreColor,
+                    borderRadius: 2, transition: 'width 0.5s', boxShadow: `0 0 3px ${scoreColor}88` }} />
+                </div>
+                <span style={{ fontSize: 10, fontWeight: 700, color: scoreColor }}>{score}</span>
               </div>
-              <div style={{ flex: 1, height: 3, background: '#21262d', borderRadius: 2, overflow: 'hidden' }}>
-                <div style={{ width: `${score}%`, height: '100%', background: scoreColor,
-                  borderRadius: 2, transition: 'width 0.5s', boxShadow: `0 0 3px ${scoreColor}88` }} />
-              </div>
-              <span style={{ fontSize: 10, fontWeight: 700, color: scoreColor }}>{score}</span>
+
+              {score !== null && score < 70 && cost && <EfficiencyAlert cost={cost} events={events} prompts={prompts} />}
             </div>
           )}
         </>
@@ -775,13 +936,23 @@ function SidebarStats({ cost, weeklyData, events, hiddenCost }: {
         <div style={{
           borderTop: '1px solid #21262d', paddingTop: 6, marginTop: 2,
           display: 'flex', flexDirection: 'column', gap: 3,
-        }}
-          title={`Estimación: ${hiddenCost.loop_sessions} sesiones con loops esta semana.\n${hiddenCost.total_loops} loops detectados en ${hiddenCost.total_sessions} sesiones.`}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Flame size={9} color="#d29922" />
-            <span style={{ fontSize: 9, color: '#7d8590', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>coste oculto 7d</span>
-          </div>
+        }}>
+          <Tip position="top" align="left" content={
+            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+              <div style={{ fontWeight: 700, color: '#d29922', marginBottom: 4 }}>Coste oculto en loops</div>
+              <div style={{ color: '#7d8590' }}>Estimación de dinero perdido en repeticiones innecesarias de herramientas.</div>
+              <div style={{ color: '#484f58', marginTop: 6 }}>
+                <div>{hiddenCost.loop_sessions} sesiones con loops detectados</div>
+                <div>{hiddenCost.total_loops} loops · {hiddenCost.total_sessions} sesiones totales</div>
+                <div style={{ marginTop: 4 }}>Fórmula: <span style={{ color: '#7d8590', fontFamily: 'monospace', fontSize: 10 }}>costo × (loops / tool_calls)</span></div>
+              </div>
+            </div>
+          }>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'default' }}>
+              <Flame size={9} color="#d29922" />
+              <span style={{ fontSize: 9, color: '#7d8590', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>coste oculto 7d</span>
+            </div>
+          </Tip>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <span style={{
               background: '#3d2600', color: '#d29922', border: '1px solid #d2992244',
@@ -810,6 +981,8 @@ function CostTimeline({
   selected:   number
   onSelect:   (blockIndex: number) => void
 }) {
+  const [hovered, setHovered] = useState<{ idx: number; x: number; side: 'left' | 'right' } | null>(null)
+
   const costs = blocks.map(b => {
     const bc = blockCosts[b.index - 1]
     return bc ? bc.inputUsd + bc.outputUsd : 0
@@ -827,9 +1000,10 @@ function CostTimeline({
         <span>Costo por bloque</span>
         <span style={{ color: '#6e7681' }}>total {fmtUsd(total)}</span>
       </div>
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: BAR_MAX }}>
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', gap: 3, height: BAR_MAX }}>
         {blocks.map((block, i) => {
           const cost    = costs[i]
+          const bc      = blockCosts[block.index - 1]
           const inProg  = !block.hasStop && i === blocks.length - 1
           const isSel   = block.index === selected
           const isMax   = cost === maxCost && cost > 0
@@ -839,7 +1013,6 @@ function CostTimeline({
             <div
               key={block.index}
               onClick={() => onSelect(block.index)}
-              title={`#${block.index}${cost > 0 ? ` — ${fmtUsd(cost)}` : ' — sin datos'}`}
               style={{
                 flex: 1, maxWidth: 28, minWidth: 5,
                 height: barH, alignSelf: 'flex-end',
@@ -851,11 +1024,65 @@ function CostTimeline({
                 outline: isSel ? `2px solid ${color}` : 'none',
                 outlineOffset: 1,
               }}
-              onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-              onMouseLeave={e => (e.currentTarget.style.opacity = isSel ? '1' : isMax ? '0.85' : '0.45')}
+              onMouseEnter={e => {
+                e.currentTarget.style.opacity = '1'
+                const rect = e.currentTarget.getBoundingClientRect()
+                const parent = e.currentTarget.parentElement!.getBoundingClientRect()
+                const x = rect.left - parent.left + rect.width / 2
+                setHovered({ idx: i, x, side: x > parent.width / 2 ? 'right' : 'left' })
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.opacity = isSel ? '1' : isMax ? '0.85' : '0.45'
+                setHovered(null)
+              }}
             />
           )
         })}
+        {/* Floating tooltip */}
+        {hovered !== null && (() => {
+          const i   = hovered.idx
+          const bc  = blockCosts[blocks[i].index - 1]
+          const c   = costs[i]
+          const totTok = bc ? bc.inputTokens + bc.outputTokens : 0
+          return (
+            <div style={{
+              position: 'absolute',
+              bottom: BAR_MAX + 6,
+              left: hovered.side === 'left' ? hovered.x : undefined,
+              right: hovered.side === 'right' ? `calc(100% - ${hovered.x}px)` : undefined,
+              transform: hovered.side === 'left' ? 'translateX(-30%)' : 'translateX(30%)',
+              background: '#1c2128',
+              border: '1px solid #30363d',
+              borderRadius: 6,
+              padding: '6px 8px',
+              fontSize: 10,
+              color: '#c9d1d9',
+              whiteSpace: 'nowrap',
+              pointerEvents: 'none',
+              zIndex: 10,
+              lineHeight: 1.7,
+            }}>
+              <div style={{ fontWeight: 700, color: '#e6edf3', marginBottom: 2 }}>
+                #{blocks[i].index} — {c > 0 ? fmtUsd(c) : 'sin datos'}
+              </div>
+              {bc && (
+                <>
+                  <div style={{ color: '#8b949e' }}>
+                    <span style={{ color: '#79c0ff' }}>In</span>{'  '}
+                    {fmtTok(bc.inputTokens)} tok · {fmtUsd(bc.inputUsd)}
+                  </div>
+                  <div style={{ color: '#8b949e' }}>
+                    <span style={{ color: '#56d364' }}>Out</span>{'  '}
+                    {fmtTok(bc.outputTokens)} tok · {fmtUsd(bc.outputUsd)}
+                  </div>
+                  <div style={{ borderTop: '1px solid #21262d', marginTop: 3, paddingTop: 3, color: '#6e7681' }}>
+                    Total {fmtTok(totTok)} tok
+                  </div>
+                </>
+              )}
+            </div>
+          )
+        })()}
       </div>
       {blocks.length <= 16 && (
         <div style={{ display: 'flex', gap: 3, marginTop: 2, marginBottom: 1 }}>
@@ -872,13 +1099,23 @@ function CostTimeline({
 
 // ─── Block List Item ──────────────────────────────────────────────────────────
 
+// Prioridad: selected > inProgress > heatRole > default
+function getBlockColors(isSelected: boolean, inProgress: boolean, heatRole?: 'max' | 'min') {
+  if (isSelected)         return { border: '#58a6ff40', borderLeft: '#58a6ff', bg: '#161d2d', bgHover: '#161d2d', cost: '#79c0ff' }
+  if (inProgress)         return { border: '#d2992240', borderLeft: '#d29922', bg: '#1c1a14', bgHover: '#1c1a14', cost: '#d29922' }
+  if (heatRole === 'max') return { border: '#f8514928', borderLeft: '#f85149', bg: '#160e0e', bgHover: '#1e0f0f', cost: '#f85149' }
+  if (heatRole === 'min') return { border: '#3fb95028', borderLeft: '#3fb950', bg: '#0d160e', bgHover: '#0f1e10', cost: '#3fb950' }
+  return                         { border: '#1e2329',   borderLeft: '#30363d', bg: '#111519', bgHover: '#161b22', cost: '#6e7681' }
+}
+
 function BlockListItem({
-  block, blockCost, isLast, isSelected, onClick,
+  block, blockCost, isLast, isSelected, heatRole, onClick,
 }: {
   block:      Block
   blockCost?: BlockCost
   isLast:     boolean
   isSelected: boolean
+  heatRole?:  'max' | 'min'
   onClick:    () => void
 }) {
   const inProgress = !block.hasStop && isLast
@@ -886,8 +1123,8 @@ function BlockListItem({
   const stats      = calcStats(block.tools)
   const intent     = getIntent(stats)
   const dur        = blockDuration(block)
-  const totalCost  = blockCost ? blockCost.inputUsd + blockCost.outputUsd : 0
-  const borderColor = isSelected ? '#58a6ff' : inProgress ? '#d29922' : '#30363d'
+  const totalCost = blockCost ? blockCost.inputUsd + blockCost.outputUsd : 0
+  const clr       = getBlockColors(isSelected, inProgress, heatRole)
 
   return (
     <div
@@ -895,16 +1132,16 @@ function BlockListItem({
       style={{
         margin: '4px 8px',
         borderRadius: 7,
-        border: `1px solid ${isSelected ? '#58a6ff40' : inProgress ? '#d2992240' : '#1e2329'}`,
-        borderLeft: `3px solid ${borderColor}`,
-        background: isSelected ? '#161d2d' : inProgress ? '#1c1a14' : '#111519',
+        border: `1px solid ${clr.border}`,
+        borderLeft: `3px solid ${clr.borderLeft}`,
+        background: clr.bg,
         padding: '8px 10px',
         cursor: 'pointer',
         transition: 'background 0.12s, border-color 0.12s',
         animation: inProgress ? 'borderPulse 2s ease-in-out infinite' : undefined,
       }}
-      onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = '#161b22' }}
-      onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = inProgress ? '#1c1a14' : '#111519' }}
+      onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = clr.bgHover }}
+      onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = clr.bg }}
     >
       {/* Row 1: index + actors + cost + status */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 5 }}>
@@ -914,7 +1151,7 @@ function BlockListItem({
           {actors.length > 1 && <span style={{ fontSize: 9, color: '#6e7681' }}>+{actors.length - 1}</span>}
         </div>
         {totalCost > 0 && (
-          <span style={{ color: isSelected ? '#79c0ff' : '#6e7681', fontSize: 10, fontWeight: 600, flexShrink: 0 }}>
+          <span style={{ color: clr.cost, fontSize: 10, fontWeight: 600, flexShrink: 0 }}>
             {fmtUsd(totalCost)}
           </span>
         )}
@@ -933,7 +1170,12 @@ function BlockListItem({
             </>
         }
         <div style={{ flex: 1 }} />
-        {dur && <span style={{ color: '#484f58', fontSize: 10, flexShrink: 0 }}>{dur}</span>}
+        {blockCost && (blockCost.inputTokens + blockCost.outputTokens) > 0 && (
+          <span style={{ color: '#484f58', fontSize: 10, flexShrink: 0 }}>
+            {fmtTok(blockCost.inputTokens + blockCost.outputTokens)}
+          </span>
+        )}
+        {dur && <span style={{ color: '#3d444d', fontSize: 10, flexShrink: 0, marginLeft: 4 }}>· {dur}</span>}
       </div>
     </div>
   )
@@ -942,29 +1184,33 @@ function BlockListItem({
 // ─── Tool Row ─────────────────────────────────────────────────────────────────
 
 function ToolRow({
-  ev, startedAt, isLooping, onClick,
+  ev, startedAt, typeCount, isRealLoop, onClick, blockDone,
 }: {
-  ev:        TraceEvent
-  startedAt: number
-  isLooping: boolean
-  onClick:   () => void
+  ev:          TraceEvent
+  startedAt:   number
+  typeCount:   number   // veces que aparece este tipo de tool en el bloque (diversas entradas)
+  isRealLoop:  boolean  // mismo tool + misma entrada repetida ≥2 veces
+  onClick:     () => void
+  blockDone:   boolean  // true = bloque completo (tiene Stop) → click habilitado
 }) {
-  const done  = ev.type === 'Done'
+  const done      = ev.type === 'Done'
+  // Solo permite abrir el modal si la herramienta terminó Y el bloque está completo
+  const clickable = done && blockDone
   const Icon  = TOOL_ICONS[ev.tool_name || ''] || TOOL_ICONS.default
   const color = done ? (TOOL_COLORS[ev.tool_name || ''] || TOOL_COLORS.default) : '#6e7681'
   const det   = detail(ev.tool_name, ev.tool_input)
 
   return (
     <div
-      onClick={done ? onClick : undefined}
-      title={done ? 'Click para ver input/output' : 'En progreso…'}
+      onClick={clickable ? onClick : undefined}
+      title={!done ? 'En progreso…' : !blockDone ? 'Disponible cuando el bloque termine' : 'Click para ver input/output'}
       style={{
         display: 'flex', alignItems: 'center', gap: 8,
         padding: '4px 12px 4px 16px',
         borderLeft: `2px solid ${done ? color + '50' : '#21262d'}`,
         marginLeft: 8,
-        opacity: done ? 1 : 0.6,
-        cursor: done ? 'pointer' : 'default',
+        opacity: done ? (blockDone ? 1 : 0.5) : 0.6,
+        cursor: clickable ? 'pointer' : 'default',
         borderRadius: '0 4px 4px 0',
       }}
       onMouseEnter={e => done && (e.currentTarget.style.background = '#161b22')}
@@ -983,10 +1229,31 @@ function ToolRow({
         </span>
       )}
       {!det && <span style={{ flex: 1 }} />}
-      {isLooping && (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#f85149', fontSize: 10, fontWeight: 700, background: '#f8514918', borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>
-          <TriangleAlert size={9} /> loop
-        </span>
+      {isRealLoop && (
+        <Tip position="top" align="right" content={
+          <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
+            <span style={{ color: '#d29922', fontWeight: 700 }}>Llamada repetida</span><br />
+            <span style={{ color: '#e6edf3' }}>{ev.tool_name}</span> fue invocada con<br />
+            exactamente la misma entrada ≥2 veces —<br />
+            posible bucle sin avance real
+          </div>
+        }>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#d29922', fontSize: 10, fontWeight: 700, background: '#d2992218', borderRadius: 3, padding: '1px 5px', flexShrink: 0, cursor: 'help' }}>
+            <TriangleAlert size={9} /> repetida
+          </span>
+        </Tip>
+      )}
+      {!isRealLoop && typeCount >= 3 && (
+        <Tip position="top" align="right" content={
+          <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
+            <span style={{ color: '#e6edf3', fontWeight: 700 }}>{ev.tool_name}</span> fue llamada <span style={{ color: '#e6edf3' }}>{typeCount} veces</span> en este bloque<br />
+            con entradas distintas — uso intensivo normal, no un bucle
+          </div>
+        }>
+          <span style={{ color: '#484f58', fontSize: 10, fontVariantNumeric: 'tabular-nums', flexShrink: 0, cursor: 'help' }}>
+            ×{typeCount}
+          </span>
+        </Tip>
       )}
       {checkDangerous(ev.tool_name, ev.tool_input) && (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#ff7b72', fontSize: 10, fontWeight: 700, background: '#f8514920', border: '1px solid #f8514940', borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>
@@ -1035,15 +1302,158 @@ function fmtModelBlock(model: string): { name: string; color: string } {
 }
 
 
+// ─── Prompt Score ─────────────────────────────────────────────────────────────
+
+type ScoreLevel = 'ok' | 'warn' | 'error'
+interface PromptCheck { label: string; level: ScoreLevel; tip?: string }
+
+function scorePrompt(text: string): PromptCheck[] {
+  const checks: PromptCheck[] = []
+
+  // 1. Longitud
+  if (text.length > 600) {
+    checks.push({ label: `Muy largo · ${text.length} chars`, level: 'error',
+      tip: 'Divide en pasos: envía primero la acción principal y luego los ajustes en mensajes separados.' })
+  } else if (text.length > 300) {
+    checks.push({ label: `Moderado · ${text.length} chars`, level: 'warn',
+      tip: 'Considera separar en dos mensajes si tienes más de una solicitud.' })
+  } else {
+    checks.push({ label: `Conciso · ${text.length} chars`, level: 'ok' })
+  }
+
+  // 2. Ambigüedad (frases vagas sin contexto)
+  const vagueRe = /\b(arréglalo|arreglalo|fix it|make it work|mejóralo|mejoralo|improve it|make it better|algo así|somehow|whatever|haz que funcione|que funcione|que ande|hazlo funcionar|that it works|it's broken)\b/i
+  if (vagueRe.test(text)) {
+    checks.push({ label: 'Ambiguo', level: 'warn',
+      tip: 'Describe el error exacto o el comportamiento esperado. Ejemplo: "falla con TypeError en línea 42" en vez de "arréglalo".' })
+  }
+
+  // 3. Multi-tarea (demasiadas solicitudes en uno)
+  const alsoCount  = (text.match(/\b(también|además|y también|and also|otra cosa|por otro lado|ademas)\b/gi) || []).length
+  const bulletCount = (text.match(/^[-*•]\s/gm) || []).length + (text.match(/^\d+\.\s/gm) || []).length
+  if (alsoCount >= 2 || bulletCount >= 4) {
+    checks.push({ label: `Multi-tarea · ${alsoCount + bulletCount} indicadores`, level: 'warn',
+      tip: 'Demasiadas solicitudes de una vez. Claude prioriza la primera — envía el resto en mensajes separados.' })
+  }
+
+  // 4. Especificidad (menciona rutas, funciones, errores → positivo)
+  const hasPath  = /\/[\w\-./]+\.\w{2,4}/.test(text)
+  const hasFunc  = /\b(function|función|método|method|class|clase|endpoint|route|ruta|hook|component|componente)\s+[\w]+/i.test(text)
+  const hasError = /\b(Error|error|exception|Exception|undefined|null|Cannot|FAILED|TypeError|cannot read)\b/.test(text)
+  const hasLine  = /\blínea\s+\d+|line\s+\d+|:\d+:\d+\b/.test(text)
+  if (hasPath || hasFunc || hasError || hasLine) {
+    checks.push({ label: 'Específico', level: 'ok' })
+  } else if (text.length > 100) {
+    checks.push({ label: 'Poco específico', level: 'warn',
+      tip: 'Incluye el nombre del archivo, función o mensaje de error exacto para un mejor resultado.' })
+  }
+
+  return checks
+}
+
+const SCORE_COLORS: Record<ScoreLevel, string> = { ok: '#3fb950', warn: '#d29922', error: '#f85149' }
+
+function PromptScoreCard({ prompt }: { prompt: string }) {
+  const [open,     setOpen]     = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const checks = scorePrompt(prompt)
+  const worstLevel = checks.some(c => c.level === 'error') ? 'error'
+    : checks.some(c => c.level === 'warn') ? 'warn' : 'ok'
+  const recs = checks.filter(c => c.tip)
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: open ? 8 : 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: '#484f58', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+            Prompt
+          </span>
+          {/* Score badges */}
+          <div style={{ display: 'flex', gap: 4 }}>
+            {checks.map((c, i) => (
+              <span key={i} style={{
+                fontSize: 9, fontWeight: 600, padding: '1px 6px', borderRadius: 10,
+                background: SCORE_COLORS[c.level] + '22',
+                color: SCORE_COLORS[c.level],
+                border: `1px solid ${SCORE_COLORS[c.level]}44`,
+              }}>{c.label}</span>
+            ))}
+          </div>
+        </div>
+        <button
+          onClick={() => setOpen(v => !v)}
+          style={{ background: 'none', border: `1px solid ${SCORE_COLORS[worstLevel]}44`, borderRadius: 4, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 7px', color: SCORE_COLORS[worstLevel], fontSize: 10 }}
+        >
+          {open ? <ChevronsDownUp size={10} /> : <ChevronsUpDown size={10} />}
+          {open ? 'ocultar' : 'ver'}
+        </button>
+      </div>
+      {open && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {/* Prompt text */}
+          <div style={{ position: 'relative' }}>
+            <div style={{
+              background: '#0d1117', border: '1px solid #21262d', borderRadius: 6,
+              padding: '10px 12px 28px',
+              maxHeight: expanded ? undefined : 120,
+              overflow: expanded ? 'auto' : 'hidden',
+              WebkitMaskImage: expanded ? undefined : 'linear-gradient(to bottom, black 55%, transparent 100%)',
+            }}>
+              <span style={{ fontSize: 11, color: '#8b949e', lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {prompt}
+              </span>
+            </div>
+            <button
+              onClick={() => setExpanded(v => !v)}
+              style={{
+                position: 'absolute', bottom: 6, right: 8,
+                background: '#21262d', border: '1px solid #30363d', borderRadius: 4,
+                cursor: 'pointer', fontSize: 10, color: '#8b949e',
+                padding: '2px 8px', display: 'inline-flex', alignItems: 'center', gap: 4,
+              }}
+            >
+              {expanded ? <ChevronsDownUp size={9} /> : <ChevronsUpDown size={9} />}
+              {expanded ? 'colapsar' : 'ver todo'}
+            </button>
+          </div>
+          {/* Recommendations */}
+          {recs.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              {recs.map((c, i) => (
+                <div key={i} style={{
+                  display: 'flex', gap: 8, padding: '6px 10px',
+                  background: SCORE_COLORS[c.level] + '0d',
+                  border: `1px solid ${SCORE_COLORS[c.level]}33`,
+                  borderLeft: `3px solid ${SCORE_COLORS[c.level]}`,
+                  borderRadius: 5,
+                }}>
+                  <span style={{ fontSize: 9, fontWeight: 700, color: SCORE_COLORS[c.level], flexShrink: 0, marginTop: 1 }}>
+                    {c.label.split('·')[0].trim().toUpperCase()}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#7d8590', lineHeight: 1.5 }}>{c.tip}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {recs.length === 0 && (
+            <div style={{ fontSize: 10, color: '#3fb95099', paddingLeft: 4 }}>✓ Prompt bien estructurado</div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Block Detail Panel ───────────────────────────────────────────────────────
 
 function BlockDetailPanel({
-  block, startedAt, blockCost, sessionModel,
+  block, startedAt, blockCost, sessionModel, prompt,
 }: {
   block:         Block
   startedAt:     number
   blockCost?:    BlockCost
   sessionModel?: string
+  prompt?:       string
 }) {
   const [filter,      setFilter]      = useState<FilterType>('all')
   const [selected,    setSelected]    = useState<TraceEvent | null>(null)
@@ -1085,11 +1495,22 @@ function BlockDetailPanel({
     .map(t => { try { return JSON.parse(t.tool_input!).command || '' } catch { return '' } })
     .filter(Boolean)
 
-  // Tool count for loop detection
-  const toolCountMap = new Map<string, number>()
-  for (const t of block.tools) {
-    if (t.tool_name) toolCountMap.set(t.tool_name, (toolCountMap.get(t.tool_name) || 0) + 1)
-  }
+  // block.tools es inmutable por bloque — memoizar evita recomputo en cada render
+  const { toolTypeCount, realLoopKeys, realLoopCount } = useMemo(() => {
+    const toolTypeCount = new Map<string, number>()
+    const exactCount    = new Map<string, number>()
+    for (const t of block.tools) {
+      if (!t.tool_name) continue
+      toolTypeCount.set(t.tool_name, (toolTypeCount.get(t.tool_name) || 0) + 1)
+      const key = `${t.tool_name}::${t.tool_input ?? ''}`
+      exactCount.set(key, (exactCount.get(key) || 0) + 1)
+    }
+    const realLoopKeys = new Set<string>()
+    for (const [k, n] of exactCount) {
+      if (n >= 2) realLoopKeys.add(k)
+    }
+    return { toolTypeCount, realLoopKeys, realLoopCount: realLoopKeys.size }
+  }, [block.tools])
 
   // Solo eventos con tool_name (excluye Cost/Human/etc.); in-progress = PreToolUse
   const visibleTools = block.tools.filter(t => t.tool_name && matchesFilter(t.tool_name, filter))
@@ -1126,6 +1547,11 @@ function BlockDetailPanel({
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <ToolDistBar stats={stats} />
               <span style={{ color: '#484f58', fontSize: 11 }}>{summaryText(stats)}</span>
+              {realLoopCount > 0 && (
+                <span style={{ fontSize: 10, fontWeight: 600, color: '#d29922', background: '#d2992215', border: '1px solid #d2992230', borderRadius: 4, padding: '1px 6px' }}>
+                  {realLoopCount} llamada{realLoopCount > 1 ? 's' : ''} repetida{realLoopCount > 1 ? 's' : ''}
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -1135,6 +1561,11 @@ function BlockDetailPanel({
       <div style={{ flex: 1, overflow: 'auto' }}>
       <div style={{ padding: '20px 48px' }}>
       <div style={{ maxWidth: 840, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+        {/* ── Prompt Score ── */}
+        {prompt && block.hasStop && (
+          <PromptScoreCard prompt={prompt} />
+        )}
 
         {/* ── Duration Timeline ── */}
         {timedTools.length > 1 && (
@@ -1394,7 +1825,9 @@ function BlockDetailPanel({
                   {visibleTools.map((ev, i) => (
                     <ToolRow
                       key={i} ev={ev} startedAt={startedAt}
-                      isLooping={(toolCountMap.get(ev.tool_name || '') || 0) >= 3}
+                      typeCount={toolTypeCount.get(ev.tool_name || '') || 0}
+                      isRealLoop={realLoopKeys.has(`${ev.tool_name}::${ev.tool_input ?? ''}`)}
+                      blockDone={block.hasStop}
                       onClick={() => setSelected(ev)}
                     />
                   ))}
@@ -1418,12 +1851,27 @@ function BlockDetailPanel({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quota, sessionState = 'idle', weeklyData = [], hiddenCost }: Props) {
+export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quota, sessionState = 'idle', weeklyData = [], hiddenCost, prompts = [], quotaStats }: Props) {
   const listRef        = useRef<HTMLDivElement>(null)
   // null = auto-follow last block
   const [pinned, setPinned] = useState<number | null>(null)
 
-  const blocks      = groupBlocks(events)
+  // Memoizar groupBlocks: es O(n) sobre events y no debe recalcularse en renders sin cambios
+  const blocks    = useMemo(() => groupBlocks(events), [events])
+  // Single-pass: finds max y min cost en un solo loop, solo bloques completados con tools
+  const { maxCostIdx, minCostIdx } = useMemo(() => {
+    let maxIdx = -1, minIdx = -1, maxCost = -Infinity, minCost = Infinity, eligible = 0
+    for (const block of blocks) {
+      if (!block.hasStop || block.tools.length === 0) continue
+      const bc   = blockCosts[block.index - 1]
+      const cost = (bc?.inputUsd ?? 0) + (bc?.outputUsd ?? 0)
+      if (cost <= 0) continue
+      eligible++
+      if (cost > maxCost) { maxCost = cost; maxIdx = block.index }
+      if (cost < minCost) { minCost = cost; minIdx = block.index }
+    }
+    return { maxCostIdx: maxIdx, minCostIdx: eligible > 1 ? minIdx : -1 }
+  }, [blocks, blockCosts])
   const lastIdx     = blocks.length > 0 ? blocks[blocks.length - 1].index : 1
   const selectedIdx = pinned ?? lastIdx
 
@@ -1472,7 +1920,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
         background: '#090d12', overflow: 'hidden',
       }}>
         {/* KPI section */}
-        <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} />
+        <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} quotaStats={quotaStats} startedAt={startedAt} />
 
         {/* Cost Timeline inside sidebar */}
         <CostTimeline blocks={blocks} blockCosts={blockCosts} selected={selectedIdx} onSelect={handleSelect} />
@@ -1486,32 +1934,15 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
               blockCost={blockCosts[block.index - 1]}
               isLast={idx === blocks.length - 1}
               isSelected={block.index === selectedIdx}
+              heatRole={block.index === maxCostIdx ? 'max' : block.index === minCostIdx ? 'min' : undefined}
               onClick={() => handleSelect(block.index)}
             />
           ))}
 
-          {/* Loop summary */}
-          {cost?.loops && cost.loops.length > 0 && (() => {
-            const uniq = new Map<string, number>()
-            for (const l of cost.loops) {
-              if ((uniq.get(l.toolName) ?? 0) < l.count) uniq.set(l.toolName, l.count)
-            }
-            return (
-              <div style={{ margin: '4px 8px', padding: '5px 10px', background: '#f8514910', border: '1px solid #f8514928', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
-                <TriangleAlert size={10} style={{ color: '#f85149', flexShrink: 0 }} />
-                <span style={{ color: '#f85149', fontSize: 10, fontWeight: 600 }}>
-                  {uniq.size} loop{uniq.size > 1 ? 's' : ''}
-                </span>
-                <span style={{ color: '#8b949e', fontSize: 10 }}>
-                  — {[...uniq.entries()].map(([n, c]) => `${n} ×${c}`).join(' · ')}
-                </span>
-              </div>
-            )
-          })()}
         </div>
 
         {/* Session stats at bottom */}
-        <SidebarStats cost={cost} weeklyData={weeklyData} events={events} hiddenCost={hiddenCost} />
+        <SidebarStats cost={cost} weeklyData={weeklyData} events={events} hiddenCost={hiddenCost} prompts={prompts} />
       </div>
 
       {/* ── Right: block detail (full width) ── */}
@@ -1524,6 +1955,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
               startedAt={startedAt}
               blockCost={blockCosts[selectedBlock.index - 1]}
               sessionModel={cost?.model}
+              prompt={prompts.find(p => p.index === selectedBlock.index)?.text}
             />
           )
           : (

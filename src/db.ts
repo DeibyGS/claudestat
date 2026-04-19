@@ -24,6 +24,14 @@ const db = new DatabaseSync(DB_PATH)
 // Migraciones: añadir columnas nuevas sin romper instalaciones previas
 try { db.exec(`ALTER TABLE sessions ADD COLUMN project_path TEXT`) } catch { /* ya existe */ }
 try { db.exec(`ALTER TABLE sessions ADD COLUMN ai_summary   TEXT`) } catch { /* ya existe */ }
+try { db.exec(`
+  CREATE TABLE IF NOT EXISTS weekly_reports (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    date            TEXT    NOT NULL UNIQUE,
+    report_markdown TEXT    NOT NULL,
+    created_at      TEXT    DEFAULT (datetime('now'))
+  )
+`) } catch { /* ya existe */ }
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
@@ -54,6 +62,13 @@ db.exec(`
     FOREIGN KEY (session_id) REFERENCES sessions(id)
   );
 `)
+
+// Índices para acelerar las subqueries de getRecentSessions (N+3 pattern)
+// Wrapped en try-catch para no romper instalaciones que ya los tienen
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_events_session_type ON events(session_id, type)`) } catch {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_events_tool       ON events(session_id, tool_name)`) } catch {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_started  ON sessions(started_at DESC)`) } catch {}
+try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_project  ON sessions(project_path)`) } catch {}
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -163,7 +178,7 @@ const stmts = {
   getRecentSessions: db.prepare(`
     SELECT s.*, s.ai_summary,
       (SELECT COUNT(*) FROM events e WHERE e.session_id = s.id AND e.type = 'Done') as done_count,
-      (SELECT GROUP_CONCAT(tool_name) FROM (
+      (SELECT json_group_array(tool_name) FROM (
         SELECT tool_name FROM events WHERE session_id = s.id AND type = 'Done' AND tool_name IS NOT NULL
         GROUP BY tool_name ORDER BY COUNT(*) DESC LIMIT 3
       )) as top_tools_csv,
@@ -216,18 +231,57 @@ const stmts = {
     WHERE project_path = ?
   `),
 
+  insertWeeklyReport: db.prepare(`
+    INSERT INTO weekly_reports (date, report_markdown)
+    VALUES (?, ?)
+    ON CONFLICT(date) DO UPDATE SET report_markdown = excluded.report_markdown, created_at = datetime('now')
+  `),
+
+  listWeeklyReports: db.prepare(`
+    SELECT id, date, substr(report_markdown, 1, 200) as preview, created_at
+    FROM weekly_reports
+    ORDER BY date DESC
+    LIMIT 52
+  `),
+
+  getWeeklyReportByDate: db.prepare(`
+    SELECT id, date, report_markdown, created_at FROM weekly_reports WHERE date = ?
+  `),
+
   // Coste oculto: dinero estimado perdido en loops en los últimos N días
-  // loop_waste = sum( cost * max(0, 1 - efficiency/100) )
+  // Fórmula: cost × (loops / done_count)  — fracción de tool calls que fueron desperdicio
+  // Ejemplo: 5 loops / 88 tools × $6.49 = $0.37  (mucho más realista que usar efficiency_score)
   getHiddenCostStats: db.prepare(`
     SELECT
-      COALESCE(SUM(total_cost_usd * MAX(0.0, 1.0 - COALESCE(efficiency_score, 100) / 100.0)), 0) AS loop_waste_usd,
-      COALESCE(SUM(total_cost_usd), 0)                                                            AS total_cost_usd,
-      COUNT(CASE WHEN loops_detected > 0 THEN 1 END)                                              AS loop_sessions,
-      COALESCE(SUM(loops_detected), 0)                                                            AS total_loops,
-      COUNT(*)                                                                                     AS total_sessions
+      COALESCE(SUM(CASE
+        WHEN s.loops_detected > 0
+        THEN s.total_cost_usd * CAST(s.loops_detected AS REAL) / MAX(1.0,
+          (SELECT CAST(COUNT(*) AS REAL) FROM events e WHERE e.session_id = s.id AND e.type = 'Done')
+        )
+        ELSE 0.0
+      END), 0) AS loop_waste_usd,
+      COALESCE(SUM(s.total_cost_usd), 0)                           AS total_cost_usd,
+      COUNT(CASE WHEN s.loops_detected > 0 THEN 1 END)             AS loop_sessions,
+      COALESCE(SUM(s.loops_detected), 0)                           AS total_loops,
+      COUNT(*)                                                      AS total_sessions
+    FROM sessions s
+    WHERE s.started_at >= ?
+  `),
+
+  getModeDistribution: db.prepare(`
+    SELECT s.id, COUNT(e.id) as agent_count
+    FROM sessions s
+    LEFT JOIN events e ON e.session_id = s.id AND e.tool_name = 'Agent'
+    WHERE s.started_at > ?
+    GROUP BY s.id
+  `),
+
+  getQuotaStats: db.prepare(`
+    SELECT (total_input_tokens + total_output_tokens) as total_tokens, total_cost_usd
     FROM sessions
-    WHERE started_at >= ?
-  `)
+    WHERE started_at > ? AND total_cost_usd > 0
+    ORDER BY total_tokens ASC
+  `),
 }
 
 // ─── Operaciones públicas ─────────────────────────────────────────────────────
@@ -325,5 +379,34 @@ export const dbOps = {
   } {
     const since = Date.now() - days * 24 * 60 * 60 * 1000
     return stmts.getHiddenCostStats.get(since) as any
-  }
+  },
+
+  insertWeeklyReport(date: string, markdown: string) {
+    stmts.insertWeeklyReport.run(date, markdown)
+  },
+
+  listWeeklyReports(): { id: number; date: string; preview: string; created_at: string }[] {
+    return stmts.listWeeklyReports.all() as any[]
+  },
+
+  getWeeklyReportByDate(date: string): { id: number; date: string; report_markdown: string; created_at: string } | undefined {
+    return stmts.getWeeklyReportByDate.get(date) as any
+  },
+
+  getQuotaStats(since: number): Array<{ total_tokens: number; total_cost_usd: number }> {
+    return stmts.getQuotaStats.all(since) as Array<{ total_tokens: number; total_cost_usd: number }>
+  },
+
+  // Cuenta sesiones por modo: directo (0 agentes), mini (1-3), pipeline (4+)
+  getModeDistribution(days: number): { direct: number; mini: number; pipeline: number; total: number } {
+    const cutoff = Date.now() - days * 86_400_000
+    const rows = stmts.getModeDistribution.all(cutoff) as { id: string; agent_count: number }[]
+    let direct = 0, mini = 0, pipeline = 0
+    for (const r of rows) {
+      if (r.agent_count === 0)     direct++
+      else if (r.agent_count <= 3) mini++
+      else                         pipeline++
+    }
+    return { direct, mini, pipeline, total: rows.length }
+  },
 }

@@ -27,11 +27,12 @@ import { computeMetaStats, getMetaHistory }                   from './meta-stats
 import { discoverProjects, parseHandoffProgress }             from './project-scanner'
 import { deriveSessionState, STATE_META }                     from './session-state'
 import { computeQuota, invalidateQuotaCache }                 from './quota-tracker'
-import { readConfig, writeConfig, getWarnLevel }              from './config'
+import { readConfig, writeConfig, getWarnLevel, validateConfig } from './config'
 import { getGitInfo, type GitInfo }                           from './git'
 import { getPRStatus, type PRStatus }                         from './github'
 import { analyzePatterns }                                    from './pattern-analyzer'
 import { summarizeSession }                                   from './summarizer'
+import { readClaudeStats }                                    from './claude-stats'
 
 const PORT = 7337
 const app  = express()
@@ -43,6 +44,31 @@ const sseClients = new Map<string, Response>()
 // Estado de sesión en memoria — se deriva a demanda, no se persiste en DB.
 // Clave: session_id  Valor: {type, ts} del último evento recibido vía /event
 const sessionLastEvent = new Map<string, { type: string; ts: number }>()
+
+// ─── Quota alerter: moving average de 3 muestras + cooldown 1h por nivel ─────
+// Evita falsas alarmas por spikes puntuales. Solo emite si el promedio de las
+// últimas 3 lecturas supera el threshold Y no se emitió ese nivel en la última hora.
+
+const quotaSamples: number[] = []            // últimas 3 lecturas de cyclePct
+const alertCooldown = new Map<string, number>() // nivel → timestamp del último aviso
+const ALERT_COOLDOWN_MS = 60 * 60 * 1000    // 1 hora
+const SAMPLES_NEEDED    = 3                  // muestras para el moving average
+
+function shouldFireAlert(level: 'yellow' | 'orange' | 'red', pct: number): boolean {
+  // Añadir muestra al buffer circular (máx SAMPLES_NEEDED)
+  quotaSamples.push(pct)
+  if (quotaSamples.length > SAMPLES_NEEDED) quotaSamples.shift()
+
+  // Necesitamos SAMPLES_NEEDED lecturas antes de disparar (evita alert en el primer spike)
+  if (quotaSamples.length < SAMPLES_NEEDED) return false
+
+  // Cooldown: no repetir el mismo nivel en la última hora
+  const lastFired = alertCooldown.get(level) ?? 0
+  if (Date.now() - lastFired < ALERT_COOLDOWN_MS) return false
+
+  alertCooldown.set(level, Date.now())
+  return true
+}
 
 // ─── Cache de proyectos ───────────────────────────────────────────────────────
 // Pre-computado al arrancar el daemon y refrescado cada 2 minutos en background.
@@ -90,14 +116,59 @@ function getCachedPRStatus(projectPath: string): PRStatus | null {
   return data
 }
 
+// ─── Rate limiter simple para POST /event ────────────────────────────────────
+// Protege contra flood local. Límite: 120 requests/min por IP.
+// Usa ventana fija de 60s para simplicidad (sin dependencias externas).
+
+const rateLimitMap = new Map<string, { count: number; windowStart: number }>()
+const RATE_LIMIT_MAX = 120
+const RATE_LIMIT_WINDOW_MS = 60_000
+
+function isRateLimited(ip: string): boolean {
+  const now  = Date.now()
+  const entry = rateLimitMap.get(ip)
+  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+    rateLimitMap.set(ip, { count: 1, windowStart: now })
+    return false
+  }
+  entry.count++
+  return entry.count > RATE_LIMIT_MAX
+}
+
+// Limpiar entradas expiradas cada 5 minutos para no acumular IPs inactivas
+setInterval(() => {
+  const now = Date.now()
+  rateLimitMap.forEach((v, k) => { if (now - v.windowStart > RATE_LIMIT_WINDOW_MS) rateLimitMap.delete(k) })
+}, 5 * 60_000)
+
 function broadcast(msg: object) {
-  const data = `data: ${JSON.stringify(msg)}\n\n`
-  sseClients.forEach(client => client.write(data))
+  let data: string
+  try {
+    data = `data: ${JSON.stringify(msg)}\n\n`
+  } catch {
+    return  // objeto no serializable (ej: referencia circular) — ignorar silenciosamente
+  }
+  const dead: string[] = []
+  sseClients.forEach((client, id) => {
+    try {
+      client.write(data)
+    } catch {
+      dead.push(id)  // socket cerrado o roto — marcar para eliminar
+    }
+  })
+  // Limpiar clientes muertos fuera del forEach para no mutar el Map mientras se itera
+  dead.forEach(id => sseClients.delete(id))
 }
 
 // ─── POST /event — recibe eventos de los hooks de Claude Code ─────────────────
 
 app.post('/event', (req: Request, res: Response) => {
+  const ip = req.ip ?? '127.0.0.1'
+  if (isRateLimited(ip)) {
+    res.status(429).json({ error: 'Demasiadas peticiones — espera 1 minuto' })
+    return
+  }
+
   const { type, session_id, tool_name, tool_input, tool_response, ts, cwd, transcript_path } = req.body
 
   if (!session_id || !type) {
@@ -121,7 +192,7 @@ app.post('/event', (req: Request, res: Response) => {
     const tool_output = rawResp.length > 4000
       ? rawResp.slice(0, 4000) + `\n…[truncado: ${rawResp.length} chars]`
       : rawResp
-    broadcast({ type: 'event', payload: { type: 'Done', session_id, tool_name, tool_input, tool_output, ts, pairedId } })
+    broadcast({ type: 'event', payload: { type: 'Done', session_id, tool_name, tool_input: tool_input != null ? JSON.stringify(tool_input) : undefined, tool_output, ts, pairedId } })
   } else {
     dbOps.insertEvent({
       session_id, type,
@@ -154,23 +225,28 @@ app.post('/event', (req: Request, res: Response) => {
   // Al terminar un turno (Stop) → invalidar quota cache + emitir warnings
   if (type === 'Stop') {
     invalidateQuotaCache()
-    // Emitir warning SSE si la cuota supera algún threshold configurado
+    // Emitir warning SSE si la cuota supera algún threshold (moving avg 3 muestras + cooldown 1h)
     setImmediate(() => {
       try {
-        const cfg  = readConfig()
-        const data = computeQuota(cfg.plan ?? undefined)
+        const cfg   = readConfig()
+        const data  = computeQuota(cfg.plan ?? undefined)
         const level = getWarnLevel(data.cyclePct, cfg.warnThresholds)
-        if (level) {
+        // shouldFireAlert acumula siempre la muestra; devuelve true solo si avg estable + cooldown ok
+        if (level && shouldFireAlert(level, data.cyclePct)) {
           broadcast({
             type: 'quota_warning',
             payload: {
               level,
-              cyclePct:  data.cyclePct,
+              cyclePct:   data.cyclePct,
               cycleLimit: data.cycleLimit,
-              resetMs:   data.cycleResetMs,
-              blocked:   cfg.killSwitchEnabled && data.cyclePct >= cfg.killSwitchThreshold,
+              resetMs:    data.cycleResetMs,
+              blocked:    cfg.killSwitchEnabled && data.cyclePct >= cfg.killSwitchThreshold,
             }
           })
+        } else if (!level) {
+          // Sin nivel activo → alimentar el buffer igualmente para que las próximas muestras sean correctas
+          quotaSamples.push(data.cyclePct)
+          if (quotaSamples.length > SAMPLES_NEEDED) quotaSamples.shift()
         }
       } catch { /* ignorar errores al calcular quota */ }
     })
@@ -379,7 +455,8 @@ app.get('/history', (_req: Request, res: Response) => {
   const byDate = new Map<string, any[]>()
 
   for (const s of sessions) {
-    const date = new Date(s.started_at).toISOString().slice(0, 10)
+    // toLocaleDateString('en-CA') produce YYYY-MM-DD en la zona horaria local del usuario
+    const date = new Date(s.started_at).toLocaleDateString('en-CA')
     if (!byDate.has(date)) byDate.set(date, [])
 
     // Detectar modo desde los contadores precalculados en la query
@@ -403,7 +480,7 @@ app.get('/history', (_req: Request, res: Response) => {
       efficiency_score: s.efficiency_score ?? 100,
       loops_detected:   s.loops_detected  ?? 0,
       done_count:       s.done_count      ?? 0,
-      top_tools:        s.top_tools_csv   ? (s.top_tools_csv as string).split(',') : [],
+      top_tools:        s.top_tools_csv   ? (() => { try { return JSON.parse(s.top_tools_csv as string) } catch { return [] } })() : [],
       mode,
       ai_summary:   (s as any).ai_summary ?? null,
       git_branch:   gitInfo?.branch       ?? null,
@@ -536,6 +613,101 @@ app.get('/hidden-cost', (_req: Request, res: Response) => {
   res.json(dbOps.getHiddenCostStats(7))
 })
 
+// ─── GET /claude-stats — actividad de ~/.claude/stats-cache.json ─────────────
+
+app.get('/claude-stats', (_req: Request, res: Response) => {
+  res.json(readClaudeStats())
+})
+
+// ─── GET /system-config — mapa completo del setup de Claude ──────────────────
+
+let _systemConfigCache: unknown = null
+let _systemConfigCacheTs = 0
+const SYSTEM_CONFIG_TTL = 30_000
+
+app.get('/system-config', (_req: Request, res: Response) => {
+  if (_systemConfigCache && Date.now() - _systemConfigCacheTs < SYSTEM_CONFIG_TTL) {
+    res.json(_systemConfigCache)
+    return
+  }
+  try {
+    const home = os.homedir()
+
+    // 1. Hooks desde ~/.claude/settings.json
+    // Claude Code almacena hooks en formato anidado: cada entrada tiene un array `hooks` interno.
+    // Aplanamos a { matcher, command } porque el dashboard solo necesita mostrar el comando final.
+    interface RawHookEntry { matcher?: string; hooks: Array<{ type: string; command: string }> }
+    let hooks: Record<string, { matcher?: string; command: string }[]> = {}
+    try {
+      const raw      = fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf-8')
+      const rawHooks = JSON.parse(raw).hooks as Record<string, RawHookEntry[]> ?? {}
+      for (const [event, entries] of Object.entries(rawHooks)) {
+        hooks[event] = entries.flatMap(e =>
+          (e.hooks ?? []).map(h => ({ matcher: e.matcher, command: h.command }))
+        )
+      }
+    } catch {}
+
+    // Helper compartido — agentes y skills tienen la misma estructura de archivo .md con frontmatter
+    const scanMarkdownDir = (dir: string, exclude?: string) => {
+      const items: { name: string; description: string; lines: number }[] = []
+      for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.md') && f !== exclude)) {
+        const content = fs.readFileSync(path.join(dir, f), 'utf-8')
+        const desc    = content.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? ''
+        items.push({ name: f.replace('.md', ''), description: desc, lines: content.split('\n').length })
+      }
+      return items
+    }
+
+    // 2. Agentes desde ~/.claude/agents/ (excluye CLAUDE.md — es el orquestador, no un agente)
+    let agents: { name: string; description: string; lines: number }[] = []
+    try { agents = scanMarkdownDir(path.join(home, '.claude', 'agents'), 'CLAUDE.md') } catch {}
+
+    // 3. Archivos de contexto relevantes
+    // engramSlug deriva la ruta de Engram del homedir del usuario: /Users/db → -Users-db
+    const engramSlug  = home.replace(/\//g, '-')
+    const contextPaths = [
+      { key: 'CLAUDE.md global',  filePath: path.join(home, '.claude', 'CLAUDE.md') },
+      { key: 'settings.json',     filePath: path.join(home, '.claude', 'settings.json') },
+      { key: 'MEMORY.md (Engram)',filePath: path.join(home, '.claude', 'projects', engramSlug, 'memory', 'MEMORY.md') },
+      { key: 'config claudetrace',filePath: path.join(home, '.claudetrace', 'config.json') },
+    ]
+    const contextFiles = contextPaths.map(({ key, filePath }) => {
+      try {
+        const content = fs.readFileSync(filePath, 'utf-8')
+        const lines   = content.split('\n').length
+        const sizeKb  = Math.round(Buffer.byteLength(content, 'utf-8') / 1024 * 10) / 10
+        return { key, exists: true, sizeKb, lines }
+      } catch {
+        return { key, exists: false, sizeKb: 0, lines: 0 }
+      }
+    })
+
+    // 3b. Skills desde ~/.claude/commands/
+    let skills: { name: string; description: string; lines: number }[] = []
+    try { skills = scanMarkdownDir(path.join(home, '.claude', 'commands')) } catch {}
+
+    // 4. Archivos de memoria Engram
+    let memoryCount = 0
+    try {
+      const memDir = path.join(home, '.claude', 'projects', engramSlug, 'memory')
+      memoryCount = fs.readdirSync(memDir).filter(f => f.endsWith('.md')).length
+    } catch {}
+
+    // 5. Distribución de modos (últimos 7 días)
+    const modeDistribution = dbOps.getModeDistribution(7)
+
+    // 6. Config de claudetrace
+    const claudetraceConfig = readConfig()
+
+    _systemConfigCache = { hooks, agents, skills, contextFiles, memoryCount, modeDistribution, claudetraceConfig }
+    _systemConfigCacheTs = Date.now()
+    res.json(_systemConfigCache)
+  } catch (err) {
+    res.status(500).json({ error: 'Error leyendo config del sistema' })
+  }
+})
+
 // ─── GET /health ──────────────────────────────────────────────────────────────
 
 app.get('/health', (_req: Request, res: Response) => {
@@ -551,6 +723,8 @@ app.get('/config', (_req: Request, res: Response) => {
 // ─── PUT /config — guardar configuración ─────────────────────────────────────
 
 app.put('/config', (req: Request, res: Response) => {
+  const validationError = validateConfig(req.body)
+  if (validationError) { res.status(400).json({ error: validationError }); return }
   try {
     const current = readConfig()
     writeConfig({ ...current, ...req.body })
@@ -558,6 +732,73 @@ app.put('/config', (req: Request, res: Response) => {
   } catch (e) {
     res.status(500).json({ error: String(e) })
   }
+})
+
+// ─── POST /api/weekly-reports — guardar reporte generado por weekly-review.sh ─
+
+app.post('/api/weekly-reports', (req: Request, res: Response) => {
+  const { date, content } = req.body as { date?: string; content?: string }
+  if (!date || !content) {
+    res.status(400).json({ error: 'date y content son requeridos' })
+    return
+  }
+  try {
+    dbOps.insertWeeklyReport(date, content)
+    res.json({ ok: true })
+  } catch (e) {
+    res.status(500).json({ error: String(e) })
+  }
+})
+
+// ─── POST /api/weekly-reports/import-local — importar .md desde ~/.claude/reports ─
+
+app.post('/api/weekly-reports/import-local', (_req: Request, res: Response) => {
+  const reportsDir = path.join(os.homedir(), '.claude', 'reports')
+  if (!fs.existsSync(reportsDir)) {
+    res.json({ imported: 0, skipped: 0 })
+    return
+  }
+  const files = fs.readdirSync(reportsDir).filter(f => /^weekly-\d{4}-\d{2}-\d{2}\.md$/.test(f))
+  let imported = 0, skipped = 0
+  for (const file of files) {
+    const date = file.replace('weekly-', '').replace('.md', '') // YYYY-MM-DD
+    const existing = dbOps.getWeeklyReportByDate(date)
+    if (existing) { skipped++; continue }
+    const content = fs.readFileSync(path.join(reportsDir, file), 'utf8')
+    dbOps.insertWeeklyReport(date, content)
+    imported++
+  }
+  res.json({ imported, skipped })
+})
+
+// ─── GET /api/weekly-reports — lista de reportes (id, date, preview) ──────────
+
+app.get('/api/weekly-reports', (_req: Request, res: Response) => {
+  res.json(dbOps.listWeeklyReports())
+})
+
+// ─── GET /api/weekly-reports/:date — reporte completo de una fecha ────────────
+
+app.get('/api/weekly-reports/:date', (req: Request, res: Response) => {
+  const report = dbOps.getWeeklyReportByDate(req.params.date)
+  if (!report) { res.status(404).json({ error: 'not found' }); return }
+  res.json(report)
+})
+
+// ─── GET /api/quota-stats — P90 de tokens y coste (últimos 30 días) ──────────
+
+app.get('/api/quota-stats', (_req: Request, res: Response) => {
+  const since = Date.now() - 30 * 24 * 60 * 60 * 1000
+  const rows = dbOps.getQuotaStats(since)
+  if (rows.length === 0) {
+    res.json({ p90Tokens: 0, p90Cost: 0, sessionCount: 0 })
+    return
+  }
+  const idx = Math.floor(rows.length * 0.9)
+  const p90Row = rows[Math.min(idx, rows.length - 1)]
+  const sortedByCost = [...rows].sort((a, b) => a.total_cost_usd - b.total_cost_usd)
+  const p90CostRow = sortedByCost[Math.min(idx, sortedByCost.length - 1)]
+  res.json({ p90Tokens: p90Row.total_tokens, p90Cost: p90CostRow.total_cost_usd, sessionCount: rows.length })
 })
 
 // ─── Dashboard React (servir estáticos del build de Vite) ────────────────────
@@ -584,21 +825,29 @@ const onCostUpdate: CostUpdateCallback = (sessionId, cost) => {
 
   dbOps.updateSessionCost(sessionId, cost, report.efficiencyScore, report.loops.length)
 
+  const sessionRow = dbOps.getSession(sessionId)
+  const startedAt = sessionRow?.started_at ?? Date.now()
+  const sessionDurationMinutes = (Date.now() - startedAt) / 60_000
+  const projectedHourlyUsd = sessionDurationMinutes > 0.5
+    ? cost.cost_usd / sessionDurationMinutes * 60
+    : 0
+
   broadcast({
     type: 'cost_update',
     payload: {
-      session_id:       sessionId,
-      cost_usd:         cost.cost_usd,
-      input_tokens:     cost.input_tokens,
-      output_tokens:    cost.output_tokens,
-      cache_read:       cost.cache_read,
-      cache_creation:   cost.cache_creation,
-      context_used:     cost.context_used,
-      context_window:   cost.context_window,
-      efficiency_score: report.efficiencyScore,
-      loops:            report.loops,
-      summary:          report.summary,
-      model:            cost.lastModel,
+      session_id:            sessionId,
+      cost_usd:              cost.cost_usd,
+      input_tokens:          cost.input_tokens,
+      output_tokens:         cost.output_tokens,
+      cache_read:            cost.cache_read,
+      cache_creation:        cost.cache_creation,
+      context_used:          cost.context_used,
+      context_window:        cost.context_window,
+      efficiency_score:      report.efficiencyScore,
+      loops:                 report.loops,
+      summary:               report.summary,
+      model:                 cost.lastModel,
+      projected_hourly_usd:  projectedHourlyUsd,
     }
   })
 
@@ -667,7 +916,7 @@ async function migrateSessionSummaries(limit = 5) {
 }
 
 export function startDaemon() {
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, '127.0.0.1', () => {
     console.log(`\n● claudetrace daemon  →  http://localhost:${PORT}`)
     console.log(`  Esperando eventos de Claude Code...\n`)
     console.log(`  En otra terminal: \x1b[36mclaudetrace watch\x1b[0m\n`)
@@ -696,5 +945,16 @@ export function startDaemon() {
     if (process.env.CLAUDETRACE_AI_SUMMARY === 'true') {
       migrateSessionSummaries(5).catch(() => {})
     }
+  })
+
+  // Manejo de error de puerto ocupado — fuera del callback para capturar EADDRINUSE
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n❌ Error: El puerto ${PORT} ya está en uso.`)
+      console.error(`   ¿Claudetrace ya está corriendo? Verifica con: lsof -i :${PORT}`)
+      console.error(`   Si es así, no necesitas iniciarlo de nuevo.\n`)
+      process.exit(1)
+    }
+    throw err
   })
 }

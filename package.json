@@ -1,6 +1,6 @@
 {
   "name": "@deibygs/claudestat",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Real-time execution trace and cost intelligence for Claude Code",
   "keywords": [
     "claude",

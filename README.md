@@ -8,6 +8,7 @@ Hook into every tool call, token, and dollar — as it happens.
 Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js. Runs everywhere.
 
 [![npm version](https://img.shields.io/npm/v/@deibygs/claudestat?color=blue)](https://www.npmjs.com/package/@deibygs/claudestat)
+[![npm downloads](https://img.shields.io/npm/dw/@deibygs/claudestat?color=blue)](https://www.npmjs.com/package/@deibygs/claudestat)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)]()
@@ -113,6 +114,24 @@ That's it. Start a Claude Code session and watch the events flow in.
 | `claudestat status` | Show quota, cost, and burn rate |
 | `claudestat config` | View or edit configuration |
 | `claudestat doctor` | Check installation health and diagnose issues |
+
+### `claudestat watch`
+
+Live terminal trace — every tool call as it happens, with duration and token cost.
+
+```
+claudestat watch
+
+  ● Session a3f1bc · my-project · claude-sonnet-4-5
+
+  16:42:01  Bash            342ms    1,240 tok   $0.0018
+  16:42:03  Read             89ms      420 tok   $0.0006
+  16:42:05  Edit            124ms      890 tok   $0.0013
+  16:42:08  Agent (haiku)    2.1s    3,200 tok   $0.0024
+  16:42:11  Write            67ms      310 tok   $0.0004
+
+  Context: 42,800 / 200,000 (21%)  │  Session cost: $0.0065  │  🟢 healthy
+```
 
 ### `claudestat status`
 
@@ -232,6 +251,21 @@ claudestat config --kill-switch true --threshold 90
 # Force plan (useful if auto-detect is wrong)
 claudestat config --plan max5
 ```
+
+---
+
+## Roadmap
+
+Planned for upcoming versions:
+
+- **`claudestat export`** — export session data to CSV or JSON
+- **`claudestat top`** — show top tools by cost and frequency across all sessions
+- **Windows support** — currently macOS and Linux only
+- **Multi-account support** — track usage across multiple Claude accounts
+- **Slack / webhook alerts** — get notified when quota reaches warning thresholds
+- **VS Code extension** — sidebar panel with live stats inside the editor
+
+Have an idea? [Open an issue](https://github.com/DeibyGS/claudestat/issues) or submit a PR.
 
 ---
 

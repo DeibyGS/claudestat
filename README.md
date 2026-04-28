@@ -176,23 +176,37 @@ Daemon health, DB size, Node version, config file paths, and memory context.
 
 ## Configuration reference
 
-`~/.claudestat/config.json`:
+Config is stored at `~/.claudestat/config.json` and created automatically on first run.
 
 ```json
 {
-  "killSwitchEnabled": true,
+  "killSwitchEnabled": false,
   "killSwitchThreshold": 95,
   "warnThresholds": [70, 85],
-  "plan": null
+  "plan": null,
+  "reportsEnabled": false,
+  "reportFrequency": "weekly"
 }
 ```
 
 | Key | Default | Description |
 |---|---|---|
-| `killSwitchEnabled` | `true` | Block new sessions when quota exceeds threshold |
-| `killSwitchThreshold` | `95` | Quota percentage that triggers the kill switch |
-| `warnThresholds` | `[70, 85]` | Percentages that trigger yellow/orange warnings |
-| `plan` | `null` (auto) | Force plan: `"pro"` / `"max5"` / `"max20"` |
+| `killSwitchEnabled` | `false` | Enable the quota kill switch. When `true`, new Claude Code sessions are blocked once your quota reaches the threshold. Disabled by default — enable it only if you want hard quota enforcement. |
+| `killSwitchThreshold` | `95` | Quota percentage (0–100) at which the kill switch activates. Only relevant when `killSwitchEnabled` is `true`. |
+| `warnThresholds` | `[70, 85]` | Two quota percentages that trigger yellow and orange warnings in the dashboard sidebar. |
+| `plan` | `null` | Force plan detection instead of auto. Valid values: `"pro"`, `"max5"`, `"max20"`. Leave `null` to let claudestat detect your plan from usage data. |
+| `reportsEnabled` | `false` | Enable automatic AI-generated usage reports on a schedule. |
+| `reportFrequency` | `"weekly"` | How often to generate reports. Valid values: `"weekly"`, `"biweekly"`, `"monthly"`. |
+
+You can edit the file directly or use the CLI:
+
+```bash
+# Enable kill switch at 90% quota
+claudestat config --kill-switch true --threshold 90
+
+# Force plan (useful if auto-detect is wrong)
+claudestat config --plan max5
+```
 
 ---
 

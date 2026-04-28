@@ -39,7 +39,7 @@ export interface ClaudetraceConfig {
 const CONFIG_PATH = path.join(os.homedir(), '.claudestat', 'config.json')
 
 const DEFAULTS: ClaudetraceConfig = {
-  killSwitchEnabled:   true,
+  killSwitchEnabled:   false,
   killSwitchThreshold: 95,
   warnThresholds:      [70, 85, 95],
   plan:                null,

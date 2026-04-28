@@ -180,7 +180,7 @@ export function renderTrace(state: RenderState): string {
   // ── Header de sesión ──────────────────────────────────────────────────────
   lines.push('')
   lines.push(
-    `${C.bold}● claudetrace${C.reset}  ` +
+    `${C.bold}● claudestat${C.reset}  ` +
     `${C.dim}session:${C.reset} ${C.cyan}${sessionId.slice(0, 8)}${C.reset}  ` +
     `${C.dim}dir:${C.reset} ${C.blue}${cwd || '—'}${C.reset}`
   )

@@ -18,6 +18,7 @@
 import fs   from 'fs'
 import path from 'path'
 import os   from 'os'
+import { readClaudeAuth, subscriptionTypeToPlan } from './claude-auth'
 
 // ─── Planes y límites ─────────────────────────────────────────────────────────
 
@@ -45,15 +46,19 @@ export interface QuotaData {
   cycleResetAt:    number   // timestamp absoluto del próximo reset (rolling window)
   cycleStartTs:    number   // timestamp (ms) del primer mensaje del ciclo actual
   // Semanal por modelo (horas de actividad en ventanas de 5 min)
-  weeklyHoursSonnet: number
-  weeklyHoursOpus:   number
-  weeklyHoursHaiku:  number
-  weeklyLimitSonnet: number
+  weeklyHoursSonnet:  number
+  weeklyHoursOpus:    number
+  weeklyHoursHaiku:   number
+  weeklyTokensSonnet: number
+  weeklyTokensOpus:   number
+  weeklyTokensHaiku:  number
+  weeklyLimitSonnet:  number
   weeklyLimitOpus:   number
   // Burn rate
   burnRateTokensPerMin: number  // tokens/min en los últimos 30 min (0 si sin actividad)
   // Plan
   detectedPlan: ClaudePlan
+  planSource:   'config' | 'keychain' | 'inferred'  // origen del plan
   computedAt:   number
 }
 
@@ -82,13 +87,15 @@ function computeResetAt(entries: ParsedEntry[], now: number): number {
     .sort((a, b) => a.ts - b.ts)
 
   if (recentHuman.length > 0) {
-    // Rolling window: el ciclo comenzó con el primer mensaje
+    // Usamos el PRIMER mensaje humano (más antiguo) + 5h
+    // = momento en que el primer prompt de la ventana actual expira → cuota empieza a liberarse
+    // Los mensajes tool_result de sub-agentes ya están filtrados en el caller
     return recentHuman[0].ts + CYCLE_MS
   }
 
-  // Sin actividad en las últimas 5h → ciclo libre, no hay reset pendiente cercano
-  // Mostramos ~5h como estimado conservador
-  return now + CYCLE_MS
+  // Sin actividad en las últimas 5h → cuota ya libre, no hay reset pendiente
+  // Retornar `now` hace que cycleResetMs = 0, la UI puede mostrar "Disponible"
+  return now
 }
 
 function getWeekStart(now: number): number {
@@ -133,6 +140,9 @@ function parseJSONLFile(filePath: string): ParsedEntry[] {
       if (obj.type === 'human' || obj.type === 'user') {
         // Filtrar comandos locales — no son prompts reales del usuario
         const content = obj.message?.content
+        // Saltar mensajes internos de sub-agentes: su content comienza con tool_result
+        // (son respuestas de herramientas que el sub-agente recibe, no prompts del usuario)
+        if (Array.isArray(content) && content[0]?.type === 'tool_result') continue
         const text = typeof content === 'string' ? content
           : Array.isArray(content)
             ? (content as any[]).find(c => c?.type === 'text')?.text ?? ''
@@ -196,16 +206,38 @@ function readAllEntries(sinceTs: number): ParsedEntry[] {
       const dirPath = path.join(PROJECTS_DIR, dir)
       try {
         if (!fs.statSync(dirPath).isDirectory()) continue
-        for (const file of fs.readdirSync(dirPath)) {
-          if (!file.endsWith('.jsonl')) continue
-          if (!file.includes('-') || file.length < 15) continue
-          // Optimización: saltear archivos no modificados desde sinceTs
+        // Recopilar todos los subdirectorios a leer: el propio dir + cualquier <uuid>/subagents/
+        const subdirs: string[] = [dirPath]
+        try {
+          for (const entry of fs.readdirSync(dirPath)) {
+            const entryPath = path.join(dirPath, entry)
+            if (fs.statSync(entryPath).isDirectory()) {
+              const subagentsPath = path.join(entryPath, 'subagents')
+              if (fs.existsSync(subagentsPath)) subdirs.push(subagentsPath)
+            }
+          }
+        } catch { /* ignorar */ }
+
+        for (const subdir of subdirs) {
           try {
-            const mtime = fs.statSync(path.join(dirPath, file)).mtimeMs
-            if (mtime < sinceTs - WEEK_MS) continue  // más de 7 días sin tocar → ignorar
-          } catch { continue }
-          const entries = parseJSONLFile(path.join(dirPath, file))
-          all.push(...entries)
+            if (!fs.existsSync(subdir)) continue
+            // Recopilar archivos con su mtime para ordenar por recencia y limitar
+            const candidates: { path: string; mtime: number }[] = []
+            for (const file of fs.readdirSync(subdir)) {
+              if (!file.endsWith('.jsonl')) continue
+              if (!file.includes('-') || file.length < 15) continue
+              try {
+                const mtime = fs.statSync(path.join(subdir, file)).mtimeMs
+                if (mtime < sinceTs - WEEK_MS) continue
+                candidates.push({ path: path.join(subdir, file), mtime })
+              } catch { continue }
+            }
+            // Procesar solo los 300 más recientes — evita bloquear el event loop
+            candidates
+              .sort((a, b) => b.mtime - a.mtime)
+              .slice(0, 300)
+              .forEach(c => all.push(...parseJSONLFile(c.path)))
+          } catch { /* subdir inaccesible */ }
         }
       } catch { /* directorio inaccesible */ }
     }
@@ -239,15 +271,32 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
   // Leer entradas relevantes (última semana + un poco más para detección de plan)
   const entries = readAllEntries(weekStart - CYCLE_MS)
 
-  // ─ Plan ─
-  const plan   = forcePlan ?? detectPlan(entries)
+  // ─ Plan (prioridad: config manual → keychain → inferencia JSONL) ─
+  let plan:       ClaudePlan
+  let planSource: QuotaData['planSource']
+
+  if (forcePlan) {
+    plan       = forcePlan
+    planSource = 'config'
+  } else {
+    // Intentar leer plan desde las credenciales del keychain (más fiable que inferir)
+    const auth = readClaudeAuth()
+    if (auth.source !== 'unknown' && auth.subscriptionType !== 'unknown') {
+      plan       = subscriptionTypeToPlan(auth.subscriptionType, auth.rateLimitTier)
+      planSource = 'keychain'
+    } else {
+      plan       = detectPlan(entries)
+      planSource = 'inferred'
+    }
+  }
   const limits = PLAN_LIMITS[plan]
 
-  // ─ Ciclo 5h: prompts del usuario en la ventana actual (rolling window) ─
+  // ─ Ciclo 5h: ventana deslizante [now-5h, now] ─
+  const fiveHAgo     = now - CYCLE_MS
   const cycleResetAt = computeResetAt(entries, now)
-  const cycleStart   = cycleResetAt - CYCLE_MS   // inicio del ciclo actual
+  const cycleStart   = fiveHAgo   // inicio real de la ventana de conteo
 
-  const cyclePrompts = entries.filter(e => e.type === 'human' && e.ts >= cycleStart).length
+  const cyclePrompts = entries.filter(e => e.type === 'human' && e.ts >= fiveHAgo).length
   const cyclePct     = Math.min(100, Math.round(cyclePrompts / limits.prompts5h * 100))
   const cycleResetMs = Math.max(0, cycleResetAt - now)
 
@@ -256,13 +305,17 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
   const sonnetWindows = new Set<number>()
   const opusWindows   = new Set<number>()
   const haikuWindows  = new Set<number>()
+  let weeklyTokensSonnet = 0
+  let weeklyTokensOpus   = 0
+  let weeklyTokensHaiku  = 0
 
   for (const e of entries) {
     if (e.type !== 'assistant' || e.ts < weekStart) continue
-    const win = Math.floor(e.ts / WINDOW_5MIN) * WINDOW_5MIN
-    if      (e.model?.includes('opus'))  opusWindows.add(win)
-    else if (e.model?.includes('haiku')) haikuWindows.add(win)
-    else                                 sonnetWindows.add(win)
+    const win    = Math.floor(e.ts / WINDOW_5MIN) * WINDOW_5MIN
+    const tokens = (e.inputTokens ?? 0) + (e.outputTokens ?? 0)
+    if      (e.model?.includes('opus'))  { opusWindows.add(win);   weeklyTokensOpus   += tokens }
+    else if (e.model?.includes('haiku')) { haikuWindows.add(win);  weeklyTokensHaiku  += tokens }
+    else                                 { sonnetWindows.add(win); weeklyTokensSonnet += tokens }
   }
 
   const weeklyHoursSonnet = parseFloat((sonnetWindows.size * 5 / 60).toFixed(1))
@@ -288,10 +341,14 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
     weeklyHoursSonnet,
     weeklyHoursOpus,
     weeklyHoursHaiku,
+    weeklyTokensSonnet,
+    weeklyTokensOpus,
+    weeklyTokensHaiku,
     weeklyLimitSonnet: limits.weeklyHoursSonnet,
     weeklyLimitOpus:   limits.weeklyHoursOpus,
     burnRateTokensPerMin,
     detectedPlan:      plan,
+    planSource,
     computedAt:        now,
   }
 

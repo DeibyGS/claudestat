@@ -1,15 +1,67 @@
+import { useState, memo } from 'react'
 import { BarChart, Bar, Tooltip, ResponsiveContainer, Cell } from 'recharts'
-import type { CostInfo, DayStats } from '../types'
+import {
+  FileText, FilePlus, Pencil, Terminal, FolderSearch, Search,
+  Globe, Bot, Zap, ListTodo, ClipboardList, Wrench, type LucideIcon,
+} from 'lucide-react'
+import type { CostInfo, DayStats, TraceEvent } from '../types'
 
 interface Props {
   cost?:      CostInfo
   weeklyData: DayStats[]
+  events?:    TraceEvent[]
+}
+
+const TOOL_ICONS: Record<string, LucideIcon> = {
+  Read: FileText, Write: FilePlus, Edit: Pencil, Bash: Terminal,
+  Glob: FolderSearch, Grep: Search, WebSearch: Globe, WebFetch: Globe,
+  Agent: Bot, Skill: Zap, TodoWrite: ListTodo, TodoRead: ListTodo,
+  Task: ClipboardList, default: Wrench,
+}
+const TOOL_COLORS: Record<string, string> = {
+  Read: '#58a6ff', Write: '#3fb950', Edit: '#3fb950', Bash: '#d29922',
+  Glob: '#79c0ff', Grep: '#79c0ff', WebSearch: '#56d364', WebFetch: '#56d364',
+  Agent: '#bc8cff', Skill: '#58a6ff', TodoWrite: '#8b949e', TodoRead: '#8b949e',
+  Task: '#8b949e', default: '#6e7681',
 }
 
 function fmtTok(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`
   return String(n)
+}
+
+function fmtCost(usd: number): string {
+  if (usd < 0.001) return `$${usd.toFixed(4)}`
+  if (usd < 0.10)  return `$${usd.toFixed(3)}`
+  return `$${usd.toFixed(2)}`
+}
+
+/**
+ * Estimates how much money was saved by cache reads vs. paying full input price.
+ * savings = (input_price - cache_read_price) per million tokens
+ */
+function estimateCacheSavings(cacheRead: number, model?: string): number {
+  if (cacheRead === 0) return 0
+  if (model?.includes('opus'))  return cacheRead * 13.50 / 1_000_000
+  if (model?.includes('haiku')) return cacheRead *  0.72 / 1_000_000
+  return cacheRead * 2.70 / 1_000_000   // sonnet default
+}
+
+function computeToolCounts(events: TraceEvent[]): { name: string; count: number; color: string }[] {
+  const counts = new Map<string, number>()
+  for (const ev of events) {
+    if (ev.tool_name && ev.type === 'Done') {
+      counts.set(ev.tool_name, (counts.get(ev.tool_name) || 0) + 1)
+    }
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([name, count]) => ({
+      name, count,
+      color: TOOL_COLORS[name] || TOOL_COLORS.default,
+    }))
 }
 
 const S = {
@@ -19,112 +71,269 @@ const S = {
     padding: '8px 16px',
     display: 'flex',
     alignItems: 'center',
-    gap: 24,
+    gap: 16,
     minHeight: 52,
+    flexWrap: 'wrap' as const,
   } as React.CSSProperties,
-  group: { display: 'flex', alignItems: 'center', gap: 8 } as React.CSSProperties,
-  label: { color: '#7d8590', fontSize: 11 } as React.CSSProperties,
-  value: { color: '#e6edf3', fontWeight: 700, fontSize: 13 } as React.CSSProperties,
-  sep:   { color: '#21262d', userSelect: 'none' as const },
+
+  sep: { color: '#21262d', userSelect: 'none' as const, flexShrink: 0 },
+
+  group: {
+    display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+  } as React.CSSProperties,
+
+  label: { color: '#7d8590', fontSize: 10, whiteSpace: 'nowrap' as const } as React.CSSProperties,
+  value: { color: '#e6edf3', fontWeight: 700, fontSize: 12 } as React.CSSProperties,
+
   badge: (color: string): React.CSSProperties => ({
     background: color + '22', color, border: `1px solid ${color}44`,
     borderRadius: 4, padding: '2px 7px', fontSize: 12, fontWeight: 700,
+    flexShrink: 0,
   }),
-  barWrap: { display: 'flex', alignItems: 'center', gap: 8 } as React.CSSProperties,
+
+  tokenGroup: {
+    display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,
+  } as React.CSSProperties,
+
+  tokenItem: {
+    display: 'flex', flexDirection: 'column' as const, alignItems: 'center',
+    gap: 1, padding: '0 5px',
+  },
+
+  tokenDivider: {
+    width: 1, height: 20, background: '#30363d', flexShrink: 0,
+  } as React.CSSProperties,
 }
 
-export function StatsFooter({ cost, weeklyData }: Props) {
+// ─── Token block ──────────────────────────────────────────────────────────────
+
+function TokenBlock({ cost }: { cost: CostInfo }) {
+  const savings = estimateCacheSavings(cost.cache_read, cost.model)
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 0,
+      background: '#0d1117', border: '1px solid #21262d',
+      borderRadius: 6, overflow: 'hidden', flexShrink: 0,
+    }}>
+      {/* Input */}
+      <div
+        style={S.tokenItem}
+        title="Input tokens: new text sent to Claude in this session (excluding cache)"
+      >
+        <span style={{ ...S.value, fontSize: 11 }}>{fmtTok(cost.input_tokens)}</span>
+        <span style={S.label}>input</span>
+      </div>
+
+      <div style={S.tokenDivider} />
+
+      {/* Output */}
+      <div
+        style={S.tokenItem}
+        title="Output tokens: tokens generated by Claude as a response"
+      >
+        <span style={{ ...S.value, fontSize: 11 }}>{fmtTok(cost.output_tokens)}</span>
+        <span style={S.label}>output</span>
+      </div>
+
+      <div style={S.tokenDivider} />
+
+      {/* Cache hit */}
+      <div
+        style={S.tokenItem}
+        title={`Cache hit: tokens served from prompt cache (10× cheaper than normal input).\nEstimated savings: ${fmtCost(savings)} vs. paying full input price.`}
+      >
+        <span style={{ ...S.value, fontSize: 11, color: '#3fb950' }}>
+          {fmtTok(cost.cache_read)}
+        </span>
+        <span style={{ ...S.label, color: '#3fb95099' }}>cache hit</span>
+      </div>
+
+      {/* Savings badge — solo si hay ahorro significativo */}
+      {savings >= 0.001 && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center',
+            padding: '0 8px', height: '100%',
+            background: '#3fb95012', borderLeft: '1px solid #3fb95030',
+          }}
+          title={`Without cache, those ${fmtTok(cost.cache_read)} context tokens would have cost ${fmtCost(savings + (cost.cache_read * (cost.model?.includes('opus') ? 15 : cost.model?.includes('haiku') ? 0.80 : 3) / 1_000_000))} instead`}
+        >
+          <span style={{ color: '#3fb950', fontSize: 10, fontWeight: 700 }}>
+            ~{fmtCost(savings)} saved
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Efficiency block ─────────────────────────────────────────────────────────
+
+function EfficiencyBlock({ score, color }: { score: number; color: string }) {
+  return (
+    <div
+      style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}
+      title={[
+        'Efficiency score (0–100):',
+        '· Decreases when Claude repeats the same tool many times (loops)',
+        '· Decreases based on the proportion of detected loops',
+        '· 90–100: excellent  70–89: ok  <70: many loops',
+      ].join('\n')}
+    >
+      <span style={S.label}>efficiency</span>
+      <div style={{ width: 60, height: 4, background: '#21262d', borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{
+          width: `${score}%`, height: '100%', background: color,
+          borderRadius: 3, transition: 'width 0.5s ease',
+          boxShadow: `0 0 4px ${color}88`,
+        }} />
+      </div>
+      <span style={S.badge(color)}>{score}/100</span>
+    </div>
+  )
+}
+
+// ─── Tool bars ────────────────────────────────────────────────────────────────
+
+function ToolBars({ toolCounts }: { toolCounts: { name: string; count: number; color: string }[] }) {
+  const [hoveredTool, setHoveredTool] = useState<string | null>(null)
+  const maxCount = toolCounts[0]?.count || 1
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+      <span style={S.label}>tools</span>
+      <div style={{ display: 'flex', gap: 5, alignItems: 'flex-end' }}>
+        {toolCounts.map(({ name, count, color }) => {
+          const Icon     = TOOL_ICONS[name] || TOOL_ICONS.default
+          const barH     = Math.max(4, Math.round((count / maxCount) * 28))
+          const isHovered = hoveredTool === name
+          return (
+            <div
+              key={name}
+              style={{ position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, cursor: 'default' }}
+              onMouseEnter={() => setHoveredTool(name)}
+              onMouseLeave={() => setHoveredTool(null)}
+            >
+              {isHovered && (
+                <div style={{
+                  position: 'absolute', bottom: '100%', left: '50%',
+                  transform: 'translateX(-50%)',
+                  marginBottom: 6, whiteSpace: 'nowrap',
+                  background: '#21262d', border: '1px solid #30363d',
+                  borderRadius: 5, padding: '4px 8px',
+                  fontSize: 11, fontWeight: 600, color,
+                  pointerEvents: 'none', zIndex: 100,
+                }}>
+                  {name}
+                  <span style={{ color: '#7d8590', fontWeight: 400, marginLeft: 4 }}>×{count}</span>
+                </div>
+              )}
+              <span style={{ color: '#484f58', fontSize: 9, fontWeight: 600 }}>{count}</span>
+              <div style={{
+                width: 18, height: barH,
+                background: isHovered ? color : color + 'cc',
+                borderRadius: '3px 3px 0 0',
+                transition: 'height 0.3s ease, background 0.15s',
+              }} />
+              <span style={{ color, display: 'flex' }}><Icon size={10} /></span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ─── Weekly chart ─────────────────────────────────────────────────────────────
+
+function WeeklyChart({ weeklyData }: { weeklyData: DayStats[] }) {
+  const totalWeekly = weeklyData.reduce((s, d) => s + d.tokens, 0)
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+      <span style={S.label}>7 days</span>
+      <div style={{ width: 90, height: 32 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={weeklyData} margin={{ top: 2, right: 0, left: 0, bottom: 2 }}>
+            <Tooltip
+              contentStyle={{ background: '#161b22', border: '1px solid #21262d', borderRadius: 4, fontSize: 11 }}
+              labelStyle={{ color: '#7d8590' }}
+              itemStyle={{ color: '#58a6ff' }}
+              formatter={(v: number) => [fmtTok(v), 'tokens']}
+            />
+            <Bar dataKey="tokens" radius={[2, 2, 0, 0]}>
+              {weeklyData.map((_, i) => (
+                <Cell key={i} fill={i === weeklyData.length - 1 ? '#3fb950' : '#1f6feb'} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+      <div>
+        <div style={{ ...S.value, fontSize: 11 }}>{fmtTok(totalWeekly)}</div>
+        <div style={{ ...S.label, fontSize: 10 }}>tok / week</div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
+
+function StatsFooterInner({ cost, weeklyData, events = [] }: Props) {
   const score = cost
     ? (cost.efficiency_score === 0 && cost.cost_usd < 0.001 ? 100 : cost.efficiency_score)
     : null
-
   const scoreColor = score === null ? '#7d8590'
-    : score >= 90 ? '#3fb950'
-    : score >= 70 ? '#d29922'
-    : '#f85149'
+    : score >= 90 ? '#3fb950' : score >= 70 ? '#d29922' : '#f85149'
 
-  const totalWeekly = weeklyData.reduce((s, d) => s + d.tokens, 0)
+  const toolCounts = computeToolCounts(events)
 
   return (
     <div style={S.footer}>
+
       {/* Costo */}
       {cost && cost.cost_usd > 0 ? (
         <>
-          <div style={S.group}>
-            <span style={S.label}>💰 coste</span>
-            <span style={S.badge('#3fb950')}>${cost.cost_usd.toFixed(4)}</span>
+          <div style={S.group} title="Total accumulated cost of the current session">
+            <span style={S.label}>cost</span>
+            <span style={S.badge('#3fb950')}>{fmtCost(cost.cost_usd)}</span>
           </div>
 
           <span style={S.sep}>│</span>
 
-          <div style={S.group}>
-            <span style={S.label}>↑</span>
-            <span style={S.value}>{fmtTok(cost.input_tokens)}</span>
-            <span style={S.label}>↓</span>
-            <span style={S.value}>{fmtTok(cost.output_tokens)}</span>
-            <span style={S.label}>🗄</span>
-            <span style={S.value}>{fmtTok(cost.cache_read)}</span>
-          </div>
+          {/* Tokens reorganizados */}
+          <TokenBlock cost={cost} />
 
           <span style={S.sep}>│</span>
 
-          <div style={S.group}>
-            <span style={S.label}>eficiencia</span>
-            <ScoreBar score={score ?? 100} color={scoreColor} />
-            <span style={{ ...S.badge(scoreColor), minWidth: 44, textAlign: 'center' }}>
-              {score}/100
-            </span>
-          </div>
+          {/* Eficiencia */}
+          {score !== null && (
+            <>
+              <EfficiencyBlock score={score} color={scoreColor} />
+              <span style={S.sep}>│</span>
+            </>
+          )}
         </>
       ) : (
         <div style={S.group}>
-          <span style={S.label}>💰 calculando coste…</span>
+          <span style={S.label}>calculating cost…</span>
         </div>
+      )}
+
+      {/* Tool breakdown */}
+      {toolCounts.length > 0 && (
+        <>
+          <ToolBars toolCounts={toolCounts} />
+          <span style={S.sep}>│</span>
+        </>
       )}
 
       <div style={{ flex: 1 }} />
 
-      {/* Weekly bar */}
-      {weeklyData.length > 0 && (
-        <div style={S.barWrap}>
-          <span style={S.label}>semanal</span>
-          <div style={{ width: 120, height: 32 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={weeklyData} margin={{ top: 2, right: 0, left: 0, bottom: 2 }}>
-                <Tooltip
-                  contentStyle={{ background: '#161b22', border: '1px solid #21262d', borderRadius: 4, fontSize: 11 }}
-                  labelStyle={{ color: '#7d8590' }}
-                  itemStyle={{ color: '#58a6ff' }}
-                  formatter={(v: number) => [fmtTok(v), 'tokens']}
-                />
-                <Bar dataKey="tokens" radius={[2,2,0,0]}>
-                  {weeklyData.map((_, i) => (
-                    <Cell key={i} fill={i === weeklyData.length - 1 ? '#3fb950' : '#1f6feb'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-          <div>
-            <div style={{ ...S.value, fontSize: 12 }}>{fmtTok(totalWeekly)}</div>
-            <div style={{ ...S.label, fontSize: 10 }}>tokens / 7 días</div>
-          </div>
-        </div>
-      )}
+      {/* Weekly chart */}
+      {weeklyData.length > 0 && <WeeklyChart weeklyData={weeklyData} />}
+
     </div>
   )
 }
 
-function ScoreBar({ score, color }: { score: number; color: string }) {
-  return (
-    <div style={{ width: 80, height: 6, background: '#21262d', borderRadius: 3, overflow: 'hidden' }}>
-      <div style={{
-        width: `${score}%`, height: '100%',
-        background: color,
-        borderRadius: 3,
-        transition: 'width 0.5s ease',
-        boxShadow: `0 0 4px ${color}88`,
-      }} />
-    </div>
-  )
-}
+export const StatsFooter = memo(StatsFooterInner)

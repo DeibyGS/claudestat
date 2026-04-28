@@ -13,6 +13,8 @@ process.on('warning', (w) => {
 })
 
 import { Command } from 'commander'
+import fs         from 'fs'
+import path       from 'path'
 import { startDaemon }              from './daemon'
 import { startWatch }               from './watch'
 import { installHooks, uninstallHooks } from './install'
@@ -20,9 +22,10 @@ import { readConfig, writeConfig }  from './config'
 import type { ClaudetraceConfig }   from './config'
 
 const program = new Command()
+const PID_FILE = path.join(process.env.HOME!, '.claudestat', 'daemon.pid')
 
 program
-  .name('claudetrace')
+  .name('claudestat')
   .description('Real-time execution trace and cost intelligence for Claude Code')
   .version('0.1.0')
 
@@ -41,12 +44,12 @@ program
 
 program
   .command('install')
-  .description('Instalar los hooks de claudetrace en Claude Code (~/.claude/settings.json)')
+  .description('Instalar los hooks de claudestat en Claude Code (~/.claude/settings.json)')
   .action(installHooks)
 
 program
   .command('uninstall')
-  .description('Eliminar los hooks de claudetrace de Claude Code')
+  .description('Eliminar los hooks de claudestat de Claude Code')
   .action(uninstallHooks)
 
 program
@@ -80,7 +83,7 @@ program
         : ''
 
       console.log(
-        `\n📊 claudetrace status\n` +
+        `\n📊 claudestat status\n` +
         `──────────────────────────────────────────\n` +
         `  Cuota 5h   ${pctColor}${q.cyclePrompts}/${q.cycleLimit} prompts (${q.cyclePct}%)${R}  │  reset en ${resetLabel}\n` +
         `  Plan        ${q.detectedPlan.toUpperCase()}\n` +
@@ -92,14 +95,14 @@ program
         `──────────────────────────────────────────\n`
       )
     } catch {
-      console.error('\n❌ El daemon no está corriendo. Inicialo con: claudetrace start\n')
+      console.error('\n❌ El daemon no está corriendo. Inicialo con: claudestat start\n')
       process.exit(1)
     }
   })
 
 program
   .command('config')
-  .description('Ver o editar la configuración de claudetrace (~/.claudetrace/config.json)')
+  .description('Ver o editar la configuración de claudestat (~/.claudestat/config.json)')
   .option('--kill-switch <bool>',  'Activar/desactivar kill switch: true|false')
   .option('--threshold <number>',  'Porcentaje de cuota para activar el kill switch (default: 95)')
   .option('--plan <plan>',         'Forzar plan: pro|max5|max20|auto')
@@ -127,7 +130,7 @@ program
 
     if (changed) {
       writeConfig(cfg)
-      console.log('✅ Config guardada en ~/.claudetrace/config.json')
+      console.log('✅ Config guardada en ~/.claudestat/config.json')
     }
 
     // Mostrar config actual siempre
@@ -136,6 +139,38 @@ program
     console.log(`   killSwitchThreshold: ${cfg.killSwitchThreshold}%`)
     console.log(`   warnThresholds:     ${cfg.warnThresholds.join('%, ')}%`)
     console.log(`   plan:               ${cfg.plan ?? 'auto-detect'}\n`)
+  })
+
+program
+  .command('stop')
+  .description('Stop the claudestat daemon')
+  .action(() => {
+    try {
+      const pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10)
+      process.kill(pid, 'SIGTERM')
+      console.log(`✅ claudestat daemon stopped (pid ${pid})`)
+    } catch (e: any) {
+      if (e.code === 'ENOENT') console.error('❌ Daemon is not running (no PID file found)')
+      else if (e.code === 'ESRCH') console.error('❌ Daemon process not found — stale PID file removed')
+      else console.error('❌ Error stopping daemon:', e.message)
+      try { fs.unlinkSync(PID_FILE) } catch {}
+      process.exit(1)
+    }
+  })
+
+program
+  .command('restart')
+  .description('Restart the claudestat daemon')
+  .action(async () => {
+    try {
+      const pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10)
+      process.kill(pid, 'SIGTERM')
+      console.log(`  Stopped pid ${pid}, restarting…`)
+      await new Promise(r => setTimeout(r, 800))
+    } catch {
+      console.log('  Daemon was not running, starting fresh…')
+    }
+    startDaemon()
   })
 
 program.parse()

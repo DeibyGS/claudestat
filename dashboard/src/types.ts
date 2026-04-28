@@ -1,12 +1,13 @@
 export interface TraceEvent {
-  type:         string
-  tool_name?:   string
-  tool_input?:  string
-  tool_output?: string
-  ts:           number
-  duration_ms?: number
-  session_id?:  string
-  cwd?:         string
+  type:          string
+  tool_name?:    string
+  tool_input?:   string
+  tool_output?:  string
+  ts:            number
+  duration_ms?:  number
+  session_id?:   string
+  cwd?:          string
+  skill_parent?: string
 }
 
 export interface LoopAlert {
@@ -43,6 +44,13 @@ export interface BlockCost {
   outputTokens: number   // tokens de salida de este bloque
 }
 
+export interface SubAgentSession {
+  id:               string
+  dominant_model?:  string
+  total_cost_usd?:  number
+  started_at:       number
+}
+
 export interface AppState {
   sessionId:        string
   cwd:              string
@@ -53,6 +61,7 @@ export interface AppState {
   sessionState:     SessionState
   blockCosts:       BlockCost[]       // un entry por bloque completo (agrupado por Stop)
   pendingBlockCost: BlockCost | null  // acumula sub-turnos del bloque en curso
+  subAgentSessions: SubAgentSession[] // sub-sesiones lanzadas por Agent en esta sesión
 }
 
 // ─── Historial y proyectos ────────────────────────────────────────────────────

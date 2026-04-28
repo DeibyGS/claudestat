@@ -55,7 +55,7 @@ export async function startWatch() {
   const alive = await checkDaemon()
   if (!alive) {
     console.error('\n❌ El daemon no está corriendo.')
-    console.error('   Ejecutá: \x1b[36mclaudetrace start\x1b[0m\n')
+    console.error('   Ejecutá: \x1b[36mclaudestat start\x1b[0m\n')
     process.exit(1)
   }
 
@@ -127,7 +127,7 @@ export async function startWatch() {
   }
 
   clearScreen()
-  process.stdout.write('\x1b[36m● claudetrace watch\x1b[0m — conectando...\n')
+  process.stdout.write('\x1b[36m● claudestat watch\x1b[0m — conectando...\n')
 
   while (true) {
     try { await connectSSE(handleMessage) }

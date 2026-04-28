@@ -27,7 +27,7 @@ import { computeMetaStats, getMetaHistory }                   from './meta-stats
 import { discoverProjects, parseHandoffProgress }             from './project-scanner'
 import { deriveSessionState, STATE_META }                     from './session-state'
 import { computeQuota, invalidateQuotaCache }                 from './quota-tracker'
-import { readConfig, writeConfig, getWarnLevel, validateConfig } from './config'
+import { readConfig, writeConfig, getWarnLevel, validateConfig, type ClaudetraceConfig } from './config'
 import { getGitInfo, type GitInfo }                           from './git'
 import { getPRStatus, type PRStatus }                         from './github'
 import { analyzePatterns }                                    from './pattern-analyzer'
@@ -38,12 +38,23 @@ const PORT = 7337
 const app  = express()
 app.use(express.json())
 
-// Clientes SSE conectados — uno por cada `claudetrace watch` abierto
+// Clientes SSE conectados — uno por cada `claudestat watch` abierto
 const sseClients = new Map<string, Response>()
 
 // Estado de sesión en memoria — se deriva a demanda, no se persiste en DB.
 // Clave: session_id  Valor: {type, ts} del último evento recibido vía /event
 const sessionLastEvent = new Map<string, { type: string; ts: number }>()
+
+// Skill activa por sesión — se setea tras Skill Done, se limpia en Stop.
+// Permite taggear los eventos siguientes con skill_parent para agruparlos en la UI.
+const activeSkillBySession = new Map<string, string>()
+
+// Último Agent PreToolUse por CWD — se usa para detectar sub-sesiones de agentes.
+// Clave: cwd  Valor: { pre_ts, session_id }
+const lastAgentByCwd = new Map<string, { pre_ts: number; session_id: string }>()
+
+// Sesiones ya evaluadas para taggeo de parent — evita re-evaluar en cada cost update.
+const taggedSessionParents = new Set<string>()
 
 // ─── Quota alerter: moving average de 3 muestras + cooldown 1h por nivel ─────
 // Evita falsas alarmas por spikes puntuales. Solo emite si el promedio de las
@@ -181,6 +192,12 @@ app.post('/event', (req: Request, res: Response) => {
 
   dbOps.upsertSession({ id: session_id, cwd: resolvedCwd, started_at: ts, last_event_at: ts })
 
+  // Skill grouping: get current parent BEFORE processing this event
+  // (the Skill Done event itself is NOT tagged — only its subsequent sub-calls are)
+  const skillParent = (tool_name !== 'Skill' && type !== 'Stop')
+    ? activeSkillBySession.get(session_id)
+    : undefined
+
   if (type === 'PostToolUse' && tool_name) {
     const pairedId = dbOps.pairPostWithPre(
       session_id, tool_name,
@@ -192,15 +209,31 @@ app.post('/event', (req: Request, res: Response) => {
     const tool_output = rawResp.length > 4000
       ? rawResp.slice(0, 4000) + `\n…[truncado: ${rawResp.length} chars]`
       : rawResp
-    broadcast({ type: 'event', payload: { type: 'Done', session_id, tool_name, tool_input: tool_input != null ? JSON.stringify(tool_input) : undefined, tool_output, ts, pairedId } })
+    broadcast({ type: 'event', payload: { type: 'Done', session_id, tool_name, tool_input: tool_input != null ? JSON.stringify(tool_input) : undefined, tool_output, ts, pairedId, skill_parent: skillParent } })
+
+    // Activar skill parent para los eventos siguientes si este fue un Skill Done
+    if (tool_name === 'Skill') {
+      try {
+        const inp = typeof tool_input === 'object' ? tool_input : JSON.parse(tool_input ?? '{}')
+        activeSkillBySession.set(session_id, inp?.skill || inp?.name || 'skill')
+      } catch { activeSkillBySession.set(session_id, 'skill') }
+    }
   } else {
     dbOps.insertEvent({
       session_id, type,
       tool_name: tool_name ?? undefined,
       tool_input: tool_input ? JSON.stringify(tool_input) : undefined,
-      ts, cwd: resolvedCwd
+      ts, cwd: resolvedCwd, skill_parent: skillParent
     })
-    broadcast({ type: 'event', payload: req.body })
+    broadcast({ type: 'event', payload: { ...req.body, skill_parent: skillParent } })
+
+    // Stop limpia el skill activo para esta sesión
+    if (type === 'Stop') activeSkillBySession.delete(session_id)
+
+    // Registrar Agent PreToolUse para detección de sub-sesiones
+    if (type === 'PreToolUse' && tool_name === 'Agent' && resolvedCwd) {
+      lastAgentByCwd.set(resolvedCwd, { pre_ts: ts, session_id })
+    }
   }
 
   // Intentar etiquetar la sesión con su proyecto (solo en eventos de herramientas de archivo)
@@ -251,8 +284,8 @@ app.post('/event', (req: Request, res: Response) => {
       } catch { /* ignorar errores al calcular quota */ }
     })
     // Generar resumen IA solo si el usuario lo activa explícitamente
-    // Activar: CLAUDETRACE_AI_SUMMARY=true claudetrace start
-    if (process.env.CLAUDETRACE_AI_SUMMARY === 'true') {
+    // Activar: CLAUDESTAT_AI_SUMMARY=true claudestat start
+    if (process.env.CLAUDESTAT_AI_SUMMARY === 'true') {
       setImmediate(async () => {
         try {
           const session = dbOps.getSession(session_id)
@@ -272,7 +305,7 @@ app.post('/event', (req: Request, res: Response) => {
   res.json({ ok: true })
 })
 
-// ─── GET /stream — SSE para claudetrace watch ─────────────────────────────────
+// ─── GET /stream — SSE para claudestat watch ─────────────────────────────────
 
 app.get('/stream', (req: Request, res: Response) => {
   res.setHeader('Content-Type',  'text/event-stream')
@@ -289,8 +322,9 @@ app.get('/stream', (req: Request, res: Response) => {
     const events     = dbOps.getSessionEvents(latestSession.id)
     const lastEvt    = sessionLastEvent.get(latestSession.id)
     const state      = deriveSessionState(lastEvt?.type, lastEvt?.ts ?? latestSession.last_event_at ?? latestSession.started_at)
-    const blockCosts = getAllBlockCostsForSession(latestSession.id)
-    res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events, blockCosts })}\n\n`)
+    const blockCosts      = getAllBlockCostsForSession(latestSession.id)
+    const subAgentSessions = dbOps.getChildSessions(latestSession.id)
+    res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events, blockCosts, subAgentSessions })}\n\n`)
 
     // Procesar el JSONL de la sesión activa para entregar contexto inmediato
     // (sin esperar al próximo mensaje de Claude)
@@ -397,7 +431,7 @@ app.get('/projects', (_req: Request, res: Response) => {
       name:           path.basename(agg.project_path),
       session_count:  agg.session_count,
       total_cost_usd: agg.total_cost_usd,
-      total_tokens:   (agg.total_input_tokens ?? 0) + (agg.total_output_tokens ?? 0),
+      total_tokens:   (agg.total_input_tokens ?? 0) + (agg.total_output_tokens ?? 0) + (agg.total_cache_read ?? 0),
       last_active:    agg.last_active,
       avg_efficiency: agg.avg_efficiency ? Math.round(agg.avg_efficiency) : null,
       progress: { done: 0, total: 0, pct: 0, nextTask: null },
@@ -418,10 +452,10 @@ app.get('/projects', (_req: Request, res: Response) => {
 
     projectMap.set(scan.path, {
       ...base,
-      // session_count and last_active: prefer DB when available (live tracking)
-      session_count:  useJSONL ? jStats.session_count  : base.session_count,
-      last_active:    useJSONL ? jStats.last_active     : base.last_active,
-      // cost and tokens: always from JSONL — covers full history, not just since claudetrace install
+      // session_count and last_active: max of DB (live) and JSONL (full history before claudestat install)
+      session_count:  Math.max(jStats.session_count, base.session_count),
+      last_active:    Math.max(jStats.last_active ?? 0, base.last_active ?? 0) || null,
+      // cost and tokens: always from JSONL — covers full history, not just since claudestat install
       total_cost_usd: jStats.total_cost_usd,
       total_tokens:   jStats.total_tokens,
       has_handoff:    scan.hasHandoff,
@@ -476,7 +510,7 @@ app.get('/history', (_req: Request, res: Response) => {
       last_event_at:  s.last_event_at ?? s.started_at,
       duration_ms:    (s.last_event_at ?? s.started_at) - s.started_at,
       total_cost_usd: s.total_cost_usd    ?? 0,
-      total_tokens:   (s.total_input_tokens ?? 0) + (s.total_output_tokens ?? 0),
+      total_tokens:   (s.total_input_tokens ?? 0) + (s.total_output_tokens ?? 0) + (s.total_cache_read ?? 0),
       efficiency_score: s.efficiency_score ?? 100,
       loops_detected:   s.loops_detected  ?? 0,
       done_count:       s.done_count      ?? 0,
@@ -649,9 +683,9 @@ app.get('/system-config', (_req: Request, res: Response) => {
     } catch {}
 
     // Helper compartido — agentes y skills tienen la misma estructura de archivo .md con frontmatter
-    const scanMarkdownDir = (dir: string, exclude?: string) => {
+    const scanMarkdownDir = (dir: string, excludes: string[] = []) => {
       const items: { name: string; description: string; lines: number }[] = []
-      for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.md') && f !== exclude)) {
+      for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.md') && !excludes.includes(f))) {
         const content = fs.readFileSync(path.join(dir, f), 'utf-8')
         const desc    = content.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? ''
         items.push({ name: f.replace('.md', ''), description: desc, lines: content.split('\n').length })
@@ -659,18 +693,21 @@ app.get('/system-config', (_req: Request, res: Response) => {
       return items
     }
 
-    // 2. Agentes desde ~/.claude/agents/ (excluye CLAUDE.md — es el orquestador, no un agente)
+    // 2. Agentes desde ~/.claude/agents/ (excluye archivos de sistema — no son agentes invocables)
     let agents: { name: string; description: string; lines: number }[] = []
-    try { agents = scanMarkdownDir(path.join(home, '.claude', 'agents'), 'CLAUDE.md') } catch {}
+    try { agents = scanMarkdownDir(path.join(home, '.claude', 'agents'), ['CLAUDE.md', 'ORCHESTRATOR.md', 'AGENTS.md']) } catch {}
+
+    // 2b. Workflows desde ~/.claude/agents/workflows/
+    let workflows: { name: string; description: string; lines: number }[] = []
+    try { workflows = scanMarkdownDir(path.join(home, '.claude', 'agents', 'workflows')) } catch {}
 
     // 3. Archivos de contexto relevantes
-    // engramSlug deriva la ruta de Engram del homedir del usuario: /Users/db → -Users-db
-    const engramSlug  = home.replace(/\//g, '-')
+    const engramSlugCtx  = home.replace(/\//g, '-')
     const contextPaths = [
       { key: 'CLAUDE.md global',  filePath: path.join(home, '.claude', 'CLAUDE.md') },
+      { key: 'MEMORY.md',         filePath: path.join(home, '.claude', 'projects', engramSlugCtx, 'memory', 'MEMORY.md') },
       { key: 'settings.json',     filePath: path.join(home, '.claude', 'settings.json') },
-      { key: 'MEMORY.md (Engram)',filePath: path.join(home, '.claude', 'projects', engramSlug, 'memory', 'MEMORY.md') },
-      { key: 'config claudetrace',filePath: path.join(home, '.claudetrace', 'config.json') },
+      { key: 'config claudestat',filePath: path.join(home, '.claudestat', 'config.json') },
     ]
     const contextFiles = contextPaths.map(({ key, filePath }) => {
       try {
@@ -687,20 +724,20 @@ app.get('/system-config', (_req: Request, res: Response) => {
     let skills: { name: string; description: string; lines: number }[] = []
     try { skills = scanMarkdownDir(path.join(home, '.claude', 'commands')) } catch {}
 
-    // 4. Archivos de memoria Engram
-    let memoryCount = 0
+    // 4. Archivos de memoria Engram — slug deriva de homedir: /Users/db → -Users-db
+    let memoryFiles: string[] = []
     try {
-      const memDir = path.join(home, '.claude', 'projects', engramSlug, 'memory')
-      memoryCount = fs.readdirSync(memDir).filter(f => f.endsWith('.md')).length
+      const memDir = path.join(home, '.claude', 'projects', engramSlugCtx, 'memory')
+      memoryFiles  = fs.readdirSync(memDir).filter(f => f.endsWith('.md')).sort()
     } catch {}
 
     // 5. Distribución de modos (últimos 7 días)
     const modeDistribution = dbOps.getModeDistribution(7)
 
-    // 6. Config de claudetrace
-    const claudetraceConfig = readConfig()
+    // 6. Config de claudestat
+    const claudestatConfig = readConfig()
 
-    _systemConfigCache = { hooks, agents, skills, contextFiles, memoryCount, modeDistribution, claudetraceConfig }
+    _systemConfigCache = { hooks, agents, workflows, skills, contextFiles, memoryFiles, modeDistribution, claudestatConfig }
     _systemConfigCacheTs = Date.now()
     res.json(_systemConfigCache)
   } catch (err) {
@@ -748,6 +785,59 @@ app.post('/api/weekly-reports', (req: Request, res: Response) => {
   } catch (e) {
     res.status(500).json({ error: String(e) })
   }
+})
+
+// ─── GET /api/analytics — datos diarios agrupados para la vista Analytics ────
+
+app.get('/api/analytics', (req: Request, res: Response) => {
+  const days        = Math.min(parseInt(String(req.query.days ?? '30'), 10) || 30, 90)
+  const projectDays = Math.min(parseInt(String(req.query.project_days ?? String(days)), 10) || days, 90)
+  const since        = Date.now() - days        * 24 * 60 * 60 * 1000
+  const projectSince = Date.now() - projectDays * 24 * 60 * 60 * 1000
+
+  const daily        = dbOps.getAnalyticsDaily(since)
+  const byModel      = dbOps.getAnalyticsByModel(since)
+  const projectHours = dbOps.getProjectHours(projectSince)
+
+  // KPIs (siempre sobre últimos 7d y 30d, independiente del período pedido)
+  const now7  = Date.now() - 7  * 24 * 60 * 60 * 1000
+  const now30 = Date.now() - 30 * 24 * 60 * 60 * 1000
+  const week  = daily.filter(d => new Date(d.date + 'T12:00:00').getTime() >= now7)
+  const month = daily.filter(d => new Date(d.date + 'T12:00:00').getTime() >= now30)
+
+  const sum = (arr: typeof daily, k: keyof typeof daily[0]) =>
+    arr.reduce((a, d) => a + (d[k] as number), 0)
+  const avg = (arr: typeof daily, k: keyof typeof daily[0]) =>
+    arr.length ? sum(arr, k) / arr.length : 0
+
+  res.json({
+    daily,
+    by_model: byModel,
+    project_hours: projectHours,
+    kpis: {
+      week_cost:       sum(week,  'cost'),
+      month_cost:      sum(month, 'cost'),
+      week_sessions:   sum(week,  'sessions'),
+      month_sessions:  sum(month, 'sessions'),
+      week_loops:      sum(week,  'loops'),
+      avg_efficiency:  Math.round(avg(week, 'avg_efficiency')),
+    },
+  })
+})
+
+// ─── POST /api/weekly-reports/generate-now — generar informe inmediatamente ───
+
+app.post('/api/weekly-reports/generate-now', (_req: Request, res: Response) => {
+  const cfg       = readConfig()
+  const dateLabel = new Date().toISOString().slice(0, 10)
+  if (dbOps.getWeeklyReportByDate(dateLabel)) {
+    res.json({ skipped: true, date: dateLabel })
+    return
+  }
+  const markdown = generateReport(dateLabel, cfg)
+  dbOps.insertWeeklyReport(dateLabel, markdown)
+  console.log(`[daemon] Informe generado manualmente: ${dateLabel}`)
+  res.json({ ok: true, date: dateLabel })
 })
 
 // ─── POST /api/weekly-reports/import-local — importar .md desde ~/.claude/reports ─
@@ -820,12 +910,32 @@ app.get('*', (_req: Request, res: Response) => {
  * 3. Hace broadcast vía SSE para que el watch muestre el coste actualizado
  */
 const onCostUpdate: CostUpdateCallback = (sessionId, cost) => {
+  // Ensure session row exists — sub-agent JSONLs arrive from the enricher without a
+  // prior hook event (Claude Code does not fire hooks for sub-agent sessions).
+  let sessionRow = dbOps.getSession(sessionId)
+  if (!sessionRow) {
+    dbOps.upsertSession({ id: sessionId, cwd: undefined, started_at: cost.firstTs ?? Date.now(), last_event_at: cost.firstTs ?? Date.now() })
+    sessionRow = dbOps.getSession(sessionId)
+  }
+
+  // Sub-agent detection: first time we see a session, check if its firstTs falls after
+  // a recent Agent PreToolUse from another session in the same CWD → tag as child.
+  if (!taggedSessionParents.has(sessionId) && cost.firstTs) {
+    taggedSessionParents.add(sessionId)
+    const cwd = sessionRow?.cwd
+    if (cwd) {
+      const agentInfo = lastAgentByCwd.get(cwd)
+      if (agentInfo && agentInfo.session_id !== sessionId && agentInfo.pre_ts < cost.firstTs) {
+        dbOps.updateSessionParent(sessionId, agentInfo.session_id)
+      }
+    }
+  }
+
   const events  = dbOps.getSessionEvents(sessionId)
   const report  = analyzeSession(events, cost.cost_usd)
 
   dbOps.updateSessionCost(sessionId, cost, report.efficiencyScore, report.loops.length)
 
-  const sessionRow = dbOps.getSession(sessionId)
   const startedAt = sessionRow?.started_at ?? Date.now()
   const sessionDurationMinutes = (Date.now() - startedAt) / 60_000
   const projectedHourlyUsd = sessionDurationMinutes > 0.5
@@ -915,11 +1025,109 @@ async function migrateSessionSummaries(limit = 5) {
   }
 }
 
+// ─── Report scheduler ─────────────────────────────────────────────────────────
+
+/** Número de semana ISO para lógica quincenal (semanas pares = informe). */
+function getISOWeek(date: Date): number {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
+  const day = d.getUTCDay() || 7
+  d.setUTCDate(d.getUTCDate() + 4 - day)
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1))
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7)
+}
+
+/**
+ * Devuelve el label YYYY-MM-DD si ahora es el momento de generar un informe,
+ * o null si no corresponde todavía.
+ */
+function getReportDateLabel(now: Date, cfg: ClaudetraceConfig): string | null {
+  const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+  if (hhmm !== cfg.reportTime) return null
+  if (now.getDay() !== cfg.reportDay) return null
+
+  if (cfg.reportFrequency === 'biweekly' && getISOWeek(now) % 2 !== 0) return null
+  if (cfg.reportFrequency === 'monthly'  && now.getDate() > 7)          return null
+
+  return now.toISOString().slice(0, 10)
+}
+
+/** Genera el markdown del informe para el período dado. */
+function generateReport(dateLabel: string, cfg: ClaudetraceConfig): string {
+  const periodDays = cfg.reportFrequency === 'monthly' ? 30 : cfg.reportFrequency === 'biweekly' ? 14 : 7
+  const endMs      = Date.now()
+  const startMs    = endMs - periodDays * 24 * 60 * 60 * 1000
+  const fromDate   = new Date(startMs).toISOString().slice(0, 10)
+
+  const sessions = dbOps.getAllSessions().filter(s => s.started_at >= startMs && s.started_at <= endMs)
+
+  const totalCost    = sessions.reduce((a, s) => a + (s.total_cost_usd        ?? 0), 0)
+  const totalInput   = sessions.reduce((a, s) => a + (s.total_input_tokens    ?? 0), 0)
+  const totalOutput  = sessions.reduce((a, s) => a + (s.total_output_tokens   ?? 0), 0)
+  const totalLoops   = sessions.reduce((a, s) => a + (s.loops_detected        ?? 0), 0)
+  const avgEff       = sessions.length > 0
+    ? Math.round(sessions.reduce((a, s) => a + (s.efficiency_score ?? 100), 0) / sessions.length)
+    : 100
+
+  const byProject = new Map<string, { sessions: number; cost: number }>()
+  for (const s of sessions) {
+    const key = s.project_path ? path.basename(s.project_path) : 'Sin proyecto'
+    const cur = byProject.get(key) ?? { sessions: 0, cost: 0 }
+    byProject.set(key, { sessions: cur.sessions + 1, cost: cur.cost + (s.total_cost_usd ?? 0) })
+  }
+  const topProjects = [...byProject.entries()]
+    .sort((a, b) => b[1].cost - a[1].cost)
+    .slice(0, 5)
+
+  const periodLabel = cfg.reportFrequency === 'monthly' ? 'mensual' : cfg.reportFrequency === 'biweekly' ? 'quincenal' : 'semanal'
+
+  let md = `# Informe ${periodLabel} — ${dateLabel}\n\n`
+  md += `> Período: ${fromDate} → ${dateLabel}\n\n`
+  md += `## Resumen\n\n`
+  md += `- **Sesiones**: ${sessions.length}\n`
+  md += `- **Costo total**: $${totalCost.toFixed(4)}\n`
+  md += `- **Tokens entrada**: ${(totalInput / 1_000_000).toFixed(2)}M\n`
+  md += `- **Tokens salida**: ${(totalOutput / 1_000_000).toFixed(2)}M\n`
+  md += `- **Eficiencia promedio**: ${avgEff}%\n`
+  md += `- **Loops detectados**: ${totalLoops}\n\n`
+
+  if (topProjects.length > 0) {
+    md += `## Proyectos más activos\n\n`
+    for (const [name, stats] of topProjects) {
+      md += `- **${name}**: ${stats.sessions} sesión${stats.sessions !== 1 ? 'es' : ''} · $${stats.cost.toFixed(4)}\n`
+    }
+    md += '\n'
+  }
+
+  if (sessions.length === 0) {
+    md += `> Sin actividad en este período.\n`
+  }
+
+  return md
+}
+
+const PID_FILE = `${process.env.HOME}/.claudestat/daemon.pid`
+
+function writePid() {
+  try {
+    fs.mkdirSync(`${process.env.HOME}/.claudestat`, { recursive: true })
+    fs.writeFileSync(PID_FILE, String(process.pid))
+  } catch {}
+}
+
+function cleanPid() {
+  try { fs.unlinkSync(PID_FILE) } catch {}
+}
+
 export function startDaemon() {
   const server = app.listen(PORT, '127.0.0.1', () => {
-    console.log(`\n● claudetrace daemon  →  http://localhost:${PORT}`)
+    writePid()
+    process.on('exit', cleanPid)
+    process.on('SIGTERM', () => { cleanPid(); process.exit(0) })
+    process.on('SIGINT',  () => { cleanPid(); process.exit(0) })
+
+    console.log(`\n● claudestat daemon  →  http://localhost:${PORT}`)
     console.log(`  Esperando eventos de Claude Code...\n`)
-    console.log(`  En otra terminal: \x1b[36mclaudetrace watch\x1b[0m\n`)
+    console.log(`  En otra terminal: \x1b[36mclaudestat watch\x1b[0m\n`)
 
     // Etiquetar sesiones históricas que no tienen proyecto asignado
     migrateSessionProjects()
@@ -941,8 +1149,20 @@ export function startDaemon() {
     // Iniciar el watcher de JSONL para enriquecimiento de coste
     startEnricher(onCostUpdate, onCompactDetected)
 
-    // Summaries IA solo si opt-in explícito (CLAUDETRACE_AI_SUMMARY=true)
-    if (process.env.CLAUDETRACE_AI_SUMMARY === 'true') {
+    // Scheduler de informes automáticos — corre cada minuto
+    setInterval(() => {
+      const cfg = readConfig()
+      if (!cfg.reportsEnabled) return
+      const dateLabel = getReportDateLabel(new Date(), cfg)
+      if (!dateLabel) return
+      if (dbOps.getWeeklyReportByDate(dateLabel)) return   // ya existe
+      const markdown = generateReport(dateLabel, cfg)
+      dbOps.insertWeeklyReport(dateLabel, markdown)
+      console.log(`[daemon] Informe generado automáticamente: ${dateLabel}`)
+    }, 60_000)
+
+    // Summaries IA solo si opt-in explícito (CLAUDESTAT_AI_SUMMARY=true)
+    if (process.env.CLAUDESTAT_AI_SUMMARY === 'true') {
       migrateSessionSummaries(5).catch(() => {})
     }
   })

@@ -1,4 +1,10 @@
+import { memo } from 'react'
 import { AreaChart, Area, ResponsiveContainer, Tooltip } from 'recharts'
+import {
+  Activity, Timer, Cpu, Flame, BrainCircuit, Files,
+  Settings2, Bell, CircleX, TriangleAlert, Info,
+  CheckCircle2, type LucideIcon,
+} from 'lucide-react'
 import type { MetaStats, MetaSnapshot, MetaAlert, CostInfo, QuotaData, SessionState } from '../types'
 
 interface Props {
@@ -8,8 +14,6 @@ interface Props {
   quota?:        QuotaData
   sessionState?: SessionState
 }
-
-const ENGRAM_LIMIT = 1_000_000
 
 function fmtTok(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -37,7 +41,11 @@ const S = {
     minWidth: 0,
     flexShrink: 0,
   },
-  label:  { color: '#7d8590', fontSize: 10, whiteSpace: 'nowrap' as const },
+  labelRow: {
+    display: 'flex', alignItems: 'center', gap: 4,
+    color: '#7d8590', fontSize: 10, whiteSpace: 'nowrap' as const,
+    marginBottom: 2,
+  },
   value:  { color: '#e6edf3', fontWeight: 700, fontSize: 13 },
   sub:    { color: '#7d8590', fontSize: 10 },
   sparkWrap: { width: 60, height: 28, flexShrink: 0 },
@@ -51,22 +59,27 @@ const S = {
     maxWidth: 400,
     flex: 1,
   },
+  alertLabelRow: {
+    display: 'flex', alignItems: 'center', gap: 4,
+    color: '#7d8590', fontSize: 10, marginBottom: 2,
+    whiteSpace: 'nowrap' as const,
+  },
   alert: (level: MetaAlert['level']): React.CSSProperties => {
     const colors = { info: '#58a6ff', warning: '#d29922', critical: '#f85149' }
     const c = colors[level]
     return {
-      fontSize: 10,
-      color: c,
-      background: c + '15',
-      border: `1px solid ${c}30`,
-      borderRadius: 3,
-      padding: '2px 6px',
+      display: 'flex', alignItems: 'center', gap: 5,
+      fontSize: 10, color: c,
+      background: c + '15', border: `1px solid ${c}30`,
+      borderRadius: 3, padding: '2px 6px',
       whiteSpace: 'nowrap' as const,
-      overflow: 'hidden',
-      textOverflow: 'ellipsis',
+      overflow: 'hidden', textOverflow: 'ellipsis',
     }
   },
-  noAlerts: { color: '#3fb950', fontSize: 10 } as React.CSSProperties,
+  noAlerts: {
+    display: 'flex', alignItems: 'center', gap: 4,
+    color: '#3fb950', fontSize: 10,
+  } as React.CSSProperties,
 }
 
 function Sparkline({ data, dataKey, color }: { data: MetaSnapshot[]; dataKey: keyof MetaSnapshot; color: string }) {
@@ -103,15 +116,18 @@ function Sparkline({ data, dataKey, color }: { data: MetaSnapshot[]; dataKey: ke
 }
 
 function KPICard({
-  icon, label, value, sub, sparkData, sparkKey, color
+  icon: Icon, label, value, sub, tooltip, sparkData, sparkKey, color
 }: {
-  icon: string; label: string; value: string; sub?: string
+  icon: LucideIcon; label: string; value: string; sub?: string; tooltip?: string
   sparkData: MetaSnapshot[]; sparkKey: keyof MetaSnapshot; color: string
 }) {
   return (
-    <div style={S.card}>
+    <div style={S.card} title={tooltip}>
       <div>
-        <div style={S.label}>{icon} {label}</div>
+        <div style={S.labelRow}>
+          <Icon size={10} />
+          <span>{label}</span>
+        </div>
         <div style={S.value}>{value}</div>
         {sub && <div style={S.sub}>{sub}</div>}
       </div>
@@ -120,7 +136,6 @@ function KPICard({
   )
 }
 
-/** Mini barra horizontal para mostrar uso de un modelo (horas / límite) */
 function ModelBar({ label, color, hours, limit }: { label: string; color: string; hours: number; limit: number }) {
   const pct = limit > 0 ? Math.min(100, Math.round(hours / limit * 100)) : null
   return (
@@ -141,7 +156,7 @@ function ModelBar({ label, color, hours, limit }: { label: string; color: string
           <span style={{ color: '#7d8590', fontSize: 9 }}>{pct}%</span>
         </>
       ) : (
-        <span style={{ color: '#7d8590', fontSize: 9 }}>sin límite</span>
+        <span style={{ color: '#7d8590', fontSize: 9 }}>no limit</span>
       )}
     </div>
   )
@@ -161,42 +176,43 @@ function fmtResetTime(resetAt: number): { relative: string; absolute: string } {
   const now    = Date.now()
   const ms     = resetAt - now
   const absStr = new Date(resetAt).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })
-  if (ms <= 0) return { relative: 'ahora', absolute: absStr }
+  if (ms <= 0) return { relative: 'now', absolute: absStr }
   const h = Math.floor(ms / 3_600_000)
   const m = Math.floor((ms % 3_600_000) / 60_000)
   const relative = h > 0 ? `${h}h ${m}m` : `${m}m`
   return { relative, absolute: absStr }
 }
 
-export function KPIBar({ meta, history, cost, quota, sessionState = 'idle' }: Props) {
-  // Contexto: viene de cost (datos del último mensaje del JSONL — puede tener lag de ~1 respuesta)
-  const contextPct = cost?.context_used && cost.context_window
-    ? Math.round(cost.context_used / cost.context_window * 100)
+const ALERT_ICONS: Record<MetaAlert['level'], LucideIcon> = {
+  info:     Info,
+  warning:  TriangleAlert,
+  critical: CircleX,
+}
+
+// Umbral real de auto-compact de Claude Code ≈ 85% de la ventana total.
+// keep in sync with TracePanel.tsx (SidebarKPI)
+const COMPACT_THRESHOLD = 0.85
+
+function KPIBarInner({ meta, history, cost, quota, sessionState = 'idle' }: Props) {
+  const compactWindow = cost?.context_window ? Math.round(cost.context_window * COMPACT_THRESHOLD) : null
+  const contextPct = cost?.context_used && compactWindow
+    ? Math.min(100, Math.round(cost.context_used / compactWindow * 100))
     : null
   const remaining  = contextPct !== null ? 100 - contextPct : null
-  // Umbral conservador: alerta temprana a 60% libre porque el dato lleva ~1 respuesta de lag
   const ctxColor   = remaining === null ? '#7d8590'
     : remaining < 15 ? '#f85149' : remaining < 35 ? '#d29922' : '#3fb950'
 
-  // Engramar: porcentaje del límite estimado 1M
-  const engramPct  = meta ? Math.round(meta.engramTokens / ENGRAM_LIMIT * 100) : null
-  const engramColor = engramPct === null ? '#7d8590'
-    : engramPct > 80 ? '#f85149' : engramPct > 60 ? '#d29922' : '#58a6ff'
-
-  // HANDOFF: semáforo por tamaño
-  const handoffColor = !meta || meta.handoffTokens === 0 ? '#7d8590'
-    : meta.handoffTokens > 5000 ? '#f85149'
-    : meta.handoffTokens > 2500 ? '#d29922'
+  const overheadColor = !meta || meta.contextOverheadTokens === 0 ? '#7d8590'
+    : meta.contextOverheadTokens > 20_000 ? '#f85149'
+    : meta.contextOverheadTokens > 10_000 ? '#d29922'
     : '#3fb950'
 
-  // Combinar alertas: del meta + del contexto
   const alerts: MetaAlert[] = []
   if (meta?.alerts) alerts.push(...meta.alerts)
-  // Umbrales conservadores: dato tiene ~1 respuesta de lag vs Claude Code real-time
   if (contextPct !== null && contextPct > 85) {
-    alerts.push({ level: 'critical', message: `Auto-compact muy pronto — ${remaining}% libre (dato: último msg)`, metric: 'context' })
+    alerts.push({ level: 'critical', message: `Auto-compact soon — ~${remaining}% until threshold`, metric: 'context' })
   } else if (contextPct !== null && contextPct > 65) {
-    alerts.push({ level: 'warning', message: `Contexto al ${contextPct}% — revisar terminal Claude Code`, metric: 'context' })
+    alerts.push({ level: 'warning', message: `Context at ${contextPct}% of auto-compact threshold`, metric: 'context' })
   }
 
   const sm = STATE_META[sessionState]
@@ -206,10 +222,13 @@ export function KPIBar({ meta, history, cost, quota, sessionState = 'idle' }: Pr
     <style>{`@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(1.4)} }`}</style>
     <div style={S.bar}>
 
-      {/* KPI: Estado de sesión */}
-      <div style={{ ...S.card, minWidth: 100 }}>
+      {/* KPI: Estado */}
+      <div style={{ ...S.card, minWidth: 100 }} title="Current state of the active session detected by claudestat.\nworking: Claude is executing tools · waiting: awaiting confirmation or input · idle: no activity">
         <div>
-          <div style={S.label}>⚡ Estado</div>
+          <div style={S.labelRow}>
+            <Activity size={10} />
+            <span>Status</span>
+          </div>
           <div style={{ ...S.value, color: sm.color, display: 'flex', alignItems: 'center', gap: 5 }}>
             {sm.pulse && (
               <span style={{
@@ -226,9 +245,12 @@ export function KPIBar({ meta, history, cost, quota, sessionState = 'idle' }: Pr
 
       {/* KPI: Quota 5h */}
       {quota && (
-        <div style={S.card}>
+        <div style={S.card} title="Estimate based on Claude Code only. Does not include usage from claude.ai web. For exact data: claude.ai → Settings → Usage.">
           <div>
-            <div style={S.label}>📊 Cuota 5h · {PLAN_LABEL[quota.detectedPlan] ?? quota.detectedPlan}</div>
+            <div style={S.labelRow}>
+              <Timer size={10} />
+              <span>Est. quota · {PLAN_LABEL[quota.detectedPlan] ?? quota.detectedPlan}</span>
+            </div>
             <div style={{
               ...S.value,
               color: quota.cyclePct > 85 ? '#f85149' : quota.cyclePct > 65 ? '#d29922' : '#e6edf3',
@@ -239,13 +261,12 @@ export function KPIBar({ meta, history, cost, quota, sessionState = 'idle' }: Pr
             {(() => {
               const reset = fmtResetTime(quota.cycleResetAt ?? (Date.now() + quota.cycleResetMs))
               return (
-                <div style={S.sub} title="Rolling window desde el primer mensaje — más preciso que época UTC">
-                  reset en {reset.relative} · {reset.absolute}
+                <div style={S.sub} title="Rolling window from first message in Claude Code">
+                  resets in {reset.relative} · {reset.absolute}
                 </div>
               )
             })()}
           </div>
-          {/* Mini progress bar */}
           <div style={{ width: 6, height: 36, background: '#21262d', borderRadius: 3, overflow: 'hidden', flexShrink: 0 }}>
             <div style={{
               width: '100%',
@@ -259,69 +280,60 @@ export function KPIBar({ meta, history, cost, quota, sessionState = 'idle' }: Pr
         </div>
       )}
 
-      {/* KPI: Modelos (uso semanal por modelo) */}
+      {/* KPI: Modelos */}
       {quota && (
-        <div style={S.card}>
+        <div style={S.card} title="Model activity hours this week, estimated from Claude Code. Does not include usage from claude.ai web.">
           <div>
-            <div style={S.label}>🤖 Modelos · esta semana</div>
+            <div style={S.labelRow}>
+              <Cpu size={10} />
+              <span>Models · this week</span>
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
-              {/* Sonnet — siempre visible */}
-              <ModelBar
-                label="Sonnet"
-                color="#58a6ff"
-                hours={quota.weeklyHoursSonnet}
-                limit={quota.weeklyLimitSonnet}
-              />
-              {/* Opus — solo si tiene límite (plan Max) */}
+              <ModelBar label="Sonnet" color="#58a6ff" hours={quota.weeklyHoursSonnet} limit={quota.weeklyLimitSonnet} />
               {quota.weeklyLimitOpus > 0 && (
-                <ModelBar
-                  label="Opus"
-                  color="#d29922"
-                  hours={quota.weeklyHoursOpus}
-                  limit={quota.weeklyLimitOpus}
-                />
+                <ModelBar label="Opus" color="#d29922" hours={quota.weeklyHoursOpus} limit={quota.weeklyLimitOpus} />
               )}
-              {/* Haiku — solo si realmente se usó (no tiene límite semanal oficial) */}
               {(quota.weeklyHoursHaiku ?? 0) > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <span style={{ color: '#3fb950', fontSize: 9, fontWeight: 700, width: 42, flexShrink: 0 }}>Haiku</span>
-                  <span style={{ color: '#e6edf3', fontSize: 10, fontWeight: 600 }}>{quota.weeklyHoursHaiku}h</span>
-                  <span style={{ color: '#7d8590', fontSize: 9 }}>sin límite</span>
-                </div>
+                <ModelBar label="Haiku" color="#3fb950" hours={quota.weeklyHoursHaiku!} limit={0} />
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* KPI: Burn rate */}
+      {/* KPI: Consumo tok/min (burn rate) */}
       {quota && quota.burnRateTokensPerMin > 0 && (
-        <div style={S.card}>
+        <div style={S.card} title="Tokens consumed per minute in the last 30 min (input + output).\nSonnet 4.6: ~$3/M input · ~$15/M output. A high value indicates intensive sessions or loops.">
           <div>
-            <div style={S.label}>🔥 Burn rate</div>
+            <div style={S.labelRow}>
+              <Flame size={10} />
+              <span>Burn rate</span>
+            </div>
             <div style={S.value}>{quota.burnRateTokensPerMin.toLocaleString()} tok/min</div>
-            <div style={S.sub}>últimos 30 min</div>
+            <div style={S.sub}>last 30 min</div>
           </div>
         </div>
       )}
 
-      {/* KPI: Contexto sesión */}
-      <div style={S.card}>
+      {/* KPI: Contexto */}
+      <div style={S.card} title={`% free calculated over the auto-compact threshold (${Math.round(COMPACT_THRESHOLD * 100)}% of total window).\nAligns with "X% until auto-compact" in the Claude Code terminal.\nTotal window: ${fmtTok(cost?.context_window ?? 200_000)} · Threshold: ${fmtTok(compactWindow ?? 170_000)}`}>
         <div>
-          <div style={S.label}>🧠 Contexto sesión</div>
-          <div style={{ ...S.value, color: ctxColor }}>
-            {remaining !== null ? `${remaining}% libre` : '—'}
+          <div style={S.labelRow}>
+            <BrainCircuit size={10} />
+            <span>Session context</span>
           </div>
-          {cost?.context_used ? (
+          <div style={{ ...S.value, color: ctxColor }}>
+            {remaining !== null ? `~${remaining}% free` : '—'}
+          </div>
+          {cost?.context_used && compactWindow ? (
             <div style={S.sub}>
-              {fmtTok(cost.context_used)} / {fmtTok(cost.context_window ?? 200_000)}
-              <span style={{ color: '#7d859066', marginLeft: 4 }}>~último msg</span>
+              {fmtTok(cost.context_used)} / {fmtTok(compactWindow)}
+              <span style={{ color: '#7d859066', marginLeft: 4 }}>threshold</span>
             </div>
           ) : (
-            <div style={S.sub}>calculando…</div>
+            <div style={S.sub}>calculating…</div>
           )}
         </div>
-        {/* Mini progress bar vertical */}
         <div style={{ width: 6, height: 36, background: '#21262d', borderRadius: 3, overflow: 'hidden', flexShrink: 0 }}>
           {remaining !== null && (
             <div style={{
@@ -336,46 +348,39 @@ export function KPIBar({ meta, history, cost, quota, sessionState = 'idle' }: Pr
         </div>
       </div>
 
-      {/* KPI: Engram tokens */}
+      {/* KPI: Archivos de contexto */}
       <KPICard
-        icon="🗃️" label="Engram memoria"
-        value={meta ? fmtTok(meta.engramTokens) : '—'}
-        sub={engramPct !== null ? `${engramPct}% de 1M · ${meta?.engramFileCount ?? 0} archivos` : undefined}
-        sparkData={history} sparkKey="engramTokens" color={engramColor}
-      />
-
-      {/* KPI: HANDOFF activo */}
-      <KPICard
-        icon="📋" label="HANDOFF activo"
-        value={meta ? (meta.handoffTokens > 0 ? `~${fmtTok(meta.handoffTokens)} tok` : 'no encontrado') : '—'}
-        sub={meta && meta.handoffTokens > 0 ? (
-          meta.handoffTokens > 5000 ? '⚠ muy largo' :
-          meta.handoffTokens > 2500 ? '⚠ largo' : '✓ ok'
-        ) : undefined}
-        sparkData={history} sparkKey="handoffTokens" color={handoffColor}
-      />
-
-      {/* KPI: Config (settings + CLAUDE.md) */}
-      <KPICard
-        icon="⚙️" label="Config + instrucciones"
-        value={meta ? `~${fmtTok(meta.configTokens)} tok` : '—'}
-        sub="settings + CLAUDE.md"
-        sparkData={history} sparkKey="configTokens" color="#7d8590"
+        icon={Files} label="Context files"
+        value={meta ? (meta.contextOverheadTokens > 0 ? `~${fmtTok(meta.contextOverheadTokens)} tok` : 'none') : '—'}
+        sub={meta && meta.contextFiles.length > 0
+          ? `${meta.contextFiles.length} file${meta.contextFiles.length > 1 ? 's' : ''} detected`
+          : meta ? 'none detected' : undefined
+        }
+        tooltip={meta?.contextFiles.map(f => `${f.label}: ~${fmtTok(f.tokens)} tok`).join('\n')}
+        sparkData={history} sparkKey="contextOverheadTokens" color={overheadColor}
       />
 
       {/* Alertas */}
       <div style={S.alertsWrap}>
-        <div style={{ ...S.label, marginBottom: 2 }}>
-          {alerts.length > 0 ? `🔔 ${alerts.length} alerta${alerts.length > 1 ? 's' : ''}` : '🔔 Alertas'}
+        <div style={S.alertLabelRow}>
+          <Bell size={10} />
+          <span>{alerts.length > 0 ? `${alerts.length} alert${alerts.length > 1 ? 's' : ''}` : 'Alerts'}</span>
         </div>
         {alerts.length === 0 ? (
-          <div style={S.noAlerts}>✓ Todo ok</div>
+          <div style={S.noAlerts}>
+            <CheckCircle2 size={11} />
+            <span>All good</span>
+          </div>
         ) : (
-          alerts.slice(0, 3).map((a, i) => (
-            <div key={i} style={S.alert(a.level)}>
-              {a.level === 'critical' ? '🔴' : a.level === 'warning' ? '🟡' : '🔵'} {a.message}
-            </div>
-          ))
+          alerts.slice(0, 3).map((a, i) => {
+            const AlertIcon = ALERT_ICONS[a.level]
+            return (
+              <div key={i} style={S.alert(a.level)}>
+                <AlertIcon size={10} />
+                {a.message}
+              </div>
+            )
+          })
         )}
       </div>
 
@@ -383,3 +388,5 @@ export function KPIBar({ meta, history, cost, quota, sessionState = 'idle' }: Pr
     </>
   )
 }
+
+export const KPIBar = memo(KPIBarInner)

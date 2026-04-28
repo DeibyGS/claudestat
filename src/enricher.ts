@@ -104,6 +104,7 @@ function processJSONL(filePath: string): CostUpdate | null {
   let lastInputTokens  = 0
   let lastOutputTokens = 0
   let lastModel: string | undefined = undefined   // stays undefined until first real assistant line
+  let firstTs: number | undefined = undefined     // timestamp of first assistant message
 
   for (const raw of fileContent.split('\n')) {
     const line = raw.trim()
@@ -117,6 +118,11 @@ function processJSONL(filePath: string): CostUpdate | null {
       const model = (msg?.model as string) ?? undefined
 
       if (!usage) continue
+
+      // Capture timestamp of first assistant message for sub-agent detection
+      if (firstTs === undefined && obj.timestamp) {
+        try { firstTs = new Date(obj.timestamp as string).getTime() } catch {}
+      }
 
       totals.input_tokens   += usage.input_tokens                  ?? 0
       totals.output_tokens  += usage.output_tokens                 ?? 0
@@ -156,6 +162,7 @@ function processJSONL(filePath: string): CostUpdate | null {
     }
   }
   totals.lastModel = lastModel
+  totals.firstTs   = firstTs
 
   fileOffsets.set(filePath, currentSize)
   return totals
@@ -165,12 +172,18 @@ function processJSONL(filePath: string): CostUpdate | null {
 
 import type { BlockCostEntry } from './db'
 
+// Caché con TTL 5 min — evita re-leer el filesystem completo en cada reconexión SSE
+const blockCostCache = new Map<string, { data: BlockCostEntry[]; ts: number }>()
+const BLOCK_COST_TTL = 5 * 60_000
+
 /**
  * Lee el JSONL completo de una sesión y devuelve los costos de CADA bloque
  * (una entrada por mensaje `assistant`). Usado en el init SSE para restaurar
  * los blockCosts históricos cuando el dashboard se reconecta.
  */
 export function getAllBlockCostsForSession(sessionId: string): BlockCostEntry[] {
+  const cached = blockCostCache.get(sessionId)
+  if (cached && Date.now() - cached.ts < BLOCK_COST_TTL) return cached.data
   try {
     if (!fs.existsSync(PROJECTS_DIR)) return []
     for (const dir of fs.readdirSync(PROJECTS_DIR)) {
@@ -179,29 +192,60 @@ export function getAllBlockCostsForSession(sessionId: string): BlockCostEntry[] 
       const filePath = path.join(dirPath, `${sessionId}.jsonl`)
       if (!fs.existsSync(filePath)) continue
 
+      // Agrupar por bloque (prompt humano real → todos sus sub-turnos assistant)
+      // Un bloque = un prompt del usuario + todos los mensajes assistant que Claude
+      // genera en respuesta (puede ser más de uno si usa múltiples rondas de tool calls).
       const result: BlockCostEntry[] = []
+      let current: BlockCostEntry | null = null
       const content = fs.readFileSync(filePath, 'utf8')
+
       for (const raw of content.split('\n')) {
         const line = raw.trim()
         if (!line) continue
         try {
           const obj = JSON.parse(line)
-          if (obj.type !== 'assistant') continue
-          const usage = obj.message?.usage
-          const model = (obj.message?.model as string) ?? 'claude-sonnet-4-6'
-          if (!usage) continue
-          const price     = PRICING[model] ?? DEFAULT_PRICING
-          const M         = 1_000_000
-          const inputUsd  = ((usage.input_tokens                  ?? 0) * price.input       +
-                             (usage.cache_read_input_tokens       ?? 0) * price.cacheRead   +
-                             (usage.cache_creation_input_tokens   ?? 0) * price.cacheCreate) / M
-          const outputUsd = ((usage.output_tokens ?? 0) * price.output) / M
-          const inputTokens  = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
-          const outputTokens = usage.output_tokens ?? 0
-          if (inputUsd + outputUsd > 0) result.push({ inputUsd, outputUsd, totalUsd: inputUsd + outputUsd, inputTokens, outputTokens })
+
+          // Detectar prompt humano real (no tool_result, no system-reminder)
+          if (obj.type === 'human' || obj.type === 'user') {
+            const msgContent = obj.message?.content
+            // Saltar tool_result — son respuestas de herramientas, no prompts del usuario
+            if (Array.isArray(msgContent) && msgContent[0]?.type === 'tool_result') continue
+            const text = typeof msgContent === 'string' ? msgContent
+              : Array.isArray(msgContent)
+                ? ((msgContent as any[]).find((c: any) => c?.type === 'text')?.text ?? '')
+                : ''
+            if (text.includes('<system-reminder>') || text.includes('<command-name>')) continue
+            // Nuevo bloque: crear acumulador y añadir a resultados
+            current = { inputUsd: 0, outputUsd: 0, totalUsd: 0, inputTokens: 0, outputTokens: 0 }
+            result.push(current)
+          }
+
+          // Sub-turno de assistant: acumular en el bloque actual
+          if (obj.type === 'assistant' && current) {
+            const usage = obj.message?.usage
+            const model = (obj.message?.model as string) ?? 'claude-sonnet-4-6'
+            if (!usage) continue
+            const price    = PRICING[model] ?? DEFAULT_PRICING
+            const M        = 1_000_000
+            const inUsd    = ((usage.input_tokens                  ?? 0) * price.input       +
+                              (usage.cache_read_input_tokens       ?? 0) * price.cacheRead   +
+                              (usage.cache_creation_input_tokens   ?? 0) * price.cacheCreate) / M
+            const outUsd   = ((usage.output_tokens ?? 0) * price.output) / M
+            const inTok    = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
+            const outTok   = usage.output_tokens ?? 0
+            current.inputUsd     += inUsd
+            current.outputUsd    += outUsd
+            current.totalUsd     += inUsd + outUsd
+            current.inputTokens  += inTok
+            current.outputTokens += outTok
+          }
         } catch {}
       }
-      return result
+
+      // Filtrar bloques vacíos (sin coste — pueden ser prompts sin respuesta aún)
+      const filtered = result.filter(b => b.totalUsd > 0)
+      blockCostCache.set(sessionId, { data: filtered, ts: Date.now() })
+      return filtered
     }
   } catch {}
   return []
@@ -212,7 +256,7 @@ export function getAllBlockCostsForSession(sessionId: string): BlockCostEntry[] 
 export interface SessionPrompt {
   index: number   // 1-based — corresponde al bloque del mismo índice
   ts:    number   // timestamp ms
-  text:  string   // texto del prompt (truncado a 400 chars)
+  text:  string   // texto del prompt completo
 }
 
 /**
@@ -268,7 +312,7 @@ export function getSessionPrompts(sessionId: string): SessionPrompt[] {
             results.push({
               index,
               ts,
-              text: text.length > 400 ? text.slice(0, 397) + '…' : text,
+              text,
             })
           } catch {}
         }
@@ -310,6 +354,10 @@ export function startEnricher(onUpdate: CostUpdateCallback, onCompact?: CompactD
     }
   })
 
+  // Debounce por archivo: evita doble-procesamiento si chokidar emite eventos rápidos
+  // para el mismo archivo (común en algunos sistemas de archivos).
+  const pendingFiles = new Map<string, ReturnType<typeof setTimeout>>()
+
   const handleFile = (filePath: string) => {
     // Extract sessionId from filename: "path/to/{sessionId}.jsonl"
     const sessionId = path.basename(filePath, '.jsonl')
@@ -317,23 +365,31 @@ export function startEnricher(onUpdate: CostUpdateCallback, onCompact?: CompactD
     // Ignore files that don't look like session UUIDs
     if (!sessionId.includes('-') || sessionId.length < 10) return
 
-    const cost = processJSONL(filePath)
-    if (cost && cost.cost_usd >= 0) {
-      // Detect auto-compact: context drops sharply within the same session
-      // (Claude compacts and restarts from near-zero active tokens)
-      const prev = prevContextBySession.get(sessionId)
-      if (
-        onCompact &&
-        prev !== undefined &&
-        prev > 140_000 &&
-        cost.context_used < prev * 0.5
-      ) {
-        onCompact(sessionId)
-      }
-      prevContextBySession.set(sessionId, cost.context_used)
+    // Cancelar procesamiento previo pendiente para este archivo
+    const existing = pendingFiles.get(filePath)
+    if (existing) clearTimeout(existing)
 
-      onUpdate(sessionId, cost)
-    }
+    // Procesar con un pequeño delay (100ms) para colapsar eventos duplicados
+    const timer = setTimeout(() => {
+      pendingFiles.delete(filePath)
+      const cost = processJSONL(filePath)
+      if (cost && cost.cost_usd >= 0) {
+        // Detect auto-compact: context drops sharply within the same session
+        // (Claude compacts and restarts from near-zero active tokens)
+        const prev = prevContextBySession.get(sessionId)
+        if (
+          onCompact &&
+          prev !== undefined &&
+          prev > 140_000 &&
+          cost.context_used < prev * 0.5
+        ) {
+          onCompact(sessionId)
+        }
+        prevContextBySession.set(sessionId, cost.context_used)
+        onUpdate(sessionId, cost)
+      }
+    }, 100)
+    pendingFiles.set(filePath, timer)
   }
 
   // Listen to both 'change' (appends to existing file) and 'add' (new session file).

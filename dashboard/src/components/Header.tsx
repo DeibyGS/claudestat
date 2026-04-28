@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Radio, History, FolderGit2, FolderOpen, Zap, Settings2, Wrench, Timer, BarChart2, type LucideIcon } from 'lucide-react'
+import { Radio, History, FolderGit2, FolderOpen, Zap, Settings2, Wrench, Layers, TrendingUp, type LucideIcon } from 'lucide-react'
 import type { AppState, TraceEvent, QuotaData } from '../types'
+import { Tip } from './Tip'
 
 // Inject keyframes once (tooltip fade-in + tool pulse)
 ;(function injectKF() {
@@ -17,11 +18,11 @@ import type { AppState, TraceEvent, QuotaData } from '../types'
   document.head.appendChild(s)
 })()
 
-export type Tab = 'live' | 'history' | 'projects' | 'usage'
+export type Tab = 'live' | 'history' | 'projects' | 'analytics' | 'system'
 
 interface Props {
   state:          AppState
-  connected:      boolean
+  connStatus:     'idle' | 'connected' | 'error'
   activeTab:      Tab
   onTabChange:    (t: Tab) => void
   activeProject:  string | null
@@ -29,11 +30,23 @@ interface Props {
   quota?:         QuotaData
 }
 
+const CONN_LABEL: Record<string, string> = {
+  idle:      '○ Starting',
+  connected: '● Connected',
+  error:     '● Daemon down',
+}
+const CONN_COLOR: Record<string, string> = {
+  idle:      '#8b949e',
+  connected: '#3fb950',
+  error:     '#f85149',
+}
+
 const TAB_LABELS: { id: Tab; label: string; icon: LucideIcon }[] = [
-  { id: 'live',     label: 'En vivo',   icon: Radio      },
-  { id: 'history',  label: 'Historial', icon: History    },
-  { id: 'projects', label: 'Proyectos', icon: FolderGit2 },
-  { id: 'usage',    label: 'Uso',       icon: BarChart2  },
+  { id: 'live',      label: 'Live',      icon: Radio      },
+  { id: 'history',   label: 'History',   icon: History    },
+  { id: 'projects',  label: 'Projects',  icon: FolderGit2 },
+  { id: 'analytics', label: 'Analytics', icon: TrendingUp  },
+  { id: 'system',    label: 'System',    icon: Layers     },
 ]
 
 function fmtUptime(startedAt: number): string {
@@ -46,7 +59,7 @@ function fmtUptime(startedAt: number): string {
 }
 
 function fmtReset(ms: number): string {
-  if (ms <= 0) return 'ahora'
+  if (ms <= 0) return 'now'
   const h = Math.floor(ms / 3_600_000)
   const m = Math.floor((ms % 3_600_000) / 60_000)
   return h > 0 ? `${h}h ${m}m` : `${m}m`
@@ -75,7 +88,7 @@ const S = {
     display: 'flex', alignItems: 'center', gap: 8,
     marginRight: 4, flexShrink: 0,
   } as React.CSSProperties,
-  dot: (connected: boolean): React.CSSProperties => ({
+  dot: (connected: boolean, status?: string): React.CSSProperties => ({
     width: 7, height: 7, borderRadius: '50%',
     background: connected ? '#3fb950' : '#6e7681',
     flexShrink: 0,
@@ -169,7 +182,7 @@ function ContextBadge({ remaining, contextPct, color }: { remaining: number; con
       onMouseLeave={() => setHovered(false)}
     >
       <ContextBar pct={contextPct} color={color} />
-      ~{remaining}% libre
+      ~{remaining}% free
 
       {hovered && (
         <div style={{
@@ -190,7 +203,7 @@ function ContextBadge({ remaining, contextPct, color }: { remaining: number; con
           {/* Valor principal */}
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 8 }}>
             <span style={{ color, fontWeight: 700, fontSize: 20 }}>~{remaining}%</span>
-            <span style={{ color: '#7d8590', fontSize: 11 }}>contexto libre</span>
+            <span style={{ color: '#7d8590', fontSize: 11 }}>context free</span>
           </div>
 
           {/* Barra grande */}
@@ -205,8 +218,8 @@ function ContextBadge({ remaining, contextPct, color }: { remaining: number; con
 
           {/* Nota */}
           <div style={{ color: '#484f58', fontSize: 10, lineHeight: 1.5 }}>
-            Calculado sobre el umbral de auto-compact (~85% de la ventana total).
-            Se alinea con "X% until auto-compact" del terminal de Claude Code.
+            Calculated based on the auto-compact threshold (~85% of total window).
+            Matches "X% until auto-compact" shown in Claude Code terminal.
           </div>
         </div>
       )}
@@ -214,39 +227,10 @@ function ContextBadge({ remaining, contextPct, color }: { remaining: number; con
   )
 }
 
-function Tip({ children, content }: { children: React.ReactNode; content: React.ReactNode }) {
-  const [hovered, setHovered] = useState(false)
-  return (
-    <span
-      style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      {children}
-      {hovered && (
-        <div style={{
-          position: 'absolute',
-          top: 'calc(100% + 8px)',
-          right: 0,
-          zIndex: 200,
-          background: '#161b22',
-          border: '1px solid #30363d',
-          borderRadius: 7,
-          padding: '10px 13px',
-          minWidth: 180,
-          maxWidth: 260,
-          boxShadow: '0 8px 24px #00000066',
-          pointerEvents: 'none',
-          animation: 'tipFadeIn 0.15s ease forwards',
-        }}>
-          {content}
-        </div>
-      )}
-    </span>
-  )
-}
+// Tip re-exported from shared component — see Tip.tsx
 
-export function Header({ state, connected, activeTab, onTabChange, activeProject, onOpenConfig, quota }: Props) {
+export function Header({ state, connStatus, activeTab, onTabChange, activeProject, onOpenConfig, quota }: Props) {
+  const connected = connStatus === 'connected'
   const { sessionId, cost, startedAt } = state
 
   // C.14 — tool activo: último tool_start sin tool_end correspondiente
@@ -261,15 +245,6 @@ export function Header({ state, connected, activeTab, onTabChange, activeProject
       })()
     : null
 
-  // Umbral real de auto-compact de Claude Code ≈ 85% de la ventana total.
-  // Calculamos el % usado sobre ese umbral para alinearnos con lo que muestra Claude.
-  const COMPACT_THRESHOLD = 0.85
-  const contextPct = cost?.context_used && cost.context_window
-    ? Math.min(100, Math.round(cost.context_used / (cost.context_window * COMPACT_THRESHOLD) * 100)) : null
-  const remaining = contextPct !== null ? 100 - contextPct : null
-  const ctxColor  = remaining === null ? '#3fb950'
-    : remaining < 20 ? '#f85149' : remaining < 40 ? '#d29922' : '#3fb950'
-
   const projectName = activeProject ? activeProject.split('/').at(-1) : null
   const hasSession  = Boolean(sessionId)
   const costUsd     = cost?.cost_usd ?? 0
@@ -278,20 +253,22 @@ export function Header({ state, connected, activeTab, onTabChange, activeProject
   return (
     <div style={S.header}>
       {/* Brand */}
-      <Tip content={
+      <Tip align="left" content={
         <div>
-          <div style={{ color: connected ? '#3fb950' : '#f85149', fontWeight: 700, fontSize: 13, marginBottom: 6 }}>
-            {connected ? '● Conectado' : '● Desconectado'}
+          <div style={{ color: CONN_COLOR[connStatus], fontWeight: 700, fontSize: 13, marginBottom: 6 }}>
+            {CONN_LABEL[connStatus]}
           </div>
           <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
-            Daemon escuchando en localhost:7337<br />
-            Datos en tiempo real vía SSE
+            {connStatus === 'error'
+              ? <>Daemon not responding — retrying...<br />Check: <code>claudestat start</code></>
+              : <>Daemon listening on localhost:7337<br />Real-time data via SSE</>
+            }
           </div>
         </div>
       }>
         <div style={S.brand}>
-          <div style={S.dot(connected)} />
-          <span style={S.brandName}>claudetrace</span>
+          <div style={{ ...S.dot(connected), background: CONN_COLOR[connStatus], boxShadow: connected ? `0 0 5px ${CONN_COLOR[connStatus]}` : undefined }} />
+          <span style={S.brandName}>claudestat</span>
         </div>
       </Tip>
 
@@ -323,7 +300,7 @@ export function Header({ state, connected, activeTab, onTabChange, activeProject
                 {cost?.model}
               </div>
               <div style={{ color: '#7d8590', fontSize: 10 }}>
-                Modelo activo en la sesión actual
+                Active model in current session
               </div>
             </div>
           }>
@@ -343,10 +320,10 @@ export function Header({ state, connected, activeTab, onTabChange, activeProject
         {quota && quota.weeklyHoursHaiku > 0 && (
           <Tip content={
             <div>
-              <div style={{ color: '#3fb950', fontWeight: 700, fontSize: 13, marginBottom: 5 }}>Haiku activo</div>
+              <div style={{ color: '#3fb950', fontWeight: 700, fontSize: 13, marginBottom: 5 }}>Haiku active</div>
               <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
-                {quota.weeklyHoursHaiku.toFixed(1)}h usadas esta semana<br />
-                Corre en sub-agentes (code-explorer, devops…)
+                {quota.weeklyHoursHaiku.toFixed(1)}h used this week<br />
+                Running in sub-agents (code-explorer, devops…)
               </div>
             </div>
           }>
@@ -362,48 +339,22 @@ export function Header({ state, connected, activeTab, onTabChange, activeProject
           </Tip>
         )}
 
-        {/* Cuota del ciclo 5h */}
-        {quota && (
+        {/* Proyecto activo */}
+        {projectName && (
           <Tip content={
-            <div>
-              <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 13, marginBottom: 5 }}>
-                Plan {quota.detectedPlan === 'pro' ? 'Pro' : quota.detectedPlan === 'max5' ? 'Max 5×' : quota.detectedPlan === 'max20' ? 'Max 20×' : 'Free'}
-                <span style={{ color: '#484f58', fontWeight: 400, fontSize: 10, marginLeft: 6 }}>(auto-detectado)</span>
-              </div>
-              <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.7 }}>
-                {quota.cyclePrompts} / {quota.cycleLimit} prompts en los últimos 5h<br />
-                Reset en {fmtReset(quota.cycleResetAt ? quota.cycleResetAt - Date.now() : quota.cycleResetMs)}<br />
-                <span style={{ color: '#3d444d' }}>El plan se infiere del máximo histórico de prompts/ciclo</span>
-              </div>
-              <div style={{ marginTop: 8, height: 4, background: '#30363d', borderRadius: 2, overflow: 'hidden' }}>
-                <div style={{
-                  width: `${Math.min(quota.cyclePct, 100)}%`, height: '100%',
-                  background: quota.cyclePct > 85 ? '#f85149' : quota.cyclePct > 65 ? '#d29922' : '#3fb950',
-                  borderRadius: 2, transition: 'width 0.5s',
-                }} />
+            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+              <div style={{ fontWeight: 700, color: '#79c0ff', marginBottom: 4 }}>Active project</div>
+              <div style={{ color: '#7d8590' }}>Working directory detected by claudestat</div>
+              <div style={{ color: '#484f58', marginTop: 6, fontFamily: 'monospace', fontSize: 10, wordBreak: 'break-all' }}>
+                {activeProject}
               </div>
             </div>
           }>
-            <span style={{
-              display: 'inline-flex', alignItems: 'center', gap: 5,
-              background: '#21262d', border: '1px solid #30363d',
-              borderRadius: 5, padding: '2px 8px',
-              fontSize: 11, fontWeight: 600,
-              color: quota.cyclePct > 85 ? '#f85149' : quota.cyclePct > 65 ? '#d29922' : '#7d8590',
-              flexShrink: 0, cursor: 'default',
-            }}>
-              <Timer size={10} />
-              {quota.cyclePct}% · {fmtReset(quota.cycleResetAt ? quota.cycleResetAt - Date.now() : quota.cycleResetMs)}
+            <span style={S.projectBadge}>
+              <FolderOpen size={11} />
+              {projectName}
             </span>
           </Tip>
-        )}
-
-        {/* Proyecto activo */}
-        {projectName && (
-          <span style={S.projectBadge}>
-            <FolderOpen size={11} />
-            {projectName}
-          </span>
         )}
 
         {/* Costo de sesión (solo si hay sesión activa y costo > 0) */}
@@ -414,9 +365,9 @@ export function Header({ state, connected, activeTab, onTabChange, activeProject
                 {fmtCost(costUsd)}
               </div>
               <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
-                Costo acumulado de la sesión actual.<br />
-                Solo incluye uso desde Claude Code,<br />
-                no desde claude.ai web.
+                Accumulated cost of the current session.<br />
+                Only includes usage from Claude Code,<br />
+                not from claude.ai web.
               </div>
             </div>
           }>
@@ -434,21 +385,12 @@ export function Header({ state, connected, activeTab, onTabChange, activeProject
                 {fmtUptime(startedAt)}
               </div>
               <div style={{ color: '#7d8590', fontSize: 10 }}>
-                Inicio: {new Date(startedAt).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })}
+                Start: {new Date(startedAt).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' })}
               </div>
             </div>
           }>
             <UptimeBadge startedAt={startedAt} />
           </Tip>
-        )}
-
-        {/* Contexto restante (solo en live) */}
-        {activeTab === 'live' && remaining !== null && (
-          <ContextBadge
-            remaining={remaining}
-            contextPct={contextPct!}
-            color={ctxColor}
-          />
         )}
 
         {/* Tool activo (C.14) */}
@@ -470,14 +412,14 @@ export function Header({ state, connected, activeTab, onTabChange, activeProject
         {!connected && (
           <span style={S.disconnected}>
             <Zap size={11} />
-            desconectado
+            disconnected
           </span>
         )}
 
-        {/* Botón configuración */}
+        {/* Settings button */}
         <button
           onClick={onOpenConfig}
-          title="Configuración"
+          title="Settings"
           style={{
             display: 'flex', alignItems: 'center',
             background: 'none', border: '1px solid transparent',
@@ -509,7 +451,7 @@ function UptimeBadge({ startedAt }: { startedAt: number }) {
       background: '#21262d', border: '1px solid #30363d',
       borderRadius: 5, padding: '2px 8px',
       fontSize: 11, fontWeight: 500, color: '#8b949e',
-    }} title="Duración de la sesión actual">
+    }} title="Current session duration">
       {fmtUptime(startedAt)}
     </span>
   )

@@ -11,9 +11,9 @@
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
-const CLAUDETRACE_DIR = path.join(os.homedir(), '.claudetrace')
+const CLAUDESTAT_DIR = path.join(os.homedir(), '.claudestat')
 const CLAUDE_SETTINGS = path.join(os.homedir(), '.claude', 'settings.json')
-const HOOKS_DIR       = path.join(CLAUDETRACE_DIR, 'hooks')
+const HOOKS_DIR       = path.join(CLAUDESTAT_DIR, 'hooks')
 const HOOK_SCRIPT     = path.join(HOOKS_DIR, 'event.js')
 
 function installHookScript() {
@@ -64,9 +64,9 @@ export function installHooks() {
   for (const hookType of hookTypes) {
     if (!settings.hooks[hookType]) settings.hooks[hookType] = []
 
-    // Verificar si ya existe un hook de claudetrace para este tipo
+    // Verificar si ya existe un hook de claudestat para este tipo
     const exists = settings.hooks[hookType].some((entry: any) =>
-      entry.hooks?.some((h: any) => typeof h.command === 'string' && h.command.includes('claudetrace'))
+      entry.hooks?.some((h: any) => typeof h.command === 'string' && h.command.includes('claudestat'))
     )
 
     if (!exists) {
@@ -106,12 +106,12 @@ export function uninstallHooks() {
   for (const hookType of Object.keys(settings.hooks)) {
     const before = settings.hooks[hookType].length
     settings.hooks[hookType] = settings.hooks[hookType].filter((entry: any) =>
-      !entry.hooks?.some((h: any) => typeof h.command === 'string' && h.command.includes('claudetrace'))
+      !entry.hooks?.some((h: any) => typeof h.command === 'string' && h.command.includes('claudestat'))
     )
     removed += before - settings.hooks[hookType].length
   }
 
   fs.writeFileSync(CLAUDE_SETTINGS, JSON.stringify(settings, null, 2))
-  console.log(`✅ ${removed} hooks de claudetrace eliminados.`)
+  console.log(`✅ ${removed} hooks de claudestat eliminados.`)
   console.log('   Reiniciá Claude Code para que tome efecto.\n')
 }

@@ -3,13 +3,13 @@ import { BarChart, Bar, ResponsiveContainer, Cell, Tooltip as RechartsTip } from
 import {
   FileText, FilePlus, Pencil, Terminal, FolderSearch, Search,
   Globe, Bot, Zap, ListTodo, ClipboardList, Wrench,
-  Loader2, CheckCircle2, TriangleAlert,
+  Loader2, CheckCircle2, TriangleAlert, MessageSquare,
   ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronRight,
   X, Filter, ChevronsUpDown, ChevronsDownUp,
   Activity, Timer, BrainCircuit, Flame, Info, CircleX,
   type LucideIcon,
 } from 'lucide-react'
-import type { TraceEvent, CostInfo, BlockCost, MetaStats, MetaAlert, QuotaData, SessionState, DayStats, QuotaStats } from '../types'
+import type { TraceEvent, CostInfo, BlockCost, MetaStats, MetaAlert, QuotaData, SessionState, DayStats, QuotaStats, SubAgentSession } from '../types'
 import { Tip } from './Tip'
 
 interface HiddenCostStats {
@@ -23,36 +23,44 @@ interface HiddenCostStats {
 interface SessionPromptItem { index: number; ts: number; text: string }
 
 interface Props {
-  events:        TraceEvent[]
-  startedAt:     number
-  cost?:         CostInfo
-  blockCosts?:   BlockCost[]
-  meta?:         MetaStats
-  quota?:        QuotaData
-  sessionState?: SessionState
-  weeklyData:    DayStats[]
-  prompts?:      SessionPromptItem[]
-  hiddenCost?:   HiddenCostStats
-  quotaStats?:   QuotaStats
+  events:             TraceEvent[]
+  startedAt:          number
+  cost?:              CostInfo
+  blockCosts?:        BlockCost[]
+  meta?:              MetaStats
+  quota?:             QuotaData
+  sessionState?:      SessionState
+  weeklyData:         DayStats[]
+  prompts?:           SessionPromptItem[]
+  hiddenCost?:        HiddenCostStats
+  quotaStats?:        QuotaStats
+  subAgentSessions?:  SubAgentSession[]
 }
 
 // ─── Icon + Color maps ────────────────────────────────────────────────────────
 
 const TOOL_ICONS: Record<string, LucideIcon> = {
-  Read:      FileText,
-  Write:     FilePlus,
-  Edit:      Pencil,
-  Bash:      Terminal,
-  Glob:      FolderSearch,
-  Grep:      Search,
-  WebSearch: Globe,
-  WebFetch:  Globe,
-  Agent:     Bot,
-  Skill:     Zap,
-  TodoWrite: ListTodo,
-  TodoRead:  ListTodo,
-  Task:      ClipboardList,
-  default:   Wrench,
+  Read:        FileText,
+  Write:       FilePlus,
+  Edit:        Pencil,
+  Bash:        Terminal,
+  Glob:        FolderSearch,
+  Grep:        Search,
+  ToolSearch:  Search,
+  WebSearch:   Globe,
+  WebFetch:    Globe,
+  Agent:       Bot,
+  Skill:       Zap,
+  TodoWrite:   ListTodo,
+  TodoRead:    ListTodo,
+  Task:        ClipboardList,
+  TaskCreate:  ClipboardList,
+  TaskUpdate:  ClipboardList,
+  TaskGet:     ClipboardList,
+  TaskList:    ClipboardList,
+  TaskOutput:  ClipboardList,
+  TaskStop:    ClipboardList,
+  default:     Wrench,
 }
 
 const EFFICIENCY_CTX_WARN = 0.75   // threshold de advertencia de contexto (por debajo del compact 0.85)
@@ -62,20 +70,27 @@ const EFFICIENCY_ALERT_COLOR = '#f85149'
 
 // Colores con ratio de contraste ≥ 4.5:1 (WCAG AA) contra el fondo oscuro #0d1117
 const TOOL_COLORS: Record<string, string> = {
-  Read:      '#58a6ff',  // azul    — 7.9:1
-  Write:     '#3fb950',  // verde   — 8.4:1
-  Edit:      '#3fb950',  // verde   — 8.4:1
-  Bash:      '#d29922',  // ámbar   — 6.9:1
-  Glob:      '#79c0ff',  // azul claro — 10.5:1
-  Grep:      '#79c0ff',  // azul claro — 10.5:1
-  WebSearch: '#56d364',  // verde claro — 11.1:1
-  WebFetch:  '#56d364',  // verde claro — 11.1:1
-  Agent:     '#bc8cff',  // violeta — 6.5:1
-  Skill:     '#58a6ff',  // azul    — 7.9:1
-  TodoWrite: '#8b949e',  // gris    — 6.5:1
-  TodoRead:  '#8b949e',  // gris    — 6.5:1
-  Task:      '#8b949e',  // gris    — 6.5:1
-  default:   '#8b949e',  // era #6e7681 (4.0:1, fallaba WCAG AA) → subido a 6.5:1
+  Read:        '#58a6ff',  // azul       — 7.9:1
+  Write:       '#3fb950',  // verde      — 8.4:1
+  Edit:        '#3fb950',  // verde      — 8.4:1
+  Bash:        '#d29922',  // ámbar      — 6.9:1
+  Glob:        '#79c0ff',  // azul claro — 10.5:1
+  Grep:        '#79c0ff',  // azul claro — 10.5:1
+  ToolSearch:  '#79c0ff',  // azul claro — 10.5:1
+  WebSearch:   '#56d364',  // verde claro — 11.1:1
+  WebFetch:    '#56d364',  // verde claro — 11.1:1
+  Agent:       '#bc8cff',  // violeta    — 6.5:1
+  Skill:       '#58a6ff',  // azul       — 7.9:1
+  TodoWrite:   '#8b949e',  // gris       — 6.5:1
+  TodoRead:    '#8b949e',  // gris       — 6.5:1
+  Task:        '#8b949e',  // gris       — 6.5:1
+  TaskCreate:  '#8b949e',
+  TaskUpdate:  '#8b949e',
+  TaskGet:     '#8b949e',
+  TaskList:    '#8b949e',
+  TaskOutput:  '#8b949e',
+  TaskStop:    '#8b949e',
+  default:     '#8b949e',  // era #6e7681 (4.0:1, fallaba WCAG AA) → subido a 6.5:1
 }
 
 // ─── Enmascaramiento de datos sensibles ──────────────────────────────────────
@@ -131,6 +146,11 @@ function DiffView({ oldText, newText }: { oldText: string; newText: string }) {
   const newLines = newText.split('\n')
   return (
     <div style={{ fontFamily: 'monospace', fontSize: 11, borderRadius: 6, overflow: 'auto', border: '1px solid #30363d', maxHeight: 320 }}>
+      <div style={{ background: '#161b22', borderBottom: '1px solid #30363d', padding: '3px 10px', display: 'flex', gap: 10, fontSize: 10 }}>
+        <span style={{ color: '#f85149', fontWeight: 600 }}>— before</span>
+        <span style={{ color: '#3d444d' }}>·</span>
+        <span style={{ color: '#3fb950', fontWeight: 600 }}>+ after</span>
+      </div>
       {oldLines.map((line, i) => (
         <div key={`-${i}`} style={{ background: '#3d1c1c', padding: '1px 10px', display: 'flex', gap: 8, minHeight: 18 }}>
           <span style={{ color: '#f85149', userSelect: 'none', flexShrink: 0, fontWeight: 700 }}>-</span>
@@ -161,11 +181,11 @@ type Cat = keyof typeof CAT_COLORS
 
 function categorize(toolName?: string): Cat {
   if (!toolName) return 'other'
-  if (['Read', 'Glob', 'Grep', 'TodoRead'].includes(toolName))  return 'read'
-  if (['Write', 'Edit', 'TodoWrite'].includes(toolName))        return 'write'
-  if (toolName === 'Bash')                                       return 'bash'
-  if (['Agent', 'Skill', 'Task'].includes(toolName))            return 'agent'
-  if (['WebSearch', 'WebFetch'].includes(toolName))             return 'web'
+  if (['Read', 'Glob', 'Grep', 'TodoRead', 'ToolSearch'].includes(toolName)) return 'read'
+  if (['Write', 'Edit', 'TodoWrite'].includes(toolName))                      return 'write'
+  if (toolName === 'Bash')                                                     return 'bash'
+  if (['Agent', 'Skill', 'Task', 'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList', 'TaskOutput', 'TaskStop'].includes(toolName)) return 'agent'
+  if (['WebSearch', 'WebFetch'].includes(toolName))                            return 'web'
   return 'other'
 }
 
@@ -192,7 +212,7 @@ function getIntent(stats: ToolStats): { label: string; color: string } | null {
   if (write === 0 && bash === 0 && read > 0)   return { label: 'Explorando',    color: '#58a6ff' }
   if (write / stats.total > 0.4)               return { label: 'Implementando', color: '#3fb950' }
   if (bash > 0 && read > 0)                    return { label: 'Debugging',     color: '#d29922' }
-  if (write > 0 || bash > 0)                   return { label: 'Edición+Cmd',   color: '#8b949e' }
+  if (write > 0 || bash > 0)                   return { label: 'Edit+Cmd',   color: '#8b949e' }
   return null
 }
 
@@ -209,21 +229,23 @@ function summaryText(stats: ToolStats): string {
 
 // ─── Filter ───────────────────────────────────────────────────────────────────
 
-type FilterType = 'all' | 'read' | 'write' | 'bash' | 'agent' | 'web'
+type FilterType = 'all' | 'read' | 'write' | 'bash' | 'agent' | 'skill' | 'web'
 const FILTER_GROUPS: Record<FilterType, string[]> = {
   all:   [],
-  read:  ['Read', 'Glob', 'Grep'],
+  read:  ['Read', 'Glob', 'Grep', 'ToolSearch'],
   write: ['Write', 'Edit'],
   bash:  ['Bash'],
-  agent: ['Agent', 'Skill'],
+  agent: ['Agent', 'Task', 'TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList', 'TaskOutput', 'TaskStop'],
+  skill: ['Skill'],
   web:   ['WebSearch', 'WebFetch'],
 }
 const FILTER_LABELS: { id: FilterType; label: string; icon: LucideIcon; color: string }[] = [
-  { id: 'all',   label: 'Todo',  icon: Filter,   color: '#8b949e' },
+  { id: 'all',   label: 'All',  icon: Filter,   color: '#8b949e' },
   { id: 'read',  label: 'Read',  icon: FileText,  color: '#58a6ff' },
   { id: 'write', label: 'Write', icon: Pencil,    color: '#3fb950' },
   { id: 'bash',  label: 'Bash',  icon: Terminal,  color: '#d29922' },
   { id: 'agent', label: 'Agent', icon: Bot,       color: '#bc8cff' },
+  { id: 'skill', label: 'Skill', icon: Zap,       color: '#58a6ff' },
   { id: 'web',   label: 'Web',   icon: Globe,     color: '#56d364' },
 ]
 function matchesFilter(toolName: string | undefined, filter: FilterType): boolean {
@@ -284,9 +306,9 @@ function extractActors(tools: TraceEvent[]): Actor[] {
     }
   }
   if (agents.length === 0 && skills.length === 0)
-    return [{ label: 'Claude', color: '#7d8590', type: 'claude' }]
+    return [{ label: 'Claude', color: '#e06c39', type: 'claude' }]
   const result: Actor[] = []
-  if (hasDirect) result.push({ label: 'Claude', color: '#7d8590', type: 'claude' })
+  if (hasDirect) result.push({ label: 'Claude', color: '#e06c39', type: 'claude' })
   for (const a of agents) result.push({ label: a, color: '#bc8cff', type: 'agent' })
   for (const s of skills) result.push({ label: `/${s}`, color: '#58a6ff', type: 'skill' })
   return result
@@ -474,8 +496,8 @@ function DetailModal({ ev, onClose }: { ev: TraceEvent; onClose: () => void }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#3d1717', border: '1px solid #f8514960', borderRadius: 6, padding: '8px 12px' }}>
                 <TriangleAlert size={14} color="#f85149" />
                 <div>
-                  <span style={{ color: '#f85149', fontWeight: 700, fontSize: 12 }}>Comando peligroso detectado — {danger}</span>
-                  <span style={{ color: '#8b949e', fontSize: 11, marginLeft: 8 }}>Verifica que esta operación sea intencional</span>
+                  <span style={{ color: '#f85149', fontWeight: 700, fontSize: 12 }}>Dangerous command detected — {danger}</span>
+                  <span style={{ color: '#8b949e', fontSize: 11, marginLeft: 8 }}>Verify that this operation is intentional</span>
                 </div>
               </div>
             )
@@ -566,17 +588,18 @@ function ModelBarMini({ label, color, hours, limit }: { label: string; color: st
   )
 }
 
-function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStats, startedAt }: {
+function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStats, startedAt, promptCount = 0 }: {
   cost?:         CostInfo
   quota?:        QuotaData
   sessionState?: SessionState
   meta?:         MetaStats
   quotaStats?:   QuotaStats
   startedAt?:    number
+  promptCount?:  number
 }) {
   const sm = STATE_META[sessionState]
 
-  const COMPACT_THRESHOLD = 0.85
+  const COMPACT_THRESHOLD = 0.85  // keep in sync with KPIBar.tsx
   const compactWindow = cost?.context_window ? Math.round(cost.context_window * COMPACT_THRESHOLD) : null
   const contextPct = cost?.context_used && compactWindow
     ? Math.min(100, Math.round(cost.context_used / compactWindow * 100)) : null
@@ -590,9 +613,9 @@ function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStats, star
   const alerts: MetaAlert[] = []
   if (meta?.alerts) alerts.push(...meta.alerts)
   if (contextPct !== null && contextPct > 85)
-    alerts.push({ level: 'critical', message: `Auto-compact muy pronto — ${ctxFree}% libre`, metric: 'context' })
+    alerts.push({ level: 'critical', message: `Auto-compact soon — ${ctxFree}% free`, metric: 'context' })
   else if (contextPct !== null && contextPct > 65)
-    alerts.push({ level: 'warning', message: `Contexto al ${contextPct}%`, metric: 'context' })
+    alerts.push({ level: 'warning', message: `Context at ${contextPct}%`, metric: 'context' })
 
   const resetMs = quota
     ? (quota.cycleResetAt ? quota.cycleResetAt - Date.now() : quota.cycleResetMs)
@@ -607,32 +630,56 @@ function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStats, star
         padding: '8px 12px 6px',
         borderBottom: '1px solid #161b22',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {sm.pulse && (
-            <span style={{
-              width: 7, height: 7, borderRadius: '50%', background: sm.color,
-              display: 'inline-block', boxShadow: `0 0 5px ${sm.color}`,
-              animation: 'pulse 1.2s ease-in-out infinite', flexShrink: 0,
-            }} />
-          )}
-          <span style={{ color: sm.color, fontSize: 12, fontWeight: 700, letterSpacing: '-0.2px' }}>
-            {sm.label}
-          </span>
-        </div>
-        {quota && quota.burnRateTokensPerMin > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Flame size={9} color="#d29922" />
-            <span style={{ fontSize: 10, color: '#d29922', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-              {cost?.projected_hourly_usd
-                && cost.projected_hourly_usd > 0.001
-                && cost.projected_hourly_usd < 50
-                && startedAt
-                && (Date.now() - startedAt) > 2 * 60_000
-                ? `~${fmtUsd(cost.projected_hourly_usd)}/h`
-                : `${quota.burnRateTokensPerMin.toLocaleString()} tok/min`
-              }
+        <Tip position="bottom" align="left" content={
+          <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 700, color: sm.color, marginBottom: 4 }}>Session state</div>
+            <div style={{ color: '#7d8590' }}>
+              {sessionState === 'working' && 'Claude is actively executing tools.'}
+              {sessionState === 'waiting_for_input' && 'Claude is waiting for your response or confirmation.'}
+              {sessionState === 'idle' && 'No activity. Waiting for a new message.'}
+            </div>
+          </div>
+        }>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'default' }}>
+            {sm.pulse && (
+              <span style={{
+                width: 7, height: 7, borderRadius: '50%', background: sm.color,
+                display: 'inline-block', boxShadow: `0 0 5px ${sm.color}`,
+                animation: 'pulse 1.2s ease-in-out infinite', flexShrink: 0,
+              }} />
+            )}
+            <span style={{ color: sm.color, fontSize: 12, fontWeight: 700, letterSpacing: '-0.2px' }}>
+              {sm.label}
             </span>
           </div>
+        </Tip>
+        {quota && quota.burnRateTokensPerMin > 0 && (
+          <Tip position="bottom" content={
+            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+              <div style={{ fontWeight: 700, color: '#d29922', marginBottom: 4 }}>Burn rate</div>
+              <div style={{ color: '#7d8590' }}>Token consumption rate in the current session.</div>
+              <div style={{ color: '#484f58', marginTop: 6 }}>
+                <div>{quota.burnRateTokensPerMin.toLocaleString()} tokens/min</div>
+                {cost?.projected_hourly_usd && cost.projected_hourly_usd > 0.001 && cost.projected_hourly_usd < 50 && (
+                  <div>Projection: ~{fmtUsd(cost.projected_hourly_usd)}/h at current rate</div>
+                )}
+              </div>
+            </div>
+          }>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'default' }}>
+              <Flame size={9} color="#d29922" />
+              <span style={{ fontSize: 10, color: '#d29922', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                {cost?.projected_hourly_usd
+                  && cost.projected_hourly_usd > 0.001
+                  && cost.projected_hourly_usd < 50
+                  && startedAt
+                  && (Date.now() - startedAt) > 2 * 60_000
+                  ? `~${fmtUsd(cost.projected_hourly_usd)}/h`
+                  : `${quota.burnRateTokensPerMin.toLocaleString()} tok/min`
+                }
+              </span>
+            </div>
+          </Tip>
         )}
       </div>
 
@@ -641,22 +688,22 @@ function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStats, star
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 5 }}>
           <Tip position="bottom" align="left" content={
             <div style={{ fontSize: 11, lineHeight: 1.7 }}>
-              <div style={{ fontWeight: 700, color: ctxColor, marginBottom: 4 }}>Ventana de contexto</div>
-              <div style={{ color: '#7d8590' }}>% calculado sobre umbral de auto-compact (~85% de la ventana total)</div>
-              <div style={{ color: '#7d8590', marginTop: 4 }}>Igual a "X% until auto-compact" en Claude Code CLI</div>
+              <div style={{ fontWeight: 700, color: ctxColor, marginBottom: 4 }}>Context window</div>
+              <div style={{ color: '#7d8590' }}>% calculated over auto-compact threshold (~85% of total window)</div>
+              <div style={{ color: '#7d8590', marginTop: 4 }}>Same as "X% until auto-compact" in Claude Code CLI</div>
               <div style={{ color: '#484f58', marginTop: 6, fontSize: 10 }}>
                 Total: <span style={{ color: '#e6edf3' }}>{fmtTok(cost?.context_window ?? 200_000)}</span>
-                {'  ·  '}Umbral: <span style={{ color: '#e6edf3' }}>{fmtTok(compactWindow ?? 170_000)}</span>
+                {'  ·  '}Threshold: <span style={{ color: '#e6edf3' }}>{fmtTok(compactWindow ?? 170_000)}</span>
               </div>
             </div>
           }>
             <span style={{ fontSize: 10, color: '#6e7681', cursor: 'default', display: 'flex', alignItems: 'center', gap: 4 }}>
               <BrainCircuit size={10} color="#484f58" />
-              Contexto
+              Context
             </span>
           </Tip>
           <span style={{ fontSize: 13, fontWeight: 700, color: ctxColor, fontVariantNumeric: 'tabular-nums' }}>
-            {ctxFree !== null ? `${ctxFree}% libre` : '—'}
+            {ctxFree !== null ? `${ctxFree}% free` : '—'}
           </span>
         </div>
         <div style={{ height: 5, background: '#161b22', borderRadius: 3, overflow: 'hidden', marginBottom: 4 }}>
@@ -686,11 +733,59 @@ function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStats, star
         )}
       </div>
 
+      {/* ── Mensajes ── */}
+      {promptCount > 0 && (
+        <div style={{ padding: '8px 12px 6px', borderBottom: '1px solid #161b22' }}>
+          {(() => {
+            const MSG_SOFT_LIMIT = 20
+            const msgPct  = Math.min(100, Math.round(promptCount / MSG_SOFT_LIMIT * 100))
+            const msgColor = promptCount < 15 ? '#3fb950' : promptCount < 20 ? '#d29922' : '#f85149'
+            return (
+              <>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 5 }}>
+                  <Tip position="bottom" align="left" content={
+                    <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                      <div style={{ fontWeight: 700, color: msgColor, marginBottom: 4 }}>Session messages</div>
+                      <div style={{ color: '#7d8590' }}>Number of user turns in this session.</div>
+                      <div style={{ color: '#484f58', marginTop: 6 }}>
+                        <div>Reference: &lt;15 normal · 15-20 heavy · &gt;20 very long session</div>
+                      </div>
+                    </div>
+                  }>
+                    <span style={{ fontSize: 10, color: '#6e7681', cursor: 'default', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <ArrowDownLeft size={10} color="#484f58" />
+                      Messages
+                    </span>
+                  </Tip>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: msgColor, fontVariantNumeric: 'tabular-nums' }}>
+                    {promptCount}
+                  </span>
+                </div>
+                <div style={{ height: 5, background: '#161b22', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{
+                    width: `${msgPct}%`, height: '100%', background: msgColor,
+                    borderRadius: 3, transition: 'width 0.5s',
+                    boxShadow: promptCount >= 20 ? `0 0 6px ${msgColor}88` : undefined,
+                  }} />
+                </div>
+              </>
+            )
+          })()}
+        </div>
+      )}
 
       {/* ── Modelos semana ── */}
       {quota && (quota.weeklyHoursSonnet > 0 || quota.weeklyHoursOpus > 0) && (
         <div style={{ padding: '7px 12px 7px' }}>
-          <div style={{ fontSize: 10, color: '#484f58', marginBottom: 5 }}>Esta semana</div>
+          <Tip position="bottom" align="left" content={
+            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+              <div style={{ fontWeight: 700, color: '#e6edf3', marginBottom: 4 }}>Weekly usage by model</div>
+              <div style={{ color: '#7d8590' }}>Accumulated activity hours by model this week.</div>
+              <div style={{ color: '#484f58', marginTop: 6 }}>Limit based on your Claude plan ({PLAN_LABEL[quota.detectedPlan] ?? quota.detectedPlan})</div>
+            </div>
+          }>
+            <div style={{ fontSize: 10, color: '#484f58', marginBottom: 5, cursor: 'default' }}>This week</div>
+          </Tip>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <ModelBarMini label="Sonnet" color="#58a6ff" hours={quota.weeklyHoursSonnet} limit={quota.weeklyLimitSonnet} />
             {quota.weeklyLimitOpus > 0 && (
@@ -706,13 +801,21 @@ function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStats, star
       {/* ── P90 reference ── */}
       {quotaStats && quotaStats.sessionCount >= 5 && (
         <div style={{ padding: '6px 12px 4px', borderTop: '1px solid #161b22' }}>
-          <div style={{ fontSize: 9, color: '#484f58', marginBottom: 3 }}>Tu uso típico (P90)</div>
+          <Tip position="bottom" align="left" content={
+            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+              <div style={{ fontWeight: 700, color: '#e6edf3', marginBottom: 4 }}>Percentil 90 (P90)</div>
+              <div style={{ color: '#7d8590' }}>90% of your sessions consume fewer tokens and cost than this value.</div>
+              <div style={{ color: '#484f58', marginTop: 6 }}>Calculated based on {quotaStats.sessionCount} historical sessions.</div>
+            </div>
+          }>
+            <div style={{ fontSize: 9, color: '#484f58', marginBottom: 3, cursor: 'default' }}>Your typical usage (P90)</div>
+          </Tip>
           <div style={{ display: 'flex', gap: 10 }}>
             <span style={{ fontSize: 10, color: '#6e7681' }}>{fmtTok(quotaStats.p90Tokens ?? 0)} tokens</span>
             <span style={{ color: '#3d444d', fontSize: 10 }}>·</span>
             <span style={{ fontSize: 10, color: '#6e7681' }}>~${(quotaStats.p90Cost ?? 0).toFixed(2)}</span>
             <span style={{ color: '#3d444d', fontSize: 10 }}>·</span>
-            <span style={{ fontSize: 9, color: '#3d444d' }}>{quotaStats.sessionCount} sesiones</span>
+            <span style={{ fontSize: 9, color: '#3d444d' }}>{quotaStats.sessionCount} sessions</span>
           </div>
         </div>
       )}
@@ -779,29 +882,29 @@ function deriveEfficiencyReasons(
 
   if (cost.loops.length > 0) {
     const top     = cost.loops.slice(0, 2).map(l => `${l.toolName} ×${l.count}`).join(', ')
-    const extra   = cost.loops.length > 2 ? ` +${cost.loops.length - 2} más` : ''
-    reasons.push(`Bucles detectados: ${top}${extra} — Claude repitio las mismas llamadas sin avanzar`)
+    const extra   = cost.loops.length > 2 ? ` +${cost.loops.length - 2} more` : ''
+    reasons.push(`Detected loops: ${top}${extra} — Claude repeated the same calls without progressing`)
   }
 
   if (toolCallCount > TOOL_CALL_WARN) {
-    reasons.push(`${toolCallCount} herramientas ejecutadas — sesiones largas acumulan contexto previo y elevan el costo por turno`)
+    reasons.push(`${toolCallCount} tools executed — long sessions accumulate previous context and raise cost per turn`)
   }
 
   const ctxPct = cost.context_used && cost.context_window
     ? cost.context_used / cost.context_window : 0
   if (ctxPct > EFFICIENCY_CTX_WARN) {
-    reasons.push(`Contexto al ${Math.round(ctxPct * 100)}% — Claude lee más historial en cada respuesta, disparando los tokens de entrada`)
+    reasons.push(`Context at ${Math.round(ctxPct * 100)}% — Claude reads more history in each response, increasing input tokens`)
   }
 
   if (prompts.length > 0) {
     const avgLen = prompts.reduce((s, p) => s + p.text.length, 0) / prompts.length
     if (avgLen > 600) {
-      reasons.push(`Prompts largos (~${Math.round(avgLen)} chars de media) — mensajes muy detallados aumentan el contexto de entrada`)
+      reasons.push(`Long prompts (~${Math.round(avgLen)} avg chars) — detailed messages increase input context`)
     }
   }
 
   if (cost.cost_usd > 10) {
-    reasons.push(`Costo elevado ($${cost.cost_usd.toFixed(2)}) — señal de sesión intensiva; revisar si hay iteraciones innecesarias`)
+    reasons.push(`High cost ($${cost.cost_usd.toFixed(2)}) — sign of intensive session; check for unnecessary iterations`)
   }
 
   return reasons
@@ -826,7 +929,7 @@ function EfficiencyAlert({ cost, events, prompts }: {
         style={{ background: 'none', border: 'none', cursor: 'pointer', width: '100%', padding: 0, display: 'flex', alignItems: 'center', gap: 5 }}
       >
         <TriangleAlert size={9} color={c} style={{ flexShrink: 0 }} />
-        <span style={{ fontSize: 10, color: c, fontWeight: 600, flex: 1, textAlign: 'left' }}>Eficiencia baja — {reasons.length} causa{reasons.length > 1 ? 's' : ''}</span>
+        <span style={{ fontSize: 10, color: c, fontWeight: 600, flex: 1, textAlign: 'left' }}>Low efficiency — {reasons.length} cause{reasons.length > 1 ? 's' : ''}</span>
         {open ? <ChevronsDownUp size={9} color={c} /> : <ChevronsUpDown size={9} color={c} />}
       </button>
       {open && (
@@ -843,12 +946,13 @@ function EfficiencyAlert({ cost, events, prompts }: {
   )
 }
 
-function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [] }: {
-  cost?:       CostInfo
-  weeklyData:  DayStats[]
-  events:      TraceEvent[]
-  hiddenCost?: HiddenCostStats
-  prompts?:    SessionPromptItem[]
+function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [], subAgentSessions = [] }: {
+  cost?:              CostInfo
+  weeklyData:         DayStats[]
+  events:             TraceEvent[]
+  hiddenCost?:        HiddenCostStats
+  prompts?:           SessionPromptItem[]
+  subAgentSessions?:  SubAgentSession[]
 }) {
   const score = cost
     ? (cost.efficiency_score === 0 && cost.cost_usd < 0.001 ? 100 : cost.efficiency_score)
@@ -868,10 +972,22 @@ function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [] }: {
         <>
           {/* Cost + tokens */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
-            <span style={{ background: '#3fb95022', color: '#3fb950', border: '1px solid #3fb95044',
-              borderRadius: 4, padding: '1px 7px', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
-              <AnimatedCost usd={cost.cost_usd} />
-            </span>
+            <Tip position="top" align="left" content={
+              <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                <div style={{ fontWeight: 700, color: '#3fb950', marginBottom: 4 }}>Session cost</div>
+                <div style={{ color: '#7d8590' }}>Total accumulated since the start of this session.</div>
+                <div style={{ color: '#484f58', marginTop: 6 }}>
+                  <div>Input: {fmtTok(cost.input_tokens)} tokens</div>
+                  <div>Output: {fmtTok(cost.output_tokens)} tokens</div>
+                  {cost.cache_read > 0 && <div>Cache: {fmtTok(cost.cache_read)} tokens</div>}
+                </div>
+              </div>
+            }>
+              <span style={{ background: '#3fb95022', color: '#3fb950', border: '1px solid #3fb95044',
+                borderRadius: 4, padding: '1px 7px', fontSize: 11, fontWeight: 700, flexShrink: 0, cursor: 'default' }}>
+                <AnimatedCost usd={cost.cost_usd} />
+              </span>
+            </Tip>
             <span style={{ fontSize: 10, color: '#6e7681' }}>{fmtTok(cost.input_tokens)} in</span>
             <span style={{ color: '#30363d', fontSize: 10 }}>·</span>
             <span style={{ fontSize: 10, color: '#6e7681' }}>{fmtTok(cost.output_tokens)} out</span>
@@ -883,16 +999,36 @@ function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [] }: {
             )}
           </div>
           {savings >= 0.001 && (
-            <div style={{ fontSize: 9, color: '#3fb95088' }}>~{fmtUsd(savings)} ahorrado por caché</div>
+            <Tip position="top" align="left" content={
+              <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                <div style={{ fontWeight: 700, color: '#3fb950', marginBottom: 4 }}>Cache savings</div>
+                <div style={{ color: '#7d8590' }}>Estimated money saved by tokens read from cache instead of being reprocessed.</div>
+                <div style={{ color: '#484f58', marginTop: 6 }}>{fmtTok(cost.cache_read)} tokens from cache</div>
+              </div>
+            }>
+              <div style={{ fontSize: 9, color: '#3fb95088', cursor: 'default' }}>~{fmtUsd(savings)} saved via cache</div>
+            </Tip>
           )}
           {/* Efficiency */}
           {score !== null && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-                  <Activity size={9} color="#484f58" />
-                  <span style={{ fontSize: 9, color: '#484f58', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>eficiencia</span>
-                </div>
+                <Tip position="top" align="left" content={
+                  <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                    <div style={{ fontWeight: 700, color: scoreColor, marginBottom: 4 }}>Efficiency score</div>
+                    <div style={{ color: '#7d8590' }}>Measures how well context is used. Penalizes loops, long sessions, and high context usage.</div>
+                    <div style={{ color: '#484f58', marginTop: 6 }}>
+                      <div>≥ 90 → efficient</div>
+                      <div>70–90 → acceptable</div>
+                      <div>&lt; 70 → inefficient</div>
+                    </div>
+                  </div>
+                }>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'default' }}>
+                    <Activity size={9} color="#484f58" />
+                    <span style={{ fontSize: 9, color: '#484f58', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>efficiency</span>
+                  </div>
+                </Tip>
                 <div style={{ flex: 1, height: 3, background: '#21262d', borderRadius: 2, overflow: 'hidden' }}>
                   <div style={{ width: `${score}%`, height: '100%', background: scoreColor,
                     borderRadius: 2, transition: 'width 0.5s', boxShadow: `0 0 3px ${scoreColor}88` }} />
@@ -926,7 +1062,7 @@ function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [] }: {
           </div>
           <div>
             <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 11 }}>{fmtTok(totalWeekly)}</div>
-            <div style={{ color: '#484f58', fontSize: 9 }}>7 días</div>
+            <div style={{ color: '#484f58', fontSize: 9 }}>7 days</div>
           </div>
         </div>
       )}
@@ -939,18 +1075,18 @@ function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [] }: {
         }}>
           <Tip position="top" align="left" content={
             <div style={{ fontSize: 11, lineHeight: 1.7 }}>
-              <div style={{ fontWeight: 700, color: '#d29922', marginBottom: 4 }}>Coste oculto en loops</div>
-              <div style={{ color: '#7d8590' }}>Estimación de dinero perdido en repeticiones innecesarias de herramientas.</div>
+              <div style={{ fontWeight: 700, color: '#d29922', marginBottom: 4 }}>Hidden cost in loops</div>
+              <div style={{ color: '#7d8590' }}>Estimate of money lost to unnecessary tool repetitions.</div>
               <div style={{ color: '#484f58', marginTop: 6 }}>
-                <div>{hiddenCost.loop_sessions} sesiones con loops detectados</div>
-                <div>{hiddenCost.total_loops} loops · {hiddenCost.total_sessions} sesiones totales</div>
-                <div style={{ marginTop: 4 }}>Fórmula: <span style={{ color: '#7d8590', fontFamily: 'monospace', fontSize: 10 }}>costo × (loops / tool_calls)</span></div>
+                <div>{hiddenCost.loop_sessions} sessions with loops detected</div>
+                <div>{hiddenCost.total_loops} loops · {hiddenCost.total_sessions} total sessions</div>
+                <div style={{ marginTop: 4 }}>Formula: <span style={{ color: '#7d8590', fontFamily: 'monospace', fontSize: 10 }}>cost × (loops / tool_calls)</span></div>
               </div>
             </div>
           }>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'default' }}>
               <Flame size={9} color="#d29922" />
-              <span style={{ fontSize: 9, color: '#7d8590', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>coste oculto 7d</span>
+              <span style={{ fontSize: 9, color: '#7d8590', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>hidden cost 7d</span>
             </div>
           </Tip>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -960,11 +1096,43 @@ function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [] }: {
             }}>
               ~{fmtUsd(hiddenCost.loop_waste_usd)}
             </span>
-            <span style={{ fontSize: 9, color: '#484f58' }}>perdido en loops</span>
+            <span style={{ fontSize: 9, color: '#484f58' }}>lost in loops</span>
           </div>
           <div style={{ fontSize: 9, color: '#3d444d' }}>
             {hiddenCost.total_loops} loop{hiddenCost.total_loops > 1 ? 's' : ''} · {hiddenCost.loop_sessions}/{hiddenCost.total_sessions} sesiones
           </div>
+        </div>
+      )}
+
+      {/* Sub-agent sessions */}
+      {subAgentSessions.length > 0 && (
+        <div style={{ borderTop: '1px solid #21262d', paddingTop: 6, marginTop: 2, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Bot size={9} color="#bc8cff" />
+            <span style={{ fontSize: 9, color: '#7d8590', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Sub-agentes</span>
+          </div>
+          {subAgentSessions.map(s => {
+            const m = s.dominant_model
+            const mColor = m?.includes('opus') ? '#d29922' : m?.includes('haiku') ? '#3fb950' : '#58a6ff'
+            const mLabel = m?.includes('opus') ? 'Opus' : m?.includes('haiku') ? 'Haiku' : 'Sonnet'
+            return (
+              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ fontSize: 9, color: mColor, background: mColor + '18', border: `1px solid ${mColor}30`, borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>
+                  {mLabel}
+                </span>
+                {(s.total_cost_usd ?? 0) > 0 && (
+                  <span style={{ fontSize: 10, color: '#6e7681', fontVariantNumeric: 'tabular-nums' }}>
+                    {fmtUsd(s.total_cost_usd!)}
+                  </span>
+                )}
+              </div>
+            )
+          })}
+          {subAgentSessions.length > 1 && (
+            <div style={{ fontSize: 9, color: '#484f58' }}>
+              total sub-agentes {fmtUsd(subAgentSessions.reduce((s, a) => s + (a.total_cost_usd ?? 0), 0))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -997,7 +1165,7 @@ function CostTimeline({
   return (
     <div style={{ borderBottom: '1px solid #21262d', background: '#090d12', padding: '8px 16px 0', flexShrink: 0 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#484f58', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>
-        <span>Costo por bloque</span>
+        <span>Cost per block</span>
         <span style={{ color: '#6e7681' }}>total {fmtUsd(total)}</span>
       </div>
       <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', gap: 3, height: BAR_MAX }}>
@@ -1063,7 +1231,7 @@ function CostTimeline({
               lineHeight: 1.7,
             }}>
               <div style={{ fontWeight: 700, color: '#e6edf3', marginBottom: 2 }}>
-                #{blocks[i].index} — {c > 0 ? fmtUsd(c) : 'sin datos'}
+                #{blocks[i].index} — {c > 0 ? fmtUsd(c) : 'no data'}
               </div>
               {bc && (
                 <>
@@ -1163,7 +1331,19 @@ function BlockListItem({
       {/* Row 2: dist bar + intent + duration */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         {block.tools.length === 0
-          ? <span style={{ color: '#484f58', fontSize: 10, fontStyle: 'italic' }}>respuesta de texto</span>
+          ? <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{
+                fontSize: 10, fontWeight: 600,
+                color: '#79c0ff', background: '#79c0ff15',
+                border: '1px solid #79c0ff30',
+                borderRadius: 4, padding: '1px 6px',
+                display: 'flex', alignItems: 'center', gap: 3,
+              }}>
+                <MessageSquare size={9} />
+                text response
+              </span>
+              {blockCost?.outputTokens ? <span style={{ color: '#484f58', fontSize: 10 }}>· {fmtTok(blockCost.outputTokens)} out</span> : null}
+            </span>
           : <>
               <ToolDistBar stats={stats} />
               {intent && <IntentBadge intent={intent} />}
@@ -1203,7 +1383,7 @@ function ToolRow({
   return (
     <div
       onClick={clickable ? onClick : undefined}
-      title={!done ? 'En progreso…' : !blockDone ? 'Disponible cuando el bloque termine' : 'Click para ver input/output'}
+      title={!done ? 'In progress…' : !blockDone ? 'Available when block completes' : 'Click to see input/output'}
       style={{
         display: 'flex', alignItems: 'center', gap: 8,
         padding: '4px 12px 4px 16px',
@@ -1232,22 +1412,22 @@ function ToolRow({
       {isRealLoop && (
         <Tip position="top" align="right" content={
           <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
-            <span style={{ color: '#d29922', fontWeight: 700 }}>Llamada repetida</span><br />
-            <span style={{ color: '#e6edf3' }}>{ev.tool_name}</span> fue invocada con<br />
-            exactamente la misma entrada ≥2 veces —<br />
-            posible bucle sin avance real
+            <span style={{ color: '#d29922', fontWeight: 700 }}>Repeated call</span><br />
+            <span style={{ color: '#e6edf3' }}>{ev.tool_name}</span> was called with<br />
+            exactly the same input ≥2 times —<br />
+            possible loop without real progress
           </div>
         }>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#d29922', fontSize: 10, fontWeight: 700, background: '#d2992218', borderRadius: 3, padding: '1px 5px', flexShrink: 0, cursor: 'help' }}>
-            <TriangleAlert size={9} /> repetida
+            <TriangleAlert size={9} /> repeated
           </span>
         </Tip>
       )}
       {!isRealLoop && typeCount >= 3 && (
         <Tip position="top" align="right" content={
           <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
-            <span style={{ color: '#e6edf3', fontWeight: 700 }}>{ev.tool_name}</span> fue llamada <span style={{ color: '#e6edf3' }}>{typeCount} veces</span> en este bloque<br />
-            con entradas distintas — uso intensivo normal, no un bucle
+            <span style={{ color: '#e6edf3', fontWeight: 700 }}>{ev.tool_name}</span> was called <span style={{ color: '#e6edf3' }}>{typeCount} times</span> in this block<br />
+            with different inputs — normal intensive use, not a loop
           </div>
         }>
           <span style={{ color: '#484f58', fontSize: 10, fontVariantNumeric: 'tabular-nums', flexShrink: 0, cursor: 'help' }}>
@@ -1257,7 +1437,7 @@ function ToolRow({
       )}
       {checkDangerous(ev.tool_name, ev.tool_input) && (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#ff7b72', fontSize: 10, fontWeight: 700, background: '#f8514920', border: '1px solid #f8514940', borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>
-          <TriangleAlert size={9} /> peligroso
+          <TriangleAlert size={9} /> dangerous
         </span>
       )}
       {/* Badge de modelo para llamadas Agent */}
@@ -1280,6 +1460,90 @@ function ToolRow({
         ? <Loader2 size={10} style={{ color: '#6e7681', animation: 'spin 1s linear infinite', flexShrink: 0 }} />
         : <CheckCircle2 size={10} style={{ color: color + 'aa', flexShrink: 0 }} />
       }
+    </div>
+  )
+}
+
+// ─── Skill Container ─────────────────────────────────────────────────────────
+
+function getSkillName(ev: TraceEvent): string {
+  try { const inp = JSON.parse(ev.tool_input || '{}'); return inp.skill || inp.name || 'skill' }
+  catch { return 'skill' }
+}
+
+type RenderItem =
+  | { kind: 'tool'; ev: TraceEvent }
+  | { kind: 'skillGroup'; skillEv: TraceEvent; children: TraceEvent[] }
+
+function buildRenderItems(tools: TraceEvent[], filter: FilterType): RenderItem[] {
+  const skillsWithChildren = new Set(tools.filter(t => t.skill_parent).map(t => t.skill_parent!))
+  const items: RenderItem[] = []
+  for (const ev of tools) {
+    if (!ev.tool_name || !matchesFilter(ev.tool_name, filter)) continue
+    if (ev.skill_parent) continue  // rendered inside skill group
+    if (ev.tool_name === 'Skill' && ev.type === 'Done') {
+      const name = getSkillName(ev)
+      if (skillsWithChildren.has(name)) {
+        const children = tools.filter(t => t.skill_parent === name && !!t.tool_name && matchesFilter(t.tool_name, filter))
+        items.push({ kind: 'skillGroup', skillEv: ev, children })
+        continue
+      }
+    }
+    items.push({ kind: 'tool', ev })
+  }
+  return items
+}
+
+function SkillContainer({
+  skillEv, children, startedAt, toolTypeCount, realLoopKeys, blockDone, onToolClick,
+}: {
+  skillEv:      TraceEvent
+  children:     TraceEvent[]
+  startedAt:    number
+  toolTypeCount: Map<string, number>
+  realLoopKeys: Set<string>
+  blockDone:    boolean
+  onToolClick:  (ev: TraceEvent) => void
+}) {
+  const [open, setOpen] = useState(true)
+  const name = getSkillName(skillEv)
+  return (
+    <div style={{ marginLeft: 8, borderLeft: '2px solid #58a6ff30', borderRadius: '0 4px 4px 0', marginBottom: 2 }}>
+      {/* Skill header row */}
+      <div
+        onClick={() => setOpen(v => !v)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '4px 12px 4px 16px', cursor: 'pointer',
+          borderRadius: '0 4px 4px 0',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.background = '#161b22')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+      >
+        <span style={{ color: '#484f58', fontSize: 10, minWidth: 48, fontFamily: 'monospace' }}>
+          {relTs(startedAt, skillEv.ts)}
+        </span>
+        <Zap size={12} color="#58a6ff" />
+        <span style={{ color: '#c9d1d9', fontWeight: 600, fontSize: 11, flex: 1 }}>/{name}</span>
+        <span style={{ fontSize: 9, color: '#58a6ff88', background: '#58a6ff12', border: '1px solid #58a6ff25', borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>
+          {children.length} sub-calls
+        </span>
+        <span style={{ color: '#484f58' }}>{open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}</span>
+        <CheckCircle2 size={10} style={{ color: '#58a6ffaa', flexShrink: 0 }} />
+      </div>
+      {open && (
+        <div style={{ paddingLeft: 8, borderLeft: '1px solid #21262d', marginLeft: 8 }}>
+          {children.map((ev, i) => (
+            <ToolRow
+              key={i} ev={ev} startedAt={startedAt}
+              typeCount={toolTypeCount.get(ev.tool_name || '') || 0}
+              isRealLoop={realLoopKeys.has(`${ev.tool_name}::${ev.tool_input ?? ''}`)}
+              blockDone={blockDone}
+              onClick={() => onToolClick(ev)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -1312,28 +1576,28 @@ function scorePrompt(text: string): PromptCheck[] {
 
   // 1. Longitud
   if (text.length > 600) {
-    checks.push({ label: `Muy largo · ${text.length} chars`, level: 'error',
-      tip: 'Divide en pasos: envía primero la acción principal y luego los ajustes en mensajes separados.' })
+    checks.push({ label: `Too long · ${text.length} chars`, level: 'error',
+      tip: 'Break into steps: send the main action first, then adjustments in separate messages.' })
   } else if (text.length > 300) {
-    checks.push({ label: `Moderado · ${text.length} chars`, level: 'warn',
-      tip: 'Considera separar en dos mensajes si tienes más de una solicitud.' })
+    checks.push({ label: `Moderate · ${text.length} chars`, level: 'warn',
+      tip: 'Consider splitting into two messages if you have more than one request.' })
   } else {
-    checks.push({ label: `Conciso · ${text.length} chars`, level: 'ok' })
+    checks.push({ label: `Concise · ${text.length} chars`, level: 'ok' })
   }
 
   // 2. Ambigüedad (frases vagas sin contexto)
   const vagueRe = /\b(arréglalo|arreglalo|fix it|make it work|mejóralo|mejoralo|improve it|make it better|algo así|somehow|whatever|haz que funcione|que funcione|que ande|hazlo funcionar|that it works|it's broken)\b/i
   if (vagueRe.test(text)) {
-    checks.push({ label: 'Ambiguo', level: 'warn',
-      tip: 'Describe el error exacto o el comportamiento esperado. Ejemplo: "falla con TypeError en línea 42" en vez de "arréglalo".' })
+    checks.push({ label: 'Ambiguous', level: 'warn',
+      tip: 'Describe the exact error or expected behavior. Example: "fails with TypeError on line 42" instead of "fix it".' })
   }
 
   // 3. Multi-tarea (demasiadas solicitudes en uno)
   const alsoCount  = (text.match(/\b(también|además|y también|and also|otra cosa|por otro lado|ademas)\b/gi) || []).length
   const bulletCount = (text.match(/^[-*•]\s/gm) || []).length + (text.match(/^\d+\.\s/gm) || []).length
   if (alsoCount >= 2 || bulletCount >= 4) {
-    checks.push({ label: `Multi-tarea · ${alsoCount + bulletCount} indicadores`, level: 'warn',
-      tip: 'Demasiadas solicitudes de una vez. Claude prioriza la primera — envía el resto en mensajes separados.' })
+    checks.push({ label: `Multi-task · ${alsoCount + bulletCount} indicators`, level: 'warn',
+      tip: 'Too many requests at once. Claude prioritizes the first — send the rest in separate messages.' })
   }
 
   // 4. Especificidad (menciona rutas, funciones, errores → positivo)
@@ -1342,10 +1606,10 @@ function scorePrompt(text: string): PromptCheck[] {
   const hasError = /\b(Error|error|exception|Exception|undefined|null|Cannot|FAILED|TypeError|cannot read)\b/.test(text)
   const hasLine  = /\blínea\s+\d+|line\s+\d+|:\d+:\d+\b/.test(text)
   if (hasPath || hasFunc || hasError || hasLine) {
-    checks.push({ label: 'Específico', level: 'ok' })
+    checks.push({ label: 'Specific', level: 'ok' })
   } else if (text.length > 100) {
-    checks.push({ label: 'Poco específico', level: 'warn',
-      tip: 'Incluye el nombre del archivo, función o mensaje de error exacto para un mejor resultado.' })
+    checks.push({ label: 'Not specific enough', level: 'warn',
+      tip: 'Include the file name, function, or exact error message for better results.' })
   }
 
   return checks
@@ -1385,7 +1649,7 @@ function PromptScoreCard({ prompt }: { prompt: string }) {
           style={{ background: 'none', border: `1px solid ${SCORE_COLORS[worstLevel]}44`, borderRadius: 4, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 7px', color: SCORE_COLORS[worstLevel], fontSize: 10 }}
         >
           {open ? <ChevronsDownUp size={10} /> : <ChevronsUpDown size={10} />}
-          {open ? 'ocultar' : 'ver'}
+          {open ? 'hide' : 'view'}
         </button>
       </div>
       {open && (
@@ -1514,6 +1778,7 @@ function BlockDetailPanel({
 
   // Solo eventos con tool_name (excluye Cost/Human/etc.); in-progress = PreToolUse
   const visibleTools = block.tools.filter(t => t.tool_name && matchesFilter(t.tool_name, filter))
+  const renderItems  = useMemo(() => buildRenderItems(block.tools, filter), [block.tools, filter])
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0d1117', overflow: 'hidden' }}>
@@ -1528,7 +1793,7 @@ function BlockDetailPanel({
         <div style={{ maxWidth: 840, margin: '0 auto' }}>
           {/* Row 1: meta */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
-            <span style={{ color: '#6e7681', fontSize: 12, fontWeight: 600 }}>Bloque #{block.index}</span>
+            <span style={{ color: '#6e7681', fontSize: 12, fontWeight: 600 }}>Block #{block.index}</span>
             {actors.map((a, i) => <ActorBadge key={i} actor={a} />)}
             {intent && <IntentBadge intent={intent} />}
             <div style={{ flex: 1 }} />
@@ -1549,7 +1814,7 @@ function BlockDetailPanel({
               <span style={{ color: '#484f58', fontSize: 11 }}>{summaryText(stats)}</span>
               {realLoopCount > 0 && (
                 <span style={{ fontSize: 10, fontWeight: 600, color: '#d29922', background: '#d2992215', border: '1px solid #d2992230', borderRadius: 4, padding: '1px 6px' }}>
-                  {realLoopCount} llamada{realLoopCount > 1 ? 's' : ''} repetida{realLoopCount > 1 ? 's' : ''}
+                  {realLoopCount} repeated call{realLoopCount > 1 ? 's' : ''}
                 </span>
               )}
             </div>
@@ -1572,14 +1837,14 @@ function BlockDetailPanel({
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: durOpen ? 8 : 0 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: '#484f58', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-                Duración por herramienta ({timedTools.length})
+                Duration by tool ({timedTools.length})
               </div>
               <button
                 onClick={() => setDurOpen(v => !v)}
                 style={{ background: 'none', border: '1px solid #21262d', borderRadius: 4, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 7px', color: '#6e7681', fontSize: 10 }}
               >
                 {durOpen ? <ChevronsDownUp size={10} /> : <ChevronsUpDown size={10} />}
-                {durOpen ? 'ocultar' : 'mostrar'}
+                {durOpen ? 'hide' : 'show'}
               </button>
             </div>
             {durOpen && (
@@ -1623,19 +1888,19 @@ function BlockDetailPanel({
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: filesOpen ? 8 : 0 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: '#484f58', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-                Archivos tocados ({files.size})
+                Files touched ({files.size})
               </div>
               <button
                 onClick={() => setFilesOpen(v => !v)}
                 style={{ background: 'none', border: '1px solid #21262d', borderRadius: 4, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 7px', color: '#6e7681', fontSize: 10 }}
               >
                 {filesOpen ? <ChevronsDownUp size={10} /> : <ChevronsUpDown size={10} />}
-                {filesOpen ? 'ocultar' : 'mostrar'}
+                {filesOpen ? 'hide' : 'show'}
               </button>
             </div>
             {filesOpen && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                {[...files.entries()].slice(0, 12).map(([path, ops]) => {
+                {[...files.entries()].map(([path, ops]) => {
                   const hasWrite = ops.has('write') || ops.has('edit')
                   const short    = path.split('/').slice(-3).join('/')
                   return (
@@ -1662,9 +1927,6 @@ function BlockDetailPanel({
                     </div>
                   )
                 })}
-                {files.size > 12 && (
-                  <div style={{ color: '#484f58', fontSize: 11, paddingLeft: 8 }}>+{files.size - 12} más</div>
-                )}
               </div>
             )}
           </div>
@@ -1675,14 +1937,14 @@ function BlockDetailPanel({
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: bashOpen ? 8 : 0 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: '#484f58', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-                Comandos ({bashCalls.length})
+                Commands ({bashCalls.length})
               </div>
               <button
                 onClick={() => setBashOpen(v => !v)}
                 style={{ background: 'none', border: '1px solid #21262d', borderRadius: 4, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 7px', color: '#6e7681', fontSize: 10 }}
               >
                 {bashOpen ? <ChevronsDownUp size={10} /> : <ChevronsUpDown size={10} />}
-                {bashOpen ? 'ocultar' : 'mostrar'}
+                {bashOpen ? 'hide' : 'show'}
               </button>
             </div>
             {bashOpen && (
@@ -1748,7 +2010,7 @@ function BlockDetailPanel({
           )]
           return (
             <div>
-              <SectionLabel>Modelo</SectionLabel>
+              <SectionLabel>Model</SectionLabel>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                 {/* Modelo principal */}
                 <div style={{
@@ -1795,7 +2057,7 @@ function BlockDetailPanel({
                 }}
               >
                 {logOpen ? <ChevronsDownUp size={10} /> : <ChevronsUpDown size={10} />}
-                {logOpen ? 'ocultar' : 'mostrar'}
+                {logOpen ? 'hide' : 'show'}
               </button>
             </div>
 
@@ -1822,16 +2084,29 @@ function BlockDetailPanel({
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  {visibleTools.map((ev, i) => (
-                    <ToolRow
-                      key={i} ev={ev} startedAt={startedAt}
-                      typeCount={toolTypeCount.get(ev.tool_name || '') || 0}
-                      isRealLoop={realLoopKeys.has(`${ev.tool_name}::${ev.tool_input ?? ''}`)}
-                      blockDone={block.hasStop}
-                      onClick={() => setSelected(ev)}
-                    />
-                  ))}
-                  {visibleTools.length === 0 && (
+                  {renderItems.map((item, i) =>
+                    item.kind === 'skillGroup' ? (
+                      <SkillContainer
+                        key={i}
+                        skillEv={item.skillEv}
+                        children={item.children}
+                        startedAt={startedAt}
+                        toolTypeCount={toolTypeCount}
+                        realLoopKeys={realLoopKeys}
+                        blockDone={block.hasStop}
+                        onToolClick={setSelected}
+                      />
+                    ) : (
+                      <ToolRow
+                        key={i} ev={item.ev} startedAt={startedAt}
+                        typeCount={toolTypeCount.get(item.ev.tool_name || '') || 0}
+                        isRealLoop={realLoopKeys.has(`${item.ev.tool_name}::${item.ev.tool_input ?? ''}`)}
+                        blockDone={block.hasStop}
+                        onClick={() => setSelected(item.ev)}
+                      />
+                    )
+                  )}
+                  {renderItems.length === 0 && (
                     <div style={{ color: '#484f58', fontSize: 11, paddingLeft: 8 }}>sin resultados</div>
                   )}
                 </div>
@@ -1851,7 +2126,7 @@ function BlockDetailPanel({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quota, sessionState = 'idle', weeklyData = [], hiddenCost, prompts = [], quotaStats }: Props) {
+export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quota, sessionState = 'idle', weeklyData = [], hiddenCost, prompts = [], quotaStats, subAgentSessions = [] }: Props) {
   const listRef        = useRef<HTMLDivElement>(null)
   // null = auto-follow last block
   const [pinned, setPinned] = useState<number | null>(null)
@@ -1920,7 +2195,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
         background: '#090d12', overflow: 'hidden',
       }}>
         {/* KPI section */}
-        <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} quotaStats={quotaStats} startedAt={startedAt} />
+        <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} quotaStats={quotaStats} startedAt={startedAt} promptCount={prompts.length} />
 
         {/* Cost Timeline inside sidebar */}
         <CostTimeline blocks={blocks} blockCosts={blockCosts} selected={selectedIdx} onSelect={handleSelect} />
@@ -1942,7 +2217,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
         </div>
 
         {/* Session stats at bottom */}
-        <SidebarStats cost={cost} weeklyData={weeklyData} events={events} hiddenCost={hiddenCost} prompts={prompts} />
+        <SidebarStats cost={cost} weeklyData={weeklyData} events={events} hiddenCost={hiddenCost} prompts={prompts} subAgentSessions={subAgentSessions} />
       </div>
 
       {/* ── Right: block detail (full width) ── */}
@@ -1960,7 +2235,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
           )
           : (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#484f58', fontSize: 12 }}>
-              Seleccioná un bloque
+              Select a block
             </div>
           )
         }

@@ -1,1 +1,0 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/components/dagview.tsx","./src/components/header.tsx","./src/components/historyview.tsx","./src/components/kpibar.tsx","./src/components/projectcard.tsx","./src/components/projectsview.tsx","./src/components/sessioncard.tsx","./src/components/statsfooter.tsx","./src/components/tracepanel.tsx"],"version":"5.9.3"}

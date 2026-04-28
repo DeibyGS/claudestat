@@ -14,10 +14,10 @@ import path from 'path'
 import os from 'os'
 import fs from 'fs'
 
-export const CLAUDETRACE_DIR = path.join(os.homedir(), '.claudetrace')
-const DB_PATH = path.join(CLAUDETRACE_DIR, 'events.db')
+export const CLAUDESTAT_DIR = process.env.CLAUDESTAT_DATA_DIR ?? path.join(os.homedir(), '.claudestat')
+const DB_PATH = process.env.CLAUDESTAT_DB_PATH ?? path.join(CLAUDESTAT_DIR, 'events.db')
 
-fs.mkdirSync(CLAUDETRACE_DIR, { recursive: true })
+fs.mkdirSync(CLAUDESTAT_DIR, { recursive: true })
 
 const db = new DatabaseSync(DB_PATH)
 
@@ -46,7 +46,8 @@ db.exec(`
     total_cache_read       INTEGER DEFAULT 0,
     total_cache_creation   INTEGER DEFAULT 0,
     efficiency_score       INTEGER DEFAULT 100,
-    loops_detected         INTEGER DEFAULT 0
+    loops_detected         INTEGER DEFAULT 0,
+    ai_summary             TEXT
   );
 
   CREATE TABLE IF NOT EXISTS events (
@@ -69,6 +70,9 @@ try { db.exec(`CREATE INDEX IF NOT EXISTS idx_events_session_type ON events(sess
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_events_tool       ON events(session_id, tool_name)`) } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_started  ON sessions(started_at DESC)`) } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_project  ON sessions(project_path)`) } catch {}
+try { db.exec(`ALTER TABLE sessions ADD COLUMN dominant_model TEXT`) } catch {}
+try { db.exec(`ALTER TABLE events ADD COLUMN skill_parent TEXT`) } catch {}
+try { db.exec(`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT`) } catch {}
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -98,6 +102,7 @@ export interface EventRow {
   ts: number
   cwd?: string
   duration_ms?: number
+  skill_parent?: string
 }
 
 export interface BlockCostEntry {
@@ -118,6 +123,7 @@ export interface CostUpdate {
   context_window: number  // tamaño máximo del modelo (ej: 200000)
   lastEntry?: BlockCostEntry  // costo desglosado del último request (para block_cost SSE)
   lastModel?: string          // modelo del último request (para mostrar en header)
+  firstTs?: number            // timestamp ms del primer mensaje assistant (para detectar sub-agentes)
 }
 
 // ─── Prepared statements (se compilan una vez al iniciar) ─────────────────────
@@ -137,13 +143,14 @@ const stmts = {
       total_cache_read     = ?,
       total_cache_creation = ?,
       efficiency_score     = ?,
-      loops_detected       = ?
+      loops_detected       = ?,
+      dominant_model       = ?
     WHERE id = ?
   `),
 
   insertEvent: db.prepare(`
-    INSERT INTO events (session_id, type, tool_name, tool_input, ts, cwd)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO events (session_id, type, tool_name, tool_input, ts, cwd, skill_parent)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `),
 
   pairPost: db.prepare(`
@@ -193,13 +200,23 @@ const stmts = {
     UPDATE sessions SET ai_summary = ? WHERE id = ?
   `),
 
+  updateSessionParent: db.prepare(`
+    UPDATE sessions SET parent_session_id = ? WHERE id = ? AND parent_session_id IS NULL
+  `),
+
+  getChildSessions: db.prepare(`
+    SELECT id, dominant_model, total_cost_usd, started_at
+    FROM sessions WHERE parent_session_id = ? ORDER BY started_at ASC
+  `),
+
   getProjectAggregates: db.prepare(`
     SELECT
       project_path,
       COUNT(*) as session_count,
       COALESCE(SUM(total_cost_usd),    0) as total_cost_usd,
       COALESCE(SUM(total_input_tokens),0) as total_input_tokens,
-      COALESCE(SUM(total_output_tokens),0)as total_output_tokens,
+      COALESCE(SUM(total_output_tokens),0) as total_output_tokens,
+      COALESCE(SUM(total_cache_read),0)    as total_cache_read,
       MAX(last_event_at) as last_active,
       AVG(CASE WHEN efficiency_score > 0 THEN efficiency_score END) as avg_efficiency
     FROM sessions
@@ -277,10 +294,51 @@ const stmts = {
   `),
 
   getQuotaStats: db.prepare(`
-    SELECT (total_input_tokens + total_output_tokens) as total_tokens, total_cost_usd
+    SELECT (total_input_tokens + total_output_tokens + total_cache_read) as total_tokens, total_cost_usd
     FROM sessions
     WHERE started_at > ? AND total_cost_usd > 0
     ORDER BY total_tokens ASC
+  `),
+
+  analyticsDaily: db.prepare(`
+    SELECT
+      date(started_at / 1000, 'unixepoch', 'localtime')          AS date,
+      COUNT(*)                                                     AS sessions,
+      COALESCE(SUM(total_cost_usd),       0)                      AS cost,
+      COALESCE(SUM(total_input_tokens),   0)                      AS input_tokens,
+      COALESCE(SUM(total_output_tokens),  0)                      AS output_tokens,
+      COALESCE(SUM(total_cache_read),     0)                      AS cache_read,
+      COALESCE(SUM(loops_detected),       0)                      AS loops,
+      COALESCE(AVG(CASE WHEN efficiency_score > 0 THEN efficiency_score END), 100) AS avg_efficiency
+    FROM sessions
+    WHERE started_at >= ?
+    GROUP BY date
+    ORDER BY date ASC
+  `),
+
+  analyticsByModel: db.prepare(`
+    SELECT
+      date(started_at / 1000, 'unixepoch', 'localtime')                                AS date,
+      COALESCE(dominant_model, 'claude-sonnet-4-6')                                     AS model,
+      COALESCE(SUM(total_input_tokens + total_output_tokens + total_cache_read), 0)     AS tokens,
+      COALESCE(SUM(total_cost_usd), 0)                                                  AS cost
+    FROM sessions
+    WHERE started_at >= ?
+    GROUP BY date, model
+    ORDER BY date ASC
+  `),
+
+  analyticsProjectHours: db.prepare(`
+    SELECT
+      COALESCE(project_path, 'No project')                      AS project,
+      COUNT(*)                                                  AS sessions,
+      COALESCE(SUM(last_event_at - started_at), 0) / 3600000.0 AS hours,
+      COALESCE(SUM(total_cost_usd), 0)                         AS cost
+    FROM sessions
+    WHERE started_at >= ?
+    GROUP BY project
+    ORDER BY hours DESC
+    LIMIT 8
   `),
 }
 
@@ -294,7 +352,7 @@ export const dbOps = {
   insertEvent(e: EventRow): number {
     const res = stmts.insertEvent.run(
       e.session_id, e.type, e.tool_name ?? null,
-      e.tool_input ?? null, e.ts, e.cwd ?? null
+      e.tool_input ?? null, e.ts, e.cwd ?? null, e.skill_parent ?? null
     )
     return Number(res.lastInsertRowid)
   },
@@ -328,6 +386,7 @@ export const dbOps = {
       cost.cache_creation,
       efficiencyScore,
       loopsDetected,
+      cost.lastModel ?? null,
       sessionId
     )
   },
@@ -373,6 +432,14 @@ export const dbOps = {
     stmts.updateSessionSummary.run(summary, sessionId)
   },
 
+  updateSessionParent(sessionId: string, parentId: string) {
+    stmts.updateSessionParent.run(parentId, sessionId)
+  },
+
+  getChildSessions(parentSessionId: string): { id: string; dominant_model?: string; total_cost_usd?: number; started_at: number }[] {
+    return stmts.getChildSessions.all(parentSessionId) as any[]
+  },
+
   getHiddenCostStats(days: number): {
     loop_waste_usd: number; total_cost_usd: number
     loop_sessions:  number; total_loops:    number; total_sessions: number
@@ -404,9 +471,13 @@ export const dbOps = {
     let direct = 0, mini = 0, pipeline = 0
     for (const r of rows) {
       if (r.agent_count === 0)     direct++
-      else if (r.agent_count <= 3) mini++
+      else if (r.agent_count <= 6) mini++
       else                         pipeline++
     }
     return { direct, mini, pipeline, total: rows.length }
   },
+
+  getAnalyticsDaily(since: number)   { return stmts.analyticsDaily.all(since)        as any[] },
+  getAnalyticsByModel(since: number) { return stmts.analyticsByModel.all(since)       as any[] },
+  getProjectHours(since: number)     { return stmts.analyticsProjectHours.all(since)  as any[] },
 }

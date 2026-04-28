@@ -1,22 +1,29 @@
-import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, WifiOff, Zap } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { AlertTriangle, WifiOff, Zap, TrendingUp } from 'lucide-react'
 import type {
   AppState, TraceEvent, CostInfo, BlockCost,
   MetaStats, MetaSnapshot, DaySessions, ProjectSummary,
-  QuotaData, SessionState, ClaudeStatsData, QuotaStats
+  QuotaData, SessionState, ClaudeStatsData, QuotaStats, SubAgentSession
 } from './types'
 import { type Tab, Header }    from './components/Header'
 import { ConfigPanel }        from './components/ConfigPanel'
 import { TracePanel }          from './components/TracePanel'
 import { HistoryView }         from './components/HistoryView'
 import { ProjectsView }        from './components/ProjectsView'
-import { UsageView }           from './components/UsageView'
-import { WeeklyReportsView }  from './components/WeeklyReportsView'
+import { AnalyticsView }      from './components/AnalyticsView'
 import { SystemView, type SystemConfig } from './components/SystemView'
+
+const HEAVY_BLOCK_THRESHOLD = 500_000
+
+function fmtTok(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000)     return `${Math.round(n / 1_000)}K`
+  return String(n)
+}
 
 const EMPTY: AppState = {
   sessionId: '', cwd: '', startedAt: Date.now(), events: [], weeklyData: [],
-  sessionState: 'idle', blockCosts: [], pendingBlockCost: null
+  sessionState: 'idle', blockCosts: [], pendingBlockCost: null, subAgentSessions: []
 }
 
 export default function App() {
@@ -39,10 +46,19 @@ export default function App() {
   } | undefined>()
   const [prompts,      setPrompts]     = useState<Array<{ index: number; ts: number; text: string }>>([]);
   const [claudeStats,  setClaudeStats] = useState<ClaudeStatsData | undefined>()
-  const [systemConfig, setSystemConfig] = useState<SystemConfig | undefined>()
+  const [systemConfig,      setSystemConfig]      = useState<SystemConfig | undefined>()
+  const [systemConfigError, setSystemConfigError] = useState(false)
   const [quotaStats,   setQuotaStats]  = useState<QuotaStats | undefined>()
   const stateRef = useRef(state)
   stateRef.current = state
+
+  const fetchSystemConfig = useCallback(() => {
+    setSystemConfigError(false)
+    fetch('/system-config')
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => setSystemConfig(d))
+      .catch(() => setSystemConfigError(true))
+  }, [])
 
   // ── Título dinámico del browser tab ───────────────────────────────────────
   useEffect(() => {
@@ -61,9 +77,9 @@ export default function App() {
           if (det) label += ` ${det}`
         } catch {}
       }
-      document.title = `claudetrace — ${label}`
+      document.title = `claudestat — ${label}`
     } else {
-      document.title = 'claudetrace'
+      document.title = 'claudestat'
     }
   }, [state.events])
 
@@ -94,13 +110,13 @@ export default function App() {
           // Notificaciones del sistema
           if ('Notification' in window && Notification.permission === 'granted') {
             if (msg.type === 'quota_warning' && (msg.payload?.level === 'orange' || msg.payload?.level === 'red')) {
-              new Notification('claudetrace — Cuota alta', {
-                body: `Cuota al ${msg.payload.cyclePct}% — ${msg.payload.level === 'red' ? 'Kill switch próximo' : 'Atención requerida'}`,
+              new Notification('claudestat — High Quota', {
+                body: `Quota at ${msg.payload.cyclePct}% — ${msg.payload.level === 'red' ? 'Kill switch imminent' : 'Attention required'}`,
               })
             }
             if (msg.type === 'compact_detected') {
-              new Notification('claudetrace — Auto-compact', {
-                body: 'Claude está compactando el contexto de la sesión',
+              new Notification('claudestat — Auto-compact', {
+                body: 'Claude is compacting the session context',
               })
             }
           }
@@ -211,7 +227,7 @@ export default function App() {
       }).catch(() => {})
     }
     if (activeTab === 'system') {
-      fetch('/system-config').then(r => r.json()).then(d => setSystemConfig(d)).catch(() => {})
+      fetchSystemConfig()
     }
   }, [activeTab])
 
@@ -241,6 +257,9 @@ export default function App() {
     flex: 1, overflow: 'hidden', display: 'flex',
   }
 
+  const lastBlock = state.blockCosts.at(-1)
+  const heavyBlockTokens = lastBlock && lastBlock.inputTokens >= HEAVY_BLOCK_THRESHOLD ? lastBlock.inputTokens : null
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
       <Header
@@ -259,6 +278,7 @@ export default function App() {
       {activeTab === 'live' && (
         <>
           {compacting && <CompactBanner />}
+          {heavyBlockTokens !== null && <HeavyContextBanner tokens={heavyBlockTokens} />}
           <div style={liveLayout}>
             <TracePanel
               events={state.events} startedAt={state.startedAt}
@@ -269,6 +289,7 @@ export default function App() {
               hiddenCost={hiddenCost}
               prompts={prompts}
               quotaStats={quotaStats}
+              subAgentSessions={state.subAgentSessions}
             />
           </div>
         </>
@@ -286,21 +307,15 @@ export default function App() {
         </div>
       )}
 
-      {activeTab === 'usage' && (
+      {activeTab === 'analytics' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <UsageView quota={quota} cost={state.cost} events={state.events} prompts={prompts} claudeStats={claudeStats} />
-        </div>
-      )}
-
-      {activeTab === 'reports' && (
-        <div style={{ flex: 1, overflow: 'hidden' }}>
-          <WeeklyReportsView />
+          <AnalyticsView quota={quota} cost={state.cost} events={state.events} prompts={prompts} claudeStats={claudeStats} />
         </div>
       )}
 
       {activeTab === 'system' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <SystemView config={systemConfig} />
+          <SystemView config={systemConfig} error={systemConfigError} onRetry={fetchSystemConfig} />
         </div>
       )}
 
@@ -321,8 +336,9 @@ function handleMessage(prev: AppState, msg: any): AppState {
       events:           (msg.events || []) as TraceEvent[],
       cost:             buildCost(s),
       sessionState:     (s.state as SessionState) ?? 'idle',
-      blockCosts:       (msg.blockCosts || []) as BlockCost[],
-      pendingBlockCost: null,
+      blockCosts:        (msg.blockCosts || []) as BlockCost[],
+      subAgentSessions:  (msg.subAgentSessions || []) as SubAgentSession[],
+      pendingBlockCost:  null,
     }
   }
   if (msg.type === 'state_change') {
@@ -395,11 +411,12 @@ function handleMessage(prev: AppState, msg: any): AppState {
 
 // ─── Banners de alerta ────────────────────────────────────────────────────────
 
-function AlertBanner({ icon: Icon, color, title, subtitle }: {
+function AlertBanner({ icon: Icon, color, title, subtitle, action }: {
   icon:     React.ElementType
   color:    string
   title:    string
   subtitle: string
+  action?:  { label: string; onClick: () => void }
 }) {
   return (
     <div style={{
@@ -411,13 +428,30 @@ function AlertBanner({ icon: Icon, color, title, subtitle }: {
       <Icon size={14} color={color} style={{ flexShrink: 0 }} />
       <span style={{ color, fontWeight: 700, fontSize: 12, whiteSpace: 'nowrap' }}>{title}</span>
       <span style={{ color: '#7d8590', fontSize: 11, whiteSpace: 'nowrap' }}>— {subtitle}</span>
+      {action && (
+        <button onClick={action.onClick} style={{
+          marginLeft: 6, padding: '2px 10px', fontSize: 11, fontWeight: 600,
+          color, background: `${color}22`, border: `1px solid ${color}66`,
+          borderRadius: 4, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+        }}>
+          {action.label}
+        </button>
+      )}
     </div>
   )
 }
 
-const DisconnectedBanner = () => <AlertBanner icon={WifiOff}       color="#f0883e" title="Daemon desconectado"      subtitle="reconectando automáticamente…" />
-const KillSwitchBanner   = () => <AlertBanner icon={AlertTriangle} color="#f85149" title="Kill switch activado"     subtitle="cuota de 5h superada · nuevas tool calls bloqueadas" />
-const CompactBanner      = () => <AlertBanner icon={Zap}           color="#d29922" title="Claude está compactando el contexto" subtitle="el historial de herramientas se resume automáticamente para liberar espacio" />
+const DisconnectedBanner = () => <AlertBanner icon={WifiOff}       color="#f0883e" title="Daemon disconnected"      subtitle="reconnecting automatically…" />
+const KillSwitchBanner   = () => <AlertBanner icon={AlertTriangle} color="#f85149" title="Kill switch active"      subtitle="5h quota exceeded · new tool calls blocked" />
+const CompactBanner      = () => <AlertBanner icon={Zap}           color="#d29922" title="Claude is compacting context" subtitle="tool history is automatically summarized to free up space" />
+const HeavyContextBanner = ({ tokens }: { tokens: number }) =>
+  <AlertBanner
+    icon={TrendingUp}
+    color="#a371f7"
+    title={`Heavy context · ${fmtTok(tokens)} tokens input`}
+    subtitle="save important context before compacting"
+    action={{ label: 'Copy /checkpoint', onClick: () => navigator.clipboard.writeText('/checkpoint') }}
+  />
 
 function buildCost(session: any): CostInfo | undefined {
   if (!session?.total_cost_usd) return undefined

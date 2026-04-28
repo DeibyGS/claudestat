@@ -46,7 +46,12 @@ process.stdin.on('end', () => {
         signal: AbortSignal.timeout(1500),
       })
         .then(r => r.json())
-        .catch(() => ({ blocked: false })),  // si el daemon no responde → no bloquear
+        .catch(() => {
+          // Si el daemon no responde, loggeamos en stderr (visible en logs de Claude)
+          // pero NO bloqueamos — un fallo del daemon no debe interrumpir el trabajo
+          process.stderr.write(`[claudetrace] daemon no disponible — kill-switch desactivado\n`)
+          return { blocked: false }
+        }),
     ])
     .then(([_, ks]) => {
       if (ks && ks.blocked) {

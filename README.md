@@ -1,0 +1,234 @@
+<div align="center">
+
+# claudestat
+
+**Real-time execution trace and cost intelligence for Claude Code**
+
+Hook into every tool call, token, and dollar — as it happens.
+Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js. Runs everywhere.
+
+[![npm version](https://img.shields.io/npm/v/@deibygs/claudestat?color=blue)](https://www.npmjs.com/package/@deibygs/claudestat)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)]()
+[![Tests](https://img.shields.io/badge/tests-44%2F44-brightgreen)]()
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
+
+[Installation](#installation) • [Quick Start](#quick-start) • [Commands](#commands) • [Dashboard](#dashboard) • [Contributing](#contributing)
+
+![ClaudeStat dashboard](./ClaudeStat.png)
+
+</div>
+
+---
+
+## Why?
+
+Claude Code is powerful — but it's a black box while it runs. You can't see what it's spending, how deep the context is, whether it's looping, or if you're about to hit your quota limit.
+
+**claudestat fixes that.** It taps into Claude Code's hook system to capture every event, stores it locally in SQLite, and shows you everything in a live dashboard or terminal trace.
+
+- Live tool trace with duration and token cost per call
+- Quota guard with configurable kill switch (block new sessions at X%)
+- Pattern analyzer: detects loops, Bash overuse, low cache reuse, and more
+- Per-session cost breakdown + cache savings + burn rate
+- AI-generated weekly usage reports
+
+---
+
+## How it works
+
+```
+Claude Code event
+      │
+      ▼
+  Hook script  (~/.claudestat/hooks/event.js)
+      │  POST JSON to daemon
+      ▼
+  Daemon  (localhost:7337)
+      │  stores events in SQLite
+      │  enriches with JSONL token data from ~/.claude/projects/
+      │  runs pattern analyzer
+      ▼
+  Dashboard  (React + Vite, auto-refreshes)
+      │
+      ▼
+  You see everything — live
+```
+
+---
+
+## Requirements
+
+- **Node.js >= 18** (Node 22 recommended — uses `node:sqlite`)
+- **Claude Code** installed (`npm install -g @anthropic-ai/claude-code`)
+
+---
+
+## Installation
+
+```bash
+npm install -g @deibygs/claudestat
+```
+
+Then wire up the hooks into Claude Code:
+
+```bash
+claudestat install
+```
+
+This modifies `~/.claude/settings.json` to add `SessionStart`, `PreToolUse`, `PostToolUse`, and `Stop` hooks. A backup is created at `~/.claude/settings.json.bak` before any change.
+
+> Restart Claude Code after installing so the hooks take effect.
+
+---
+
+## Quick Start
+
+```bash
+# 1. Start the background daemon
+claudestat start
+
+# 2. Open the dashboard
+open http://localhost:7337
+
+# 3. Or watch a live terminal trace
+claudestat watch
+```
+
+That's it. Start a Claude Code session and watch the events flow in.
+
+---
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `claudestat start` | Start the background daemon |
+| `claudestat stop` | Stop the daemon |
+| `claudestat restart` | Restart the daemon |
+| `claudestat install` | Install hooks into Claude Code |
+| `claudestat uninstall` | Remove hooks from Claude Code |
+| `claudestat watch` | Live terminal trace view |
+| `claudestat status` | Show quota, cost, and burn rate |
+| `claudestat config` | View or edit configuration |
+
+### `claudestat status`
+
+```
+claudestat status
+
+  Quota 5h   45/50 prompts (90%)  |  reset in 22m
+  Plan        MAX5
+  Sonnet      3.2h / 5h  this week
+  Burn rate   1,240 tok/min
+```
+
+### `claudestat config`
+
+```bash
+# Enable kill switch — block new sessions when quota exceeds 95%
+claudestat config --kill-switch true --threshold 95
+
+# Force plan detection instead of auto
+claudestat config --plan max5   # pro | max5 | max20 | auto
+```
+
+Config is stored at `~/.claudestat/config.json`.
+
+---
+
+## Dashboard
+
+The dashboard lives at `http://localhost:7337` and has five tabs:
+
+### Live
+Real-time stream of every tool call in the active session. Shows tool name, duration, and token cost. Agent sub-calls expand into nested traces; Skill invocations collapse into labeled containers.
+
+### History
+All past sessions sorted by date. Each card shows total tokens (input + cache read + output), USD cost, efficiency score, and detected loops. Click any session to open its full tool trace, DAG view, and a compare panel.
+
+### Projects
+Grid of every project you've worked on. Shows last active date, total sessions, cost, model usage breakdown (Sonnet / Haiku), and an efficiency progress bar.
+
+### Analytics
+- 6 KPIs: total cost, tokens, cache savings, hidden loop waste, avg efficiency, session count
+- Token/cost trend charts (7 / 30 / 90 days)
+- Hours by project
+- AI-generated weekly reports (auto-scheduled or on demand)
+
+### System
+Daemon health, DB size, Node version, config file paths, and memory context.
+
+---
+
+## Configuration reference
+
+`~/.claudestat/config.json`:
+
+```json
+{
+  "killSwitchEnabled": true,
+  "killSwitchThreshold": 95,
+  "warnThresholds": [70, 85],
+  "plan": null
+}
+```
+
+| Key | Default | Description |
+|---|---|---|
+| `killSwitchEnabled` | `true` | Block new sessions when quota exceeds threshold |
+| `killSwitchThreshold` | `95` | Quota percentage that triggers the kill switch |
+| `warnThresholds` | `[70, 85]` | Percentages that trigger yellow/orange warnings |
+| `plan` | `null` (auto) | Force plan: `"pro"` / `"max5"` / `"max20"` |
+
+---
+
+## Uninstall
+
+```bash
+claudestat uninstall        # removes hooks from ~/.claude/settings.json
+npm uninstall -g @deibygs/claudestat
+rm -rf ~/.claudestat        # removes DB, config, and PID file
+```
+
+---
+
+## Contributing
+
+**claudestat is open source and PRs are welcome.**
+
+Whether you want to fix a bug, improve a dashboard view, add a new pattern to the analyzer, or support a new provider — contributions are encouraged.
+
+### How to contribute
+
+1. Fork the repository
+2. Create a branch: `git checkout -b feat/your-feature`
+3. Make your changes
+4. Run the test suite: `npm test` (44 tests — pattern analyzer + SQLite integration)
+5. Open a PR with a clear description of what you changed and why
+
+### Good first areas
+
+- **Pattern analyzer** (`src/pattern-analyzer.ts`) — add new usage patterns or improve thresholds
+- **Dashboard components** (`dashboard/src/components/`) — UI improvements, new charts, accessibility
+- **New commands** — ideas like `claudestat export`, `claudestat compare`, `claudestat top`
+- **Bug reports** — open an issue with steps to reproduce and your Node/OS version
+
+### Running locally
+
+```bash
+git clone https://github.com/YOUR_USERNAME/claudestat
+cd claudestat
+npm install
+npm run dev        # runs daemon + dashboard in dev mode
+npm test           # run all tests
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
+
+---
+
+## License
+
+MIT — use it, fork it, ship it.

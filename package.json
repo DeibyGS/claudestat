@@ -1,15 +1,36 @@
 {
-  "name": "claudetrace",
+  "name": "@deibygs/claudestat",
   "version": "0.1.0",
   "description": "Real-time execution trace and cost intelligence for Claude Code",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "ai",
+    "cli",
+    "monitoring",
+    "cost",
+    "token",
+    "dashboard"
+  ],
+  "homepage": "https://github.com/deibygorrin/claudestat#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deibygorrin/claudestat.git"
+  },
+  "bugs": {
+    "url": "https://github.com/deibygorrin/claudestat/issues"
+  },
+  "license": "MIT",
   "bin": {
-    "claudetrace": "./dist/index.js"
+    "claudestat": "dist/index.js"
   },
   "scripts": {
     "build": "tsc && npm run build:dashboard",
     "build:dashboard": "cd dashboard && npm install && npm run build",
     "dev": "tsx src/index.ts",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "CLAUDESTAT_DB_PATH=:memory: CLAUDESTAT_DATA_DIR=/tmp ${NVM_BIN:-$(dirname $(which node))}/node --require tsx/cjs tests/index.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",

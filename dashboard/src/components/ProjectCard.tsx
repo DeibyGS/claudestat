@@ -1,4 +1,7 @@
-import type { ProjectSummary, ModelUsage } from '../types'
+import { useState, memo } from 'react'
+import { ChevronDown, ChevronUp, Lightbulb, TriangleAlert, CheckCircle2, FolderOpen } from 'lucide-react'
+import type { ProjectSummary, ModelUsage, PatternInsight, InsightLevel } from '../types'
+import { Tip } from './Tip'
 
 interface Props { project: ProjectSummary; isActive?: boolean }
 
@@ -7,14 +10,28 @@ function fmtTok(n: number): string {
   if (n >= 1_000)     return `${Math.round(n / 1_000)}K`
   return String(n)
 }
+function fmtCost(usd: number): string {
+  if (usd > 0 && usd < 0.01) return '<$0.01'
+  return `$${usd.toFixed(2)}`
+}
+/** Returns the label of the model that consumed the most tokens, or null if tied/empty */
+function dominantModel(usage: ModelUsage | undefined): { label: string; color: string } | null {
+  if (!usage) return null
+  const { opusTokens, sonnetTokens, haikuTokens } = usage
+  if (opusTokens === 0 && sonnetTokens === 0 && haikuTokens === 0) return null
+  if (opusTokens >= sonnetTokens && opusTokens >= haikuTokens) return { label: 'Opus',   color: '#d29922' }
+  if (sonnetTokens >= haikuTokens)                               return { label: 'Sonnet', color: '#58a6ff' }
+  return                                                                { label: 'Haiku',  color: '#3fb950' }
+}
+
 function relativeTime(ts: number | null) {
-  if (!ts) return 'nunca'
+  if (!ts) return 'never'
   const diff = Date.now() - ts
-  if (diff < 60_000)          return 'ahora mismo'
-  if (diff < 3_600_000)       return `hace ${Math.round(diff/60_000)}m`
-  if (diff < 86_400_000)      return `hace ${Math.round(diff/3_600_000)}h`
-  if (diff < 7 * 86_400_000)  return `hace ${Math.round(diff/86_400_000)}d`
-  return new Date(ts).toLocaleDateString('es', { day:'numeric', month:'short' })
+  if (diff < 60_000)          return 'just now'
+  if (diff < 3_600_000)       return `${Math.round(diff/60_000)}m ago`
+  if (diff < 86_400_000)      return `${Math.round(diff/3_600_000)}h ago`
+  if (diff < 7 * 86_400_000)  return `${Math.round(diff/86_400_000)}d ago`
+  return new Date(ts).toLocaleDateString('en', { day:'numeric', month:'short' })
 }
 
 /** Barra horizontal de uso por modelo */
@@ -30,7 +47,23 @@ function ModelUsageBars({ usage }: { usage: ModelUsage }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <span style={{ color: '#7d8590', fontSize: 10, marginBottom: 1 }}>uso por modelo</span>
+      <Tip position="top" align="left" content={
+        <div>
+          <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 6 }}>Usage by model</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {bars.map(b => (
+              <div key={b.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: b.color, flexShrink: 0 }} />
+                <span style={{ color: b.color, fontSize: 10, fontWeight: 700, width: 42 }}>{b.label}</span>
+                <span style={{ color: '#c9d1d9', fontSize: 10 }}>{fmtTok(b.tokens)} tok</span>
+                <span style={{ color: '#484f58', fontSize: 9 }}>{Math.round(b.tokens / total * 100)}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      }>
+        <span style={{ color: '#7d8590', fontSize: 10, marginBottom: 1 }}>model usage</span>
+      </Tip>
       {/* Barra segmentada */}
       <div style={{ display: 'flex', height: 5, borderRadius: 3, overflow: 'hidden', gap: 1 }}>
         {bars.map(b => (
@@ -52,6 +85,81 @@ function ModelUsageBars({ usage }: { usage: ModelUsage }) {
           </span>
         ))}
       </div>
+    </div>
+  )
+}
+
+// ─── Insight colors ───────────────────────────────────────────────────────────
+
+const INSIGHT_COLOR: Record<InsightLevel, string> = {
+  tip:      '#58a6ff',
+  warning:  '#d29922',
+  positive: '#3fb950',
+}
+const INSIGHT_ICON: Record<InsightLevel, typeof Lightbulb> = {
+  tip:      Lightbulb,
+  warning:  TriangleAlert,
+  positive: CheckCircle2,
+}
+
+function InsightsPanel({ insights }: { insights: PatternInsight[] }) {
+  const [open, setOpen] = useState(false)
+  if (insights.length === 0) return null
+
+  const warnCount = insights.filter(i => i.level === 'warning').length
+  const headerColor = warnCount > 0 ? '#d29922' : '#58a6ff'
+
+  return (
+    <div style={{ borderTop: '1px solid #21262d', paddingTop: 8 }}>
+      {/* Toggle header */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          width: '100%', background: 'none', border: 'none', cursor: 'pointer',
+          padding: '4px 0',
+        }}
+      >
+        <span style={{ color: headerColor, fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
+          {warnCount > 0
+            ? <TriangleAlert size={12} />
+            : <Lightbulb size={12} />
+          }
+          {insights.length} insight{insights.length > 1 ? 's' : ''}
+          {warnCount > 0 && (
+            <span style={{ color: '#d29922', fontSize: 10 }}>· {warnCount} warning{warnCount > 1 ? 's' : ''}</span>
+          )}
+        </span>
+        {open ? <ChevronUp size={14} color="#484f58" /> : <ChevronDown size={14} color="#484f58" />}
+      </button>
+
+      {/* Insight list */}
+      {open && (
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {insights.map((ins, i) => {
+            const color = INSIGHT_COLOR[ins.level]
+            return (
+              <div key={i} style={{
+                background: color + '0d',
+                border: `1px solid ${color}30`,
+                borderRadius: 6,
+                padding: '7px 10px',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
+                  {(() => { const Icon = INSIGHT_ICON[ins.level]; return <Icon size={11} color={color} /> })()}
+                  <span style={{ color, fontSize: 11, fontWeight: 700 }}>{ins.title}</span>
+                  {ins.metric && (
+                    <span style={{ color: '#7d8590', fontSize: 9, marginLeft: 'auto' }}>{ins.metric}</span>
+                  )}
+                </div>
+                <p style={{ color: '#8b949e', fontSize: 10, margin: 0, lineHeight: 1.5 }}>
+                  {ins.description}
+                </p>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -96,7 +204,7 @@ const S = {
     transition: 'width 0.5s ease',
     boxShadow: `0 0 4px ${pct >= 80 ? '#3fb95088' : pct >= 50 ? '#d2992288' : '#58a6ff88'}`,
   }),
-  nextTask: { color: '#7d8590', fontSize: 10, fontStyle: 'italic' as const },
+  nextTask: { color: '#58a6ff', fontSize: 10, fontStyle: 'italic' as const, opacity: 0.85, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
 
   stats: {
     display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
@@ -107,19 +215,48 @@ const S = {
   statLbl: { color: '#7d8590', fontSize: 10 },
 }
 
-export function ProjectCard({ project: p, isActive }: Props) {
+function ProjectCardInner({ project: p, isActive }: Props) {
   const isAutoHandoff = !!p.auto_handoff
+  const topModel = dominantModel(p.model_usage)
 
   return (
     <div style={S.card(!!isActive)}>
       {/* Nombre + path */}
       <div>
         <div style={S.header}>
-          <span style={S.name}>📁 {p.name}</span>
-          {isActive && <span style={S.activeBadge}>● activo</span>}
-          {isAutoHandoff && <span style={S.autoBadge}>HANDOFF auto</span>}
+          <span style={{ ...S.name, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <FolderOpen size={14} color="#6e7681" style={{ flexShrink: 0 }} />
+            {p.name}
+          </span>
+          {isActive && (
+            <Tip position="top" align="right" content={
+              <div>
+                <div style={{ color: '#3fb950', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Active project</div>
+                <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>Claude Code is currently working in this directory</div>
+              </div>
+            }>
+              <span style={S.activeBadge}>● active</span>
+            </Tip>
+          )}
+          {isAutoHandoff && (
+            <Tip position="top" align="right" content={
+              <div>
+                <div style={{ color: '#7d8590', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Auto-generated HANDOFF</div>
+                <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>The daemon generated an automatic HANDOFF.md. Edit it to record your pending tasks.</div>
+              </div>
+            }>
+              <span style={S.autoBadge}>HANDOFF auto</span>
+            </Tip>
+          )}
         </div>
-        <div style={S.path}>{p.path}</div>
+        <Tip position="bottom" align="left" content={
+          <div>
+            <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Project path</div>
+            <div style={{ color: '#79c0ff', fontSize: 10, fontFamily: 'monospace', wordBreak: 'break-all' }}>{p.path}</div>
+          </div>
+        }>
+          <div style={S.path}>{p.path.split('/').slice(-3).join('/')}</div>
+        </Tip>
       </div>
 
       {/* Progress (tareas del HANDOFF) */}
@@ -128,31 +265,40 @@ export function ProjectCard({ project: p, isActive }: Props) {
           {p.progress.total === 0 ? (
             <span style={{ ...S.progressLabel, fontStyle: 'italic' }}>
               {isAutoHandoff
-                ? '→ HANDOFF auto-generado — completá las secciones con tus tareas'
-                : 'sin tareas registradas'}
+                ? '→ Auto-generated HANDOFF — fill in the sections with your tasks'
+                : 'no tasks recorded'}
             </span>
           ) : p.progress.done === 0 ? (
             <>
               <span style={S.progressLabel}>
-                {p.progress.total} tarea{p.progress.total > 1 ? 's' : ''} pendiente{p.progress.total > 1 ? 's' : ''}
+                {p.progress.total} pending task{p.progress.total > 1 ? 's' : ''}
               </span>
               {p.progress.nextTask && (
-                <div style={S.nextTask}>→ próximo: {p.progress.nextTask}</div>
+                <div style={S.nextTask}>→ next: {p.progress.nextTask}</div>
               )}
             </>
           ) : (
             <>
               <div style={S.progressRow}>
                 <span style={S.progressLabel}>
-                  {p.progress.done}/{p.progress.total} tareas
+                  {p.progress.done}/{p.progress.total} tasks
                 </span>
-                <span style={S.progressPct(p.progress.pct)}>{p.progress.pct}%</span>
+                <Tip position="top" align="right" content={
+                  <div>
+                    <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>HANDOFF progress</div>
+                    <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>
+                      {p.progress.done} completed task{p.progress.done !== 1 ? 's' : ''} out of {p.progress.total} in HANDOFF.md
+                    </div>
+                  </div>
+                }>
+                  <span style={S.progressPct(p.progress.pct)}>{p.progress.pct}%</span>
+                </Tip>
               </div>
               <div style={S.barTrack}>
                 <div style={S.barFill(p.progress.pct)} />
               </div>
               {p.progress.nextTask && (
-                <div style={S.nextTask}>→ próximo: {p.progress.nextTask}</div>
+                <div style={S.nextTask}>→ next: {p.progress.nextTask}</div>
               )}
             </>
           )}
@@ -166,23 +312,75 @@ export function ProjectCard({ project: p, isActive }: Props) {
 
       {/* Stats: coste · tokens · sesiones · última actividad */}
       <div style={S.stats}>
-        <div style={S.stat}>
-          <span style={S.statVal}>${p.total_cost_usd.toFixed(2)}</span>
-          <span style={S.statLbl}>coste total</span>
-        </div>
-        <div style={S.stat}>
-          <span style={S.statVal}>{fmtTok(p.total_tokens)}</span>
-          <span style={S.statLbl}>tokens</span>
-        </div>
-        <div style={S.stat}>
-          <span style={S.statVal}>{p.session_count}</span>
-          <span style={S.statLbl}>sesiones</span>
-        </div>
-        <div style={S.stat}>
-          <span style={S.statVal}>{relativeTime(p.last_active)}</span>
-          <span style={S.statLbl}>última vez</span>
-        </div>
+        <Tip position="top" align="left" content={
+          <div>
+            <div style={{ color: '#3fb950', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Total cost</div>
+            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>Sum of all API costs of the sessions in this project</div>
+          </div>
+        }>
+          <div style={S.stat}>
+            <span style={S.statVal}>{fmtCost(p.total_cost_usd)}</span>
+            <span style={S.statLbl}>
+              total cost
+              {p.session_count > 1 && (
+                <span style={{ color: '#484f58', marginLeft: 3 }}>· {fmtCost(p.total_cost_usd / p.session_count)}/ses</span>
+              )}
+            </span>
+          </div>
+        </Tip>
+        <Tip position="top" align="left" content={
+          <div>
+            <div style={{ color: '#79c0ff', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Total tokens</div>
+            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
+              Input + Output + Cache read accumulated.<br />
+              {topModel ? <>Dominant model: <span style={{ color: topModel.color, fontWeight: 700 }}>{topModel.label}</span></> : 'No model data'}
+            </div>
+          </div>
+        }>
+          <div style={S.stat}>
+            <span style={S.statVal}>{fmtTok(p.total_tokens)}</span>
+            <span style={S.statLbl}>
+              tokens
+              {topModel && (
+                <span style={{ color: topModel.color, marginLeft: 3 }}>· {topModel.label}</span>
+              )}
+            </span>
+          </div>
+        </Tip>
+        <Tip position="top" align="left" content={
+          <div>
+            <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Sessions</div>
+            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>Total recorded sessions, including those before claudestat was installed (read from Claude Code JSONL files).</div>
+          </div>
+        }>
+          <div style={S.stat}>
+            <span style={S.statVal}>{p.session_count}</span>
+            <span style={S.statLbl}>sessions</span>
+          </div>
+        </Tip>
+        <Tip position="top" align="right" content={
+          <div>
+            <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Last activity</div>
+            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>
+              {p.last_active
+                ? new Date(p.last_active).toLocaleString('en', { dateStyle: 'medium', timeStyle: 'short' })
+                : 'No activity recorded'}
+            </div>
+          </div>
+        }>
+          <div style={S.stat}>
+            <span style={S.statVal}>{relativeTime(p.last_active)}</span>
+            <span style={S.statLbl}>last seen</span>
+          </div>
+        </Tip>
       </div>
+
+      {/* Insights — collapsible, only shown when patterns are detected */}
+      {p.insights && p.insights.length > 0 && (
+        <InsightsPanel insights={p.insights} />
+      )}
     </div>
   )
 }
+
+export const ProjectCard = memo(ProjectCardInner)

@@ -1,0 +1,18 @@
+# Source — compiled output is in dist/
+src/
+tests/
+
+# Dashboard source — built output is in dashboard/dist/
+dashboard/src/
+dashboard/node_modules/
+dashboard/tsconfig.json
+dashboard/tsconfig.node.json
+dashboard/vite.config.ts
+dashboard/index.html
+dashboard/public/
+
+# Dev / local files
+node_modules/
+HANDOFF.md
+tsconfig.json
+*.bak

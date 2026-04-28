@@ -21,7 +21,7 @@ export interface ProjectScanResult {
   name:         string         // último segmento del path
   encodedDir:   string         // nombre del directorio en ~/.claude/projects
   hasHandoff:   boolean
-  autoHandoff:  boolean        // true si fue auto-generado por claudetrace (no escrito por el usuario)
+  autoHandoff:  boolean        // true si fue auto-generado por claudestat (no escrito por el usuario)
   progress:     HandoffProgress
   jsonlStats:   JSONLStats     // datos históricos leídos directamente de los JSONL
 }
@@ -44,7 +44,7 @@ export interface JSONLStats {
 
 /**
  * Decodifica el nombre de directorio de Claude Code al path real.
- * "-Users-db-Documents-GitHub-claudetrace" → "/Users/db/Documents/GitHub/claudetrace"
+ * "-Users-db-Documents-GitHub-claudestat" → "/Users/db/Documents/GitHub/claudestat"
  *
  * Problema: directorios con '-' en el nombre (ej: "gmail-ai-agent") se confunden
  * con separadores de path. Solución: búsqueda greedy recursiva por el filesystem.
@@ -220,7 +220,7 @@ export function getJSONLStats(encodedDir: string): JSONLStats {
             if (!usage) continue
 
             hasAssistant = true
-            const tokens = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
+            const tokens = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0)
             totalCost   += calcCost(model, usage)
             totalTokens += tokens
             if      (model.includes('opus'))  modelUsage.opusTokens   += tokens
@@ -244,7 +244,7 @@ export function getJSONLStats(encodedDir: string): JSONLStats {
  * El primer marcador encontrado al subir el árbol determina la raíz.
  */
 const PROJECT_MARKERS = [
-  'HANDOFF.md',       // claudetrace — más específico
+  'HANDOFF.md',       // claudestat — más específico
   '.git',             // git repo — universal
   'package.json',     // Node.js
   'pyproject.toml',   // Python moderno
@@ -327,7 +327,7 @@ function getJSONLStatsByProject(dirPath: string): Map<string, JSONLStats> {
           const model = obj.message?.model ?? 'claude-sonnet-4-6'
           if (!usage) continue
           hasAssistant = true
-          const t = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
+          const t = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0)
           cost   += calcCost(model, usage)
           tokens += t
           if      (model.includes('opus'))  mu.opusTokens   += t
@@ -364,7 +364,7 @@ function getJSONLStatsByProject(dirPath: string): Map<string, JSONLStats> {
  * Prioridad: HANDOFF.md (subiendo hasta 4 niveles) → .git → cualquier marker → el dir mismo.
  *
  * HANDOFF.md tiene prioridad sobre .git y package.json porque es el marker
- * que el usuario mantiene conscientemente para claudetrace.
+ * que el usuario mantiene conscientemente para claudestat.
  */
 function findBestProjectRoot(dir: string): string {
   // 1. Buscar HANDOFF.md subiendo el árbol (hasta 4 niveles)
@@ -438,11 +438,11 @@ export function autoCreateHandoff(projectPath: string, stats: JSONLStats): void 
     : String(stats.total_tokens)
 
   const content = `# HANDOFF — ${name}
-<!-- Auto-generado por claudetrace. Completá las secciones marcadas con TODO. -->
+<!-- Auto-generado por claudestat. Completá las secciones marcadas con TODO. -->
 
 ## Current Status
 - Branch: \`TODO — indicar rama principal\`
-- Last: auto-generado por claudetrace (${stats.session_count} sesión${stats.session_count !== 1 ? 'es' : ''} · $${cost} · ${tokens} tokens)
+- Last: auto-generado por claudestat (${stats.session_count} sesión${stats.session_count !== 1 ? 'es' : ''} · $${cost} · ${tokens} tokens)
 - State: stack detectado: ${stackStr}
 
 ## Pending Tasks
@@ -450,13 +450,13 @@ export function autoCreateHandoff(projectPath: string, stats: JSONLStats): void 
 - [ ] TODO — agregar objetivos del proyecto
 
 ## Completed
-- [x] Proyecto detectado y registrado por claudetrace
+- [x] Proyecto detectado y registrado por claudestat
 
 ## Gotchas
 - TODO — anotar decisiones importantes, bugs conocidos, restricciones
 
 ## Session Log
-- **${new Date().toISOString().slice(0, 10)}** — HANDOFF auto-generado por claudetrace con ${stats.session_count} sesión${stats.session_count !== 1 ? 'es' : ''} y $${cost} de coste acumulado
+- **${new Date().toISOString().slice(0, 10)}** — HANDOFF auto-generado por claudestat con ${stats.session_count} sesión${stats.session_count !== 1 ? 'es' : ''} y $${cost} de coste acumulado
 `
 
   try {
@@ -560,7 +560,7 @@ export function discoverProjects(): ProjectScanResult[] {
 
     const hasHandoff     = fs.existsSync(handoffPath)
     const handoffContent = hasHandoff ? (() => { try { return fs.readFileSync(handoffPath, 'utf8') } catch { return '' } })() : ''
-    const autoHandoff    = hasHandoff && handoffContent.includes('<!-- Auto-generado por claudetrace')
+    const autoHandoff    = hasHandoff && handoffContent.includes('<!-- Auto-generado por claudestat')
     const progress       = hasHandoff
       ? parseHandoffProgress(handoffContent)
       : { done: 0, total: 0, pct: 0, nextTask: null }

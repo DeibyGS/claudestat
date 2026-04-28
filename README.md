@@ -19,6 +19,12 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 
 ![ClaudeStat dashboard](./assets/ClaudeStat.png)
 
+---
+
+### See it in action
+
+*Live dashboard · terminal trace · quota guard — all running in real time*
+
 ![claudestat demo](./assets/demo.gif)
 
 </div>

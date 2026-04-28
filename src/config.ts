@@ -25,7 +25,7 @@ import type { ClaudePlan } from './quota-tracker'
 
 export type ReportFrequency = 'weekly' | 'biweekly' | 'monthly'
 
-export interface ClaudetraceConfig {
+export interface ClaudestatConfig {
   killSwitchEnabled:  boolean
   killSwitchThreshold: number          // porcentaje (0–100)
   warnThresholds:     number[]         // [amarillo, naranja, rojo] — ej. [70, 85, 95]
@@ -38,7 +38,7 @@ export interface ClaudetraceConfig {
 
 const CONFIG_PATH = path.join(os.homedir(), '.claudestat', 'config.json')
 
-const DEFAULTS: ClaudetraceConfig = {
+const DEFAULTS: ClaudestatConfig = {
   killSwitchEnabled:   false,
   killSwitchThreshold: 95,
   warnThresholds:      [70, 85, 95],
@@ -50,10 +50,10 @@ const DEFAULTS: ClaudetraceConfig = {
 }
 
 /** Lee la config del disco. Valores ausentes se rellenan con defaults. */
-export function readConfig(): ClaudetraceConfig {
+export function readConfig(): ClaudestatConfig {
   try {
     const raw  = fs.readFileSync(CONFIG_PATH, 'utf8')
-    const parsed = JSON.parse(raw) as Partial<ClaudetraceConfig>
+    const parsed = JSON.parse(raw) as Partial<ClaudestatConfig>
     return { ...DEFAULTS, ...parsed }
   } catch {
     return { ...DEFAULTS }
@@ -61,7 +61,7 @@ export function readConfig(): ClaudetraceConfig {
 }
 
 /** Escribe la config en disco. Crea el directorio si no existe. */
-export function writeConfig(cfg: ClaudetraceConfig): void {
+export function writeConfig(cfg: ClaudestatConfig): void {
   fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true })
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n')
 }

@@ -31,14 +31,17 @@ npm install
 # 3. Install dashboard dependencies
 cd dashboard && npm install && cd ..
 
-# 4. Run in dev mode (daemon + dashboard hot reload)
-npm run dev
+# 4. Run in dev mode
+npm run dev:full    # starts daemon + dashboard hot-reload together
+# or separately:
+# npm run dev       # daemon only (tsx, no build needed)
+# cd dashboard && npm run dev   # dashboard Vite dev server
 
 # 5. Run the test suite
 npm test
 ```
 
-The dashboard runs at `http://localhost:7337`. The daemon watches for incoming hook events on the same port.
+The dashboard dev server runs at `http://localhost:5173` (Vite). The daemon listens for hook events and serves the API at `http://localhost:7337`.
 
 ---
 
@@ -132,7 +135,7 @@ If you add a new `dbOps` function, add a test in `db.test.ts`. If you modify `an
 
 1. Make sure `npm test` passes locally
 2. Make sure `npm run build` completes without errors
-3. Open a PR against the `master` branch
+3. Open a PR against the `main` branch
 4. Include in the PR description:
    - **What** changed
    - **Why** it was needed

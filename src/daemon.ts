@@ -27,7 +27,7 @@ import { computeMetaStats, getMetaHistory }                   from './meta-stats
 import { discoverProjects, parseHandoffProgress }             from './project-scanner'
 import { deriveSessionState, STATE_META }                     from './session-state'
 import { computeQuota, invalidateQuotaCache }                 from './quota-tracker'
-import { readConfig, writeConfig, getWarnLevel, validateConfig, type ClaudetraceConfig } from './config'
+import { readConfig, writeConfig, getWarnLevel, validateConfig, type ClaudestatConfig } from './config'
 import { getGitInfo, type GitInfo }                           from './git'
 import { getPRStatus, type PRStatus }                         from './github'
 import { analyzePatterns }                                    from './pattern-analyzer'
@@ -1040,7 +1040,7 @@ function getISOWeek(date: Date): number {
  * Devuelve el label YYYY-MM-DD si ahora es el momento de generar un informe,
  * o null si no corresponde todavía.
  */
-function getReportDateLabel(now: Date, cfg: ClaudetraceConfig): string | null {
+function getReportDateLabel(now: Date, cfg: ClaudestatConfig): string | null {
   const hhmm = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
   if (hhmm !== cfg.reportTime) return null
   if (now.getDay() !== cfg.reportDay) return null
@@ -1052,7 +1052,7 @@ function getReportDateLabel(now: Date, cfg: ClaudetraceConfig): string | null {
 }
 
 /** Genera el markdown del informe para el período dado. */
-function generateReport(dateLabel: string, cfg: ClaudetraceConfig): string {
+function generateReport(dateLabel: string, cfg: ClaudestatConfig): string {
   const periodDays = cfg.reportFrequency === 'monthly' ? 30 : cfg.reportFrequency === 'biweekly' ? 14 : 7
   const endMs      = Date.now()
   const startMs    = endMs - periodDays * 24 * 60 * 60 * 1000

@@ -112,6 +112,7 @@ That's it. Start a Claude Code session and watch the events flow in.
 | `claudestat watch` | Live terminal trace view |
 | `claudestat status` | Show quota, cost, and burn rate |
 | `claudestat config` | View or edit configuration |
+| `claudestat doctor` | Check installation health and diagnose issues |
 
 ### `claudestat status`
 
@@ -123,6 +124,30 @@ claudestat status
   Sonnet      3.2h / 5h  this week
   Burn rate   1,240 tok/min
 ```
+
+### `claudestat doctor`
+
+Diagnoses common installation problems — useful if `claudestat start` fails or hooks are not firing.
+
+```
+claudestat doctor
+
+🩺 claudestat doctor
+──────────────────────────────────────────────
+  ✓  Node.js version (22.17.0)
+  ✓  Claude Code installed
+  ✓  Hooks installed in Claude Code
+  ✓  ~/.claudestat/ data directory exists
+  ✓  Hook script deployed (~/.claudestat/hooks/event.js)
+  ✓  Daemon running (localhost:7337)
+  ✓  Global CLI symlink valid
+──────────────────────────────────────────────
+  All checks passed — claudestat is healthy!
+```
+
+If a check fails, `doctor` prints the exact fix command to run.
+
+---
 
 ### `claudestat config`
 
@@ -247,7 +272,7 @@ Whether you want to fix a bug, improve a dashboard view, add a new pattern to th
 git clone https://github.com/YOUR_USERNAME/claudestat
 cd claudestat
 npm install
-npm run dev        # runs daemon + dashboard in dev mode
+npm run dev:full   # starts daemon + dashboard hot-reload together
 npm test           # run all tests
 ```
 

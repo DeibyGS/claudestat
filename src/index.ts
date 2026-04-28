@@ -19,7 +19,8 @@ import { startDaemon }              from './daemon'
 import { startWatch }               from './watch'
 import { installHooks, uninstallHooks } from './install'
 import { readConfig, writeConfig }  from './config'
-import type { ClaudetraceConfig }   from './config'
+import type { ClaudestatConfig }   from './config'
+import { runDoctor }               from './doctor'
 
 const program = new Command()
 const PID_FILE = path.join(process.env.HOME!, '.claudestat', 'daemon.pid')
@@ -27,16 +28,16 @@ const PID_FILE = path.join(process.env.HOME!, '.claudestat', 'daemon.pid')
 program
   .name('claudestat')
   .description('Real-time execution trace and cost intelligence for Claude Code')
-  .version('0.1.2')
+  .version('0.1.3')
 
 program
   .command('start')
-  .description('Iniciar el daemon (recibe eventos de Claude Code en background)')
+  .description('Start the background daemon (receives Claude Code hook events)')
   .action(startDaemon)
 
 program
   .command('watch')
-  .description('Ver el trace de ejecución en tiempo real en la terminal')
+  .description('Live terminal trace view')
   .action(() => startWatch().catch(err => {
     console.error('\n❌ Error:', err.message)
     process.exit(1)
@@ -44,17 +45,17 @@ program
 
 program
   .command('install')
-  .description('Instalar los hooks de claudestat en Claude Code (~/.claude/settings.json)')
+  .description('Install hooks into Claude Code (~/.claude/settings.json)')
   .action(installHooks)
 
 program
   .command('uninstall')
-  .description('Eliminar los hooks de claudestat de Claude Code')
+  .description('Remove hooks from Claude Code')
   .action(uninstallHooks)
 
 program
   .command('status')
-  .description('Mostrar estado actual de cuota, coste y burn rate (desde el daemon)')
+  .description('Show current quota, cost and burn rate')
   .action(async () => {
     try {
       const [quotaRes, healthRes] = await Promise.all([
@@ -85,27 +86,27 @@ program
       console.log(
         `\n📊 claudestat status\n` +
         `──────────────────────────────────────────\n` +
-        `  Cuota 5h   ${pctColor}${q.cyclePrompts}/${q.cycleLimit} prompts (${q.cyclePct}%)${R}  │  reset en ${resetLabel}\n` +
+        `  Quota 5h    ${pctColor}${q.cyclePrompts}/${q.cycleLimit} prompts (${q.cyclePct}%)${R}  │  resets in ${resetLabel}\n` +
         `  Plan        ${q.detectedPlan.toUpperCase()}\n` +
-        `  Sonnet      ${q.weeklyHoursSonnet}h / ${q.weeklyLimitSonnet}h  esta semana\n` +
+        `  Sonnet      ${q.weeklyHoursSonnet}h / ${q.weeklyLimitSonnet}h  this week\n` +
         (q.weeklyLimitOpus > 0
-          ? `  Opus        ${q.weeklyHoursOpus}h / ${q.weeklyLimitOpus}h  esta semana\n`
+          ? `  Opus        ${q.weeklyHoursOpus}h / ${q.weeklyLimitOpus}h  this week\n`
           : '') +
         `${burnLabel ? `  Burn rate  ${q.burnRateTokensPerMin.toLocaleString()} tok/min\n` : ''}` +
         `──────────────────────────────────────────\n`
       )
     } catch {
-      console.error('\n❌ El daemon no está corriendo. Inicialo con: claudestat start\n')
+      console.error('\n❌ Daemon is not running. Start it with: claudestat start\n')
       process.exit(1)
     }
   })
 
 program
   .command('config')
-  .description('Ver o editar la configuración de claudestat (~/.claudestat/config.json)')
-  .option('--kill-switch <bool>',  'Activar/desactivar kill switch: true|false')
-  .option('--threshold <number>',  'Porcentaje de cuota para activar el kill switch (default: 95)')
-  .option('--plan <plan>',         'Forzar plan: pro|max5|max20|auto')
+  .description('View or edit configuration (~/.claudestat/config.json)')
+  .option('--kill-switch <bool>',  'Enable/disable kill switch: true|false')
+  .option('--threshold <number>',  'Quota percentage to trigger the kill switch (default: 95)')
+  .option('--plan <plan>',         'Force plan detection: pro|max5|max20|auto')
   .action((opts) => {
     const cfg = readConfig()
     let changed = false
@@ -117,24 +118,24 @@ program
     if (opts.threshold !== undefined) {
       const t = parseInt(opts.threshold, 10)
       if (!isNaN(t) && t > 0 && t <= 100) { cfg.killSwitchThreshold = t; changed = true }
-      else console.warn('  ⚠️  threshold debe ser un número entre 1 y 100')
+      else console.warn('  ⚠️  threshold must be a number between 1 and 100')
     }
     if (opts.plan !== undefined) {
       if (['pro', 'max5', 'max20', 'auto'].includes(opts.plan)) {
-        cfg.plan = opts.plan === 'auto' ? null : opts.plan as ClaudetraceConfig['plan']
+        cfg.plan = opts.plan === 'auto' ? null : opts.plan as ClaudestatConfig['plan']
         changed = true
       } else {
-        console.warn('  ⚠️  plan debe ser: pro | max5 | max20 | auto')
+        console.warn('  ⚠️  plan must be: pro | max5 | max20 | auto')
       }
     }
 
     if (changed) {
       writeConfig(cfg)
-      console.log('✅ Config guardada en ~/.claudestat/config.json')
+      console.log('✅ Config saved to ~/.claudestat/config.json')
     }
 
-    // Mostrar config actual siempre
-    console.log('\n📋 Configuración actual:')
+    // Always show current config
+    console.log('\n📋 Current config:')
     console.log(`   killSwitchEnabled:  ${cfg.killSwitchEnabled}`)
     console.log(`   killSwitchThreshold: ${cfg.killSwitchThreshold}%`)
     console.log(`   warnThresholds:     ${cfg.warnThresholds.join('%, ')}%`)
@@ -172,5 +173,13 @@ program
     }
     startDaemon()
   })
+
+program
+  .command('doctor')
+  .description('Check installation health and diagnose common issues')
+  .action(() => runDoctor().catch(err => {
+    console.error('\n❌ Error:', err.message)
+    process.exit(1)
+  }))
 
 program.parse()

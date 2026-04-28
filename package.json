@@ -1,6 +1,6 @@
 {
   "name": "@deibygs/claudestat",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Real-time execution trace and cost intelligence for Claude Code",
   "keywords": [
     "claude",
@@ -22,6 +22,11 @@
     "url": "https://github.com/deibygorrin/claudestat/issues"
   },
   "license": "MIT",
+  "files": [
+    "dist/",
+    "hooks/",
+    "dashboard/dist/"
+  ],
   "bin": {
     "claudestat": "dist/index.js"
   },

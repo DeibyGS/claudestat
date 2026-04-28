@@ -16,7 +16,7 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 
 [Installation](#installation) • [Quick Start](#quick-start) • [Commands](#commands) • [Dashboard](#dashboard) • [Contributing](#contributing)
 
-![ClaudeStat dashboard](./ClaudeStat.png)
+![ClaudeStat dashboard](./assets/ClaudeStat.png)
 
 </div>
 
@@ -145,11 +145,17 @@ The dashboard lives at `http://localhost:7337` and has five tabs:
 ### Live
 Real-time stream of every tool call in the active session. Shows tool name, duration, and token cost. Agent sub-calls expand into nested traces; Skill invocations collapse into labeled containers.
 
+![Live tab](./assets/live.png)
+
 ### History
 All past sessions sorted by date. Each card shows total tokens (input + cache read + output), USD cost, efficiency score, and detected loops. Click any session to open its full tool trace, DAG view, and a compare panel.
 
+![History tab](./assets/history.png)
+
 ### Projects
 Grid of every project you've worked on. Shows last active date, total sessions, cost, model usage breakdown (Sonnet / Haiku), and an efficiency progress bar.
+
+![Projects tab](./assets/projects.png)
 
 ### Analytics
 - 6 KPIs: total cost, tokens, cache savings, hidden loop waste, avg efficiency, session count
@@ -157,8 +163,14 @@ Grid of every project you've worked on. Shows last active date, total sessions, 
 - Hours by project
 - AI-generated weekly reports (auto-scheduled or on demand)
 
+![Analytics KPIs](./assets/analitycsOne.png)
+
+![Analytics charts](./assets/analitycsTwo.png)
+
 ### System
 Daemon health, DB size, Node version, config file paths, and memory context.
+
+![System tab](./assets/system.png)
 
 ---
 

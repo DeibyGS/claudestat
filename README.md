@@ -19,6 +19,8 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 
 ![ClaudeStat dashboard](./assets/ClaudeStat.png)
 
+![claudestat demo](./assets/demo.gif)
+
 </div>
 
 ---

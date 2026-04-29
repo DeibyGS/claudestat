@@ -165,13 +165,35 @@ miscRouter.get('/system-config', (_req: Request, res: Response) => {
       }
     } catch {}
 
-    // Helper compartido — agentes y skills tienen la misma estructura de archivo .md con frontmatter
-    const scanMarkdownDir = (dir: string, excludes: string[] = []) => {
+    // Helper para extraer descripción del frontmatter
+    const getDescription = (content: string) => content.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? ''
+
+    // Helper compartido — escanea archivos .md directos o anidados en subdirectorios
+    const scanMarkdownDir = (dir: string, excludes: string[] = [], nested?: string) => {
       const items: { name: string; description: string; lines: number }[] = []
-      for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.md') && !excludes.includes(f))) {
-        const content = fs.readFileSync(path.join(dir, f), 'utf-8')
-        const desc    = content.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? ''
-        items.push({ name: f.replace('.md', ''), description: desc, lines: content.split('\n').length })
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        let filePath: string
+        let itemName: string
+
+        if (nested) {
+          // Modo anidado: busca nested (ej. SKILL.md) dentro de carpetas/symlinks
+          if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
+          filePath = path.join(dir, entry.name, nested)
+          itemName = entry.name
+        } else {
+          // Modo directo: archivos .md
+          if (!entry.isFile() || !entry.name.endsWith('.md') || excludes.includes(entry.name)) continue
+          filePath = path.join(dir, entry.name)
+          itemName = entry.name.replace('.md', '')
+        }
+
+        try {
+          const content = fs.readFileSync(filePath, 'utf-8')
+          const lines = content.split('\n').length
+          items.push({ name: itemName, description: getDescription(content), lines })
+        } catch {
+          // Ignorar archivos no encontrados o no legibles
+        }
       }
       return items
     }
@@ -203,9 +225,10 @@ miscRouter.get('/system-config', (_req: Request, res: Response) => {
       }
     })
 
-    // 3b. Skills desde ~/.claude/commands/
+    // 3b. Skills: ~/.claude/commands/ (skills nativos de Claude Code) + ~/.claude/skills/ (skills.sh)
     let skills: { name: string; description: string; lines: number }[] = []
     try { skills = scanMarkdownDir(path.join(home, '.claude', 'commands')) } catch {}
+    try { skills = [...skills, ...scanMarkdownDir(path.join(home, '.claude', 'skills'), [], 'SKILL.md')] } catch {}
 
     // 4. Archivos de memoria Engram — slug deriva de homedir: /Users/db → -Users-db
     let memoryFiles: string[] = []

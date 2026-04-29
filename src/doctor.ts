@@ -85,8 +85,10 @@ export async function runDoctor(): Promise<void> {
   // 7. Global CLI symlink valid (no stale link from old installs)
   let symlinkOk = false
   let symlinkNote: string | undefined
+  let activeBinary = ''
   try {
-    const realPath = fs.realpathSync(execSync('which claudestat', { stdio: 'pipe' }).toString().trim())
+    activeBinary = execSync('which claudestat', { stdio: 'pipe' }).toString().trim()
+    const realPath = fs.realpathSync(activeBinary)
     symlinkOk = fs.existsSync(realPath)
     if (!symlinkOk) symlinkNote = `Symlink points to missing file: ${realPath}`
   } catch {
@@ -98,6 +100,70 @@ export async function runDoctor(): Promise<void> {
     note:  symlinkNote,
     fix:   symlinkOk ? undefined : 'npm install -g @deibygs/claudestat',
   })
+
+  // 8. No duplicate claudestat binaries in PATH
+  let duplicatesOk = true
+  let duplicatesNote: string | undefined
+  try {
+    const allBinaries = execSync('which -a claudestat 2>/dev/null', { stdio: 'pipe' })
+      .toString().trim().split('\n').filter(Boolean)
+    if (allBinaries.length > 1) {
+      duplicatesOk = false
+      duplicatesNote = `Found ${allBinaries.length} binaries:\n${allBinaries.map(p => `         ${p}`).join('\n')}`
+    }
+  } catch {}
+  checks.push({
+    label: 'No duplicate claudestat binaries in PATH',
+    ok:    duplicatesOk,
+    note:  duplicatesNote,
+    fix:   duplicatesOk ? undefined :
+      'npm uninstall -g @deibygs/claudestat && npm install -g @deibygs/claudestat\n       Then restart your terminal or run: hash -r claudestat',
+  })
+
+  // 9. Active binary version matches installed package
+  let versionOk = true
+  let versionNote: string | undefined
+  const installedVersion: string = (() => {
+    try { return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version }
+    catch { return 'unknown' }
+  })()
+  if (activeBinary) {
+    try {
+      const runningVersion = execSync(`${activeBinary} --version`, { stdio: 'pipe' })
+        .toString().trim().replace(/^v?/, '')
+      versionOk = runningVersion === installedVersion
+      if (!versionOk) {
+        versionNote = `Active binary reports v${runningVersion}, installed package is v${installedVersion}`
+      }
+    } catch {}
+  }
+  checks.push({
+    label: `Version match (installed: v${installedVersion})`,
+    ok:    versionOk,
+    note:  versionNote,
+    fix:   versionOk ? undefined :
+      'hash -r claudestat  (or restart terminal)\n       If persists: npm uninstall -g @deibygs/claudestat && npm install -g @deibygs/claudestat',
+  })
+
+  // 10. NVM prefix sanity (only when NVM is active)
+  if (process.env.NVM_DIR && activeBinary) {
+    let nvmOk = true
+    let nvmNote: string | undefined
+    try {
+      const npmPrefix = execSync('npm prefix -g', { stdio: 'pipe' }).toString().trim()
+      if (!activeBinary.startsWith(npmPrefix)) {
+        nvmOk = false
+        nvmNote = `Binary at ${activeBinary}\n         Expected under: ${npmPrefix}/bin/`
+      }
+    } catch {}
+    checks.push({
+      label: 'NVM prefix matches active binary',
+      ok:    nvmOk,
+      note:  nvmNote,
+      fix:   nvmOk ? undefined :
+        `nvm use default && npm install -g @deibygs/claudestat\n       Then restart terminal`,
+    })
+  }
 
   // ── Print results ───────────────────────────────────────────
   console.log('\n🩺 claudestat doctor\n' + '─'.repeat(46))

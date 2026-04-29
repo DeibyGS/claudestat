@@ -12,7 +12,7 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)]()
-[![Tests](https://img.shields.io/badge/tests-44%2F44-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-136%2F136-brightgreen)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 [Installation](#installation) • [Quick Start](#quick-start) • [Commands](#commands) • [Dashboard](#dashboard) • [Contributing](#contributing)
@@ -79,6 +79,11 @@ Claude Code event
 ```bash
 npm install -g @deibygs/claudestat
 ```
+
+> **Using NVM?** Make sure you're on your default Node version before installing to avoid stale binary conflicts:
+> ```bash
+> nvm use default && npm install -g @deibygs/claudestat
+> ```
 
 Then wire up the hooks into Claude Code:
 

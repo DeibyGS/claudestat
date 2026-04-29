@@ -12,18 +12,35 @@ process.on('warning', (w) => {
   process.stderr.write(`${w.name}: ${w.message}\n`)
 })
 
-import { Command } from 'commander'
-import fs         from 'fs'
-import path       from 'path'
-import { startDaemon }              from './daemon'
-import { startWatch }               from './watch'
+import { Command }   from 'commander'
+import fs            from 'fs'
+import path          from 'path'
+import { execSync }  from 'child_process'
+import { startDaemon }                  from './daemon'
+import { startWatch }                   from './watch'
 import { installHooks, uninstallHooks } from './install'
-import { readConfig, writeConfig }  from './config'
-import type { ClaudestatConfig }   from './config'
-import { runDoctor }               from './doctor'
+import { readConfig, writeConfig }      from './config'
+import type { ClaudestatConfig }        from './config'
+import { runDoctor }                    from './doctor'
 
-const program = new Command()
+const program  = new Command()
 const PID_FILE = path.join(process.env.HOME!, '.claudestat', 'daemon.pid')
+
+// Warn if the active binary is outside the current npm global prefix (NVM conflict)
+if (process.env.NVM_DIR) {
+  try {
+    const npmPrefix  = execSync('npm prefix -g', { stdio: 'pipe' }).toString().trim()
+    const runningFrom = process.argv[1]
+    if (runningFrom && !runningFrom.startsWith(npmPrefix)) {
+      process.stderr.write(
+        `\x1b[33m⚠️  claudestat is running from ${runningFrom}\x1b[0m\n` +
+        `   This binary may not match the active Node version (${process.version}).\n` +
+        `   Fix: \x1b[36mnvm use default && npm install -g @deibygs/claudestat\x1b[0m\n` +
+        `   Then restart your terminal or run: \x1b[36mhash -r claudestat\x1b[0m\n\n`
+      )
+    }
+  } catch {}
+}
 
 program
   .name('claudestat')

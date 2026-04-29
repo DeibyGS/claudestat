@@ -28,7 +28,7 @@ const PID_FILE = path.join(process.env.HOME!, '.claudestat', 'daemon.pid')
 program
   .name('claudestat')
   .description('Real-time execution trace and cost intelligence for Claude Code')
-  .version('0.1.3')
+  .version('0.2.0')
 
 program
   .command('start')

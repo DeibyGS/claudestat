@@ -1,6 +1,6 @@
 {
   "name": "@deibygs/claudestat",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Real-time execution trace and cost intelligence for Claude Code",
   "keywords": [
     "claude",
@@ -13,13 +13,13 @@
     "token",
     "dashboard"
   ],
-  "homepage": "https://github.com/deibygorrin/claudestat#readme",
+  "homepage": "https://github.com/DeibyGS/claudestat#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/deibygorrin/claudestat.git"
+    "url": "git+https://github.com/DeibyGS/claudestat.git"
   },
   "bugs": {
-    "url": "https://github.com/deibygorrin/claudestat/issues"
+    "url": "https://github.com/DeibyGS/claudestat/issues"
   },
   "license": "MIT",
   "files": [

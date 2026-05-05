@@ -28,7 +28,7 @@ function installHookScript() {
     fs.chmodSync(HOOK_SCRIPT, 0o755)
   }
 
-  console.log(`✓ Hook script instalado → ${HOOK_SCRIPT}`)
+  console.log(`✓ Hook script installed → ${HOOK_SCRIPT}`)
 }
 
 function hookEntry(eventType: string, matcher = '.*') {
@@ -50,15 +50,15 @@ export function installHooks() {
   try {
     settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS, 'utf8'))
   } catch {
-    console.error(`\n❌ No se pudo leer ${CLAUDE_SETTINGS}`)
-    console.error('   Asegurate de que Claude Code esté instalado.\n')
+    console.error(`\n❌ Could not read ${CLAUDE_SETTINGS}`)
+    console.error('   Make sure Claude Code is installed.\n')
     process.exit(1)
   }
 
   // Backup antes de modificar
   const backupPath = CLAUDE_SETTINGS + '.bak'
   fs.copyFileSync(CLAUDE_SETTINGS, backupPath)
-  console.log(`✓ Backup creado → ${backupPath}`)
+  console.log(`✓ Backup created → ${backupPath}`)
 
   if (!settings.hooks) settings.hooks = {}
 
@@ -75,20 +75,20 @@ export function installHooks() {
 
     if (!exists) {
       settings.hooks[hookType].push(hookEntry(hookType))
-      console.log(`✓ Hook configurado: ${hookType}`)
+      console.log(`✓ Hook configured: ${hookType}`)
       added++
     } else {
-      console.log(`  (ya instalado): ${hookType}`)
+      console.log(`  (already installed): ${hookType}`)
     }
   }
 
   fs.writeFileSync(CLAUDE_SETTINGS, JSON.stringify(settings, null, 2))
 
   if (added > 0) {
-    console.log(`\n✅ ${added} hooks instalados.`)
-    console.log('   Reiniciá Claude Code para activarlos.\n')
+    console.log(`\n✅ ${added} hooks installed.`)
+    console.log('   Restart Claude Code to activate them.\n')
   } else {
-    console.log('\n✅ Todos los hooks ya estaban instalados.\n')
+    console.log('\n✅ All hooks already installed.\n')
   }
 }
 
@@ -97,12 +97,12 @@ export function uninstallHooks() {
   try {
     settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS, 'utf8'))
   } catch {
-    console.error('No se pudo leer settings.json')
+    console.error('Could not read settings.json')
     process.exit(1)
   }
 
   if (!settings.hooks) {
-    console.log('No hay hooks instalados.')
+    console.log('No hooks installed.')
     return
   }
 
@@ -116,6 +116,6 @@ export function uninstallHooks() {
   }
 
   fs.writeFileSync(CLAUDE_SETTINGS, JSON.stringify(settings, null, 2))
-  console.log(`✅ ${removed} hooks de claudestat eliminados.`)
-  console.log('   Reiniciá Claude Code para que tome efecto.\n')
+  console.log(`✅ ${removed} claudestat hooks removed.`)
+  console.log('   Restart Claude Code for changes to take effect.\n')
 }

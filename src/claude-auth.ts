@@ -38,7 +38,7 @@ function readFromKeychain(): ClaudeAuthInfo | null {
   try {
     const raw = execSync(
       `security find-generic-password -s "${KEYCHAIN_SERVICE}" -w`,
-      { stdio: ['pipe', 'pipe', 'pipe'], timeout: 3000 }
+      { stdio: ['pipe', 'pipe', 'pipe'], timeout: parseInt(process.env.CLAUDESTAT_KEYCHAIN_TIMEOUT ?? '3000', 10) }
     ).toString().trim()
 
     if (!raw) return null

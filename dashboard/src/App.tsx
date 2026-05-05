@@ -12,6 +12,7 @@ import { HistoryView }         from './components/HistoryView'
 import { ProjectsView }        from './components/ProjectsView'
 import { AnalyticsView }      from './components/AnalyticsView'
 import { SystemView, type SystemConfig } from './components/SystemView'
+import { TopView }                from './components/TopView'
 
 const HEAVY_BLOCK_THRESHOLD = 500_000
 
@@ -144,10 +145,6 @@ export default function App() {
     return () => { es?.close(); clearTimeout(retryTimer) }
   }, [])
 
-  useEffect(() => {
-    fetch('/api/quota-stats').then(r => r.json()).then(setQuotaStats).catch(() => {})
-  }, [])
-
   // ── Prompts: cargar cuando cambia la sesión ────────────────────────────────
   useEffect(() => {
     if (!state.sessionId) return
@@ -157,62 +154,40 @@ export default function App() {
       .catch(() => {})
   }, [state.sessionId])
 
-  // ── Hidden cost polling (cada 5 min) ───────────────────────────────────────
+  // ── Consolidated slow polling (60s): hidden-cost, claude-stats, projects ────
   useEffect(() => {
-    async function fetchHiddenCost() {
-      try {
-        const r = await fetch('/hidden-cost')
-        if (!r.ok) return
-        setHiddenCost(await r.json())
-      } catch {}
+    function fetchSlowData() {
+      fetch('/hidden-cost').then(r => r.ok ? r.json() : null).then(d => d && setHiddenCost(d)).catch(() => {})
+      fetch('/claude-stats').then(r => r.ok ? r.json() : null).then(d => d && setClaudeStats(d)).catch(() => {})
+      fetch('/projects').then(r => r.json()).then(d => {
+        setProjects(d.projects ?? [])
+        setActiveProject(d.active_project ?? null)
+      }).catch(() => {})
     }
-    fetchHiddenCost()
-    const t = setInterval(fetchHiddenCost, 5 * 60_000)
+    fetchSlowData()
+    const t = setInterval(fetchSlowData, 60_000)
     return () => clearInterval(t)
   }, [])
 
-  // ── Claude stats polling (stats-cache.json, cada 60s) ─────────────────────
+  // ── Consolidated fast polling (15s): meta-stats, quota ──────────────────────
   useEffect(() => {
-    async function fetchClaudeStats() {
-      try {
-        const r = await fetch('/claude-stats')
-        if (!r.ok) return
-        setClaudeStats(await r.json())
-      } catch {}
-    }
-    fetchClaudeStats()
-    const t = setInterval(fetchClaudeStats, 60_000)
-    return () => clearInterval(t)
-  }, [])
-
-  // ── Meta-stats polling ──────────────────────────────────────────────────────
-  useEffect(() => {
-    async function fetchMeta() {
-      try {
-        const r = await fetch('/meta-stats')
-        if (!r.ok) return
-        const d = await r.json()
+    function fetchFastData() {
+      fetch('/meta-stats').then(r => r.ok ? r.json() : null).then(d => {
+        if (!d) return
         setMetaStats(d.current)
         setMetaHistory(d.history ?? [])
-      } catch {}
+      }).catch(() => {})
+      fetch('/quota').then(r => r.ok ? r.json() : null).then(d => d && setQuota(d)).catch(() => {})
     }
-    fetchMeta()
-    const t = setInterval(fetchMeta, 30_000)
+    fetchFastData()
+    const t = setInterval(fetchFastData, 15_000)
     return () => clearInterval(t)
   }, [])
 
-  // ── Quota polling (cada 30s + al cambiar de estado de sesión) ───────────────
+  // ── Quota re-fetch on session state change ──────────────────────────────────
   useEffect(() => {
-    async function fetchQuota() {
-      try {
-        const r = await fetch('/quota')
-        if (!r.ok) return
-        setQuota(await r.json())
-      } catch {}
-    }
-    fetchQuota()
-    const t = setInterval(fetchQuota, 30_000)
-    return () => clearInterval(t)
+    fetch('/quota').then(r => r.ok ? r.json() : null).then(d => d && setQuota(d)).catch(() => {})
+    fetch('/api/quota-stats').then(r => r.json()).then(setQuotaStats).catch(() => {})
   }, [state.sessionState])
 
   // ── Fetch por tab ───────────────────────────────────────────────────────────
@@ -231,26 +206,15 @@ export default function App() {
     }
   }, [activeTab])
 
-  // ── Projects: carga inicial + auto-refresh (60s) ────────────────────────────
-  // Carga al montar para que el tab Proyectos muestre datos inmediatamente,
-  // sin esperar a que el usuario lo abra por primera vez.
+  // ── Debounced project refresh on SSE events ─────────────────────────────────
+  // Instead of fetching /projects on every event, debounce to once per 10s max
   useEffect(() => {
-    function fetchProjects() {
+    const timer = setTimeout(() => {
       fetch('/projects').then(r => r.json()).then(d => {
-        setProjects(d.projects ?? [])
         setActiveProject(d.active_project ?? null)
       }).catch(() => {})
-    }
-    fetchProjects()
-    const t = setInterval(fetchProjects, 60_000)
-    return () => clearInterval(t)
-  }, [])
-
-  // Actualizar active project cuando llega nuevo evento
-  useEffect(() => {
-    fetch('/projects').then(r => r.json()).then(d => {
-      setActiveProject(d.active_project ?? null)
-    }).catch(() => {})
+    }, 10_000)
+    return () => clearTimeout(timer)
   }, [state.events.length])
 
   const liveLayout: React.CSSProperties = {
@@ -310,6 +274,12 @@ export default function App() {
       {activeTab === 'analytics' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <AnalyticsView quota={quota} cost={state.cost} events={state.events} prompts={prompts} claudeStats={claudeStats} />
+        </div>
+      )}
+
+      {activeTab === 'top' && (
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          <TopView />
         </div>
       )}
 

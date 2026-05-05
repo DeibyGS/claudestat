@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Radio, History, FolderGit2, FolderOpen, Zap, Settings2, Wrench, Layers, TrendingUp, type LucideIcon } from 'lucide-react'
+import { Radio, History, FolderGit2, FolderOpen, Zap, Settings2, Wrench, Layers, TrendingUp, Trophy, type LucideIcon } from 'lucide-react'
 import type { AppState, TraceEvent, QuotaData } from '../types'
 import { Tip } from './Tip'
 
@@ -18,7 +18,7 @@ import { Tip } from './Tip'
   document.head.appendChild(s)
 })()
 
-export type Tab = 'live' | 'history' | 'projects' | 'analytics' | 'system'
+export type Tab = 'live' | 'history' | 'projects' | 'top' | 'analytics' | 'system'
 
 interface Props {
   state:          AppState
@@ -45,6 +45,7 @@ const TAB_LABELS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'live',      label: 'Live',      icon: Radio      },
   { id: 'history',   label: 'History',   icon: History    },
   { id: 'projects',  label: 'Projects',  icon: FolderGit2 },
+  { id: 'top',       label: 'Top',       icon: Trophy     },
   { id: 'analytics', label: 'Analytics', icon: TrendingUp  },
   { id: 'system',    label: 'System',    icon: Layers     },
 ]

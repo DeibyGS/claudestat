@@ -171,7 +171,11 @@ const stmts = {
   `),
 
   getAllSessions: db.prepare(`
-    SELECT * FROM sessions ORDER BY started_at DESC
+    SELECT * FROM sessions ORDER BY started_at DESC LIMIT 500
+  `),
+
+  getSessionEventsRecent: db.prepare(`
+    SELECT * FROM events WHERE session_id = ? ORDER BY ts DESC LIMIT ?
   `),
 
   getSession: db.prepare(`
@@ -340,6 +344,133 @@ const stmts = {
     ORDER BY hours DESC
     LIMIT 8
   `),
+
+  getTopToolsByCost: db.prepare(`
+    WITH session_totals AS (
+      SELECT session_id, COUNT(*) AS total_done
+      FROM events WHERE type = 'Done' AND ts >= ? GROUP BY session_id
+    ),
+    tool_per_session AS (
+      SELECT e.session_id, e.tool_name,
+             COUNT(*) AS cnt,
+             COALESCE(SUM(e.duration_ms), 0) AS tool_dur
+      FROM events e
+      WHERE e.type = 'Done' AND e.tool_name IS NOT NULL AND e.ts >= ?
+      GROUP BY e.session_id, e.tool_name
+    )
+    SELECT
+      tps.tool_name,
+      SUM(tps.cnt)                                   AS count,
+      SUM(tps.tool_dur)                              AS total_duration_ms,
+      SUM(CASE WHEN st.total_done > 0
+           THEN (tps.cnt * 1.0 / st.total_done) * s.total_cost_usd
+           ELSE 0 END)                                AS total_cost_usd
+    FROM tool_per_session tps
+    JOIN session_totals st ON tps.session_id = st.session_id
+    JOIN sessions s ON tps.session_id = s.id
+    WHERE s.total_cost_usd > 0
+    GROUP BY tps.tool_name
+    ORDER BY total_cost_usd DESC
+    LIMIT ?
+  `),
+
+  getTopToolsByCount: db.prepare(`
+    WITH session_totals AS (
+      SELECT session_id, COUNT(*) AS total_done
+      FROM events WHERE type = 'Done' AND ts >= ? GROUP BY session_id
+    ),
+    tool_per_session AS (
+      SELECT e.session_id, e.tool_name,
+             COUNT(*) AS cnt,
+             COALESCE(SUM(e.duration_ms), 0) AS tool_dur
+      FROM events e
+      WHERE e.type = 'Done' AND e.tool_name IS NOT NULL AND e.ts >= ?
+      GROUP BY e.session_id, e.tool_name
+    )
+    SELECT
+      tps.tool_name,
+      SUM(tps.cnt)                                   AS count,
+      SUM(tps.tool_dur)                              AS total_duration_ms,
+      SUM(CASE WHEN st.total_done > 0
+           THEN (tps.cnt * 1.0 / st.total_done) * s.total_cost_usd
+           ELSE 0 END)                                AS total_cost_usd
+    FROM tool_per_session tps
+    JOIN session_totals st ON tps.session_id = st.session_id
+    JOIN sessions s ON tps.session_id = s.id
+    WHERE s.total_cost_usd > 0
+    GROUP BY tps.tool_name
+    ORDER BY count DESC
+    LIMIT ?
+  `),
+
+  getTopToolsByDuration: db.prepare(`
+    WITH session_totals AS (
+      SELECT session_id, COUNT(*) AS total_done
+      FROM events WHERE type = 'Done' AND ts >= ? GROUP BY session_id
+    ),
+    tool_per_session AS (
+      SELECT e.session_id, e.tool_name,
+             COUNT(*) AS cnt,
+             COALESCE(SUM(e.duration_ms), 0) AS tool_dur
+      FROM events e
+      WHERE e.type = 'Done' AND e.tool_name IS NOT NULL AND e.ts >= ?
+      GROUP BY e.session_id, e.tool_name
+    )
+    SELECT
+      tps.tool_name,
+      SUM(tps.cnt)                                   AS count,
+      SUM(tps.tool_dur)                              AS total_duration_ms,
+      SUM(CASE WHEN st.total_done > 0
+           THEN (tps.cnt * 1.0 / st.total_done) * s.total_cost_usd
+           ELSE 0 END)                                AS total_cost_usd
+    FROM tool_per_session tps
+    JOIN session_totals st ON tps.session_id = st.session_id
+    JOIN sessions s ON tps.session_id = s.id
+    WHERE s.total_cost_usd > 0
+    GROUP BY tps.tool_name
+    ORDER BY total_duration_ms DESC
+    LIMIT ?
+  `),
+
+  getCostProjection: db.prepare(`
+    SELECT
+      SUM(total_cost_usd)   AS total_cost_usd,
+      MIN(started_at)      AS earliest,
+      MAX(last_event_at)   AS latest
+    FROM sessions
+    WHERE started_at >= ?
+  `),
+
+  getUnattributedCost: db.prepare(`
+    WITH period_cost AS (
+      SELECT COALESCE(SUM(total_cost_usd), 0) AS total_cost
+      FROM sessions WHERE started_at >= ?
+    ),
+    attributed_cost AS (
+      WITH session_totals AS (
+        SELECT session_id, COUNT(*) AS total_done
+        FROM events WHERE type = 'Done' AND ts >= ? GROUP BY session_id
+      ),
+      tool_per_session AS (
+        SELECT e.session_id,
+               COUNT(*) AS cnt
+        FROM events e
+        WHERE e.type = 'Done' AND e.tool_name IS NOT NULL AND e.ts >= ?
+        GROUP BY e.session_id, e.tool_name
+      )
+      SELECT COALESCE(SUM(
+        CASE WHEN st.total_done > 0
+             THEN (tps.cnt * 1.0 / st.total_done) * s.total_cost_usd
+             ELSE 0 END
+      ), 0) AS attributed
+      FROM tool_per_session tps
+      JOIN session_totals st ON tps.session_id = st.session_id
+      JOIN sessions s ON tps.session_id = s.id
+      WHERE s.total_cost_usd > 0
+    )
+    SELECT (pc.total_cost - ac.attributed) AS other_cost_usd
+    FROM period_cost pc, attributed_cost ac
+  `),
 }
 
 // ─── Operaciones públicas ─────────────────────────────────────────────────────
@@ -403,8 +534,12 @@ export const dbOps = {
     return stmts.getLatestSession.get() as SessionRow | undefined
   },
 
-  getAllSessions(): SessionRow[] {
-    return stmts.getAllSessions.all() as SessionRow[]
+  getAllSessions(limit = 500): SessionRow[] {
+    return db.prepare(`SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?`).all(limit) as SessionRow[]
+  },
+
+  getSessionEventsRecent(sessionId: string, limit = 200): EventRow[] {
+    return stmts.getSessionEventsRecent.all(sessionId, limit) as EventRow[]
   },
 
   updateSessionProject(sessionId: string, projectPath: string) {
@@ -480,4 +615,26 @@ export const dbOps = {
   getAnalyticsDaily(since: number)   { return stmts.analyticsDaily.all(since)        as any[] },
   getAnalyticsByModel(since: number) { return stmts.analyticsByModel.all(since)       as any[] },
   getProjectHours(since: number)     { return stmts.analyticsProjectHours.all(since)  as any[] },
+
+  getTopTools(days = 30, by: 'cost' | 'count' | 'duration' = 'cost', limit = 10) {
+    const since = Date.now() - days * 86_400_000
+    const stmt = by === 'count' ? stmts.getTopToolsByCount
+      : by === 'duration' ? stmts.getTopToolsByDuration
+      : stmts.getTopToolsByCost
+    const tools = stmt.all(since, since, limit) as Array<{
+      tool_name: string; count: number; total_duration_ms: number; total_cost_usd: number
+    }>
+    const other = stmts.getUnattributedCost.get(since, since, since) as { other_cost_usd: number }
+    if (other.other_cost_usd > 0) {
+      tools.push({ tool_name: 'Other', count: 0, total_duration_ms: 0, total_cost_usd: other.other_cost_usd })
+    }
+    return tools
+  },
+
+  getCostProjection(days = 7) {
+    const since = Date.now() - days * 86_400_000
+    return stmts.getCostProjection.get(since) as {
+      total_cost_usd: number; earliest: number; latest: number
+    }
+  },
 }

@@ -7,11 +7,10 @@ import { deriveSessionState } from '../session-state'
 
 export const streamRouter = Router()
 
-// Clientes SSE conectados — uno por cada `claudestat watch` abierto
+const SSE_INIT_EVENT_LIMIT = 200
+
 const sseClients = new Map<string, Response>()
 
-// Estado de sesión en memoria — se deriva a demanda, no se persiste en DB.
-// Clave: session_id  Valor: {type, ts} del último evento recibido vía /event
 export const sessionLastEvent = new Map<string, { type: string; ts: number }>()
 
 export function broadcast(msg: object) {
@@ -19,17 +18,16 @@ export function broadcast(msg: object) {
   try {
     data = `data: ${JSON.stringify(msg)}\n\n`
   } catch {
-    return  // objeto no serializable (ej: referencia circular) — ignorar silenciosamente
+    return
   }
   const dead: string[] = []
   sseClients.forEach((client, id) => {
     try {
       client.write(data)
     } catch {
-      dead.push(id)  // socket cerrado o roto — marcar para eliminar
+      dead.push(id)
     }
   })
-  // Limpiar clientes muertos fuera del forEach para no mutar el Map mientras se itera
   dead.forEach(id => sseClients.delete(id))
 }
 
@@ -37,8 +35,6 @@ export function getSseClientsSize(): number {
   return sseClients.size
 }
 
-// Callback del enricher necesita onCostUpdate — se inyecta desde events.ts
-// para evitar dependencia circular. El router recibe el callback al registrarse.
 let _onCostUpdateRef: ((sessionId: string, cost: any) => void) | null = null
 export function setOnCostUpdateRef(cb: (sessionId: string, cost: any) => void) {
   _onCostUpdateRef = cb
@@ -53,22 +49,29 @@ streamRouter.get('/stream', (req: Request, res: Response) => {
   const clientId = Math.random().toString(36).slice(2)
   sseClients.set(clientId, res)
 
-  // Estado inicial: sesión más reciente con todos sus eventos
   const latestSession = dbOps.getLatestSession()
   if (latestSession) {
-    const events     = dbOps.getSessionEvents(latestSession.id)
-    const lastEvt    = sessionLastEvent.get(latestSession.id)
-    const state      = deriveSessionState(lastEvt?.type, lastEvt?.ts ?? latestSession.last_event_at ?? latestSession.started_at)
-    const blockCosts      = getAllBlockCostsForSession(latestSession.id)
-    const subAgentSessions = dbOps.getChildSessions(latestSession.id)
-    res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events, blockCosts, subAgentSessions })}\n\n`)
+    const allEvents   = dbOps.getSessionEvents(latestSession.id)
+    const events      = allEvents.length > SSE_INIT_EVENT_LIMIT
+      ? allEvents.slice(-SSE_INIT_EVENT_LIMIT)
+      : allEvents
+    const lastEvt     = sessionLastEvent.get(latestSession.id)
+    const state       = deriveSessionState(lastEvt?.type, lastEvt?.ts ?? latestSession.last_event_at ?? latestSession.started_at)
 
-    // Procesar el JSONL de la sesión activa para entregar contexto inmediato
-    // (sin esperar al próximo mensaje de Claude)
-    if (_onCostUpdateRef) {
-      const cb = _onCostUpdateRef
-      setImmediate(() => processLatestForSession(latestSession.id, cb))
-    }
+    getAllBlockCostsForSession(latestSession.id).then(blockCosts => {
+      const subAgentSessions = dbOps.getChildSessions(latestSession.id)
+      res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events, blockCosts, subAgentSessions })}\n\n`)
+
+      if (_onCostUpdateRef) {
+        processLatestForSession(latestSession.id, _onCostUpdateRef).catch(err =>
+          console.error('[stream] Error processing latest session:', err)
+        )
+      }
+    }).catch(err => {
+      console.error('[stream] Error loading block costs:', err)
+      const subAgentSessions = dbOps.getChildSessions(latestSession.id)
+      res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events, blockCosts: [], subAgentSessions })}\n\n`)
+    })
   }
 
   req.on('close', () => sseClients.delete(clientId))

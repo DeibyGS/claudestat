@@ -16,7 +16,8 @@
  * para que el daemon actualice la DB y haga broadcast via SSE.
  */
 
-import fs from 'fs'
+import fs from 'fs/promises'
+import fsSync from 'fs'
 import path from 'path'
 import os from 'os'
 import chokidar from 'chokidar'
@@ -24,7 +25,6 @@ import { getClaudeDir } from './paths'
 import type { CostUpdate } from './db'
 
 // ─── Tabla de precios (USD por millón de tokens) ──────────────────────────────
-// Actualizar aquí si Anthropic cambia precios.
 
 interface ModelPricing {
   input: number
@@ -40,7 +40,6 @@ const PRICING: Record<string, ModelPricing> = {
   'claude-haiku-4-5-20251001':  { input: 0.80, output: 4,   cacheRead: 0.08, cacheCreate: 1.00  },
 }
 
-// Fallback si el modelo no está en la tabla
 const DEFAULT_PRICING = PRICING['claude-sonnet-4-6']
 
 interface UsageEntry {
@@ -48,6 +47,18 @@ interface UsageEntry {
   output_tokens: number
   cache_read_input_tokens: number
   cache_creation_input_tokens: number
+}
+
+// ─── Context window dinámico ──────────────────────────────────────────────────
+
+const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
+  'claude-opus-4-6':   200_000,
+  'claude-sonnet-4-6': 200_000,
+  'claude-haiku-4-5':  200_000,
+}
+
+export function getContextWindow(model: string): number {
+  return KNOWN_CONTEXT_WINDOWS[model] ?? 200_000
 }
 
 // ─── Calculo de coste ─────────────────────────────────────────────────────────
@@ -65,33 +76,30 @@ function calcCost(model: string, usage: UsageEntry): number {
 
 // ─── Procesamiento de JSONL ───────────────────────────────────────────────────
 
-// Offset de bytes ya leídos por archivo — evita reprocesar líneas anteriores
-const fileOffsets = new Map<string, number>()
+interface FileOffsetEntry { offset: number; lastAccess: number }
 
-/**
- * Lee solo las líneas NUEVAS de un JSONL (desde el último offset conocido).
- * Retorna el coste acumulado de TODAS las líneas del archivo (recalculado completo
- * para garantizar consistencia si el archivo fue truncado o reescrito).
- */
-function processJSONL(filePath: string): CostUpdate | null {
+const fileOffsets = new Map<string, FileOffsetEntry>()
+const FILE_OFFSET_TTL = 30 * 60_000 // 30 minutos
+
+function cleanupStaleOffsets() {
+  const now = Date.now()
+  for (const [key, entry] of fileOffsets) {
+    if (now - entry.lastAccess > FILE_OFFSET_TTL) fileOffsets.delete(key)
+  }
+}
+
+async function processJSONL(filePath: string): Promise<CostUpdate | null> {
   let fileContent: string
   try {
-    fileContent = fs.readFileSync(filePath, 'utf8')
+    fileContent = await fs.readFile(filePath, 'utf8')
   } catch {
-    return null  // archivo borrado o inaccesible — ignorar
+    return null
   }
 
-  // Resetear si el archivo es más pequeño que el offset conocido (truncado)
   const currentSize = Buffer.byteLength(fileContent, 'utf8')
-  const knownOffset = fileOffsets.get(filePath) ?? 0
-  if (currentSize < knownOffset) fileOffsets.set(filePath, 0)
-
-  // Todos los modelos Claude actuales tienen 200K de contexto
-  const CONTEXT_WINDOW: Record<string, number> = {
-    'claude-opus-4-6':   200_000,
-    'claude-sonnet-4-6': 200_000,
-    'claude-haiku-4-5':  200_000,
-  }
+  const knownEntry  = fileOffsets.get(filePath)
+  const knownOffset = knownEntry?.offset ?? 0
+  if (currentSize < knownOffset) fileOffsets.set(filePath, { offset: 0, lastAccess: Date.now() })
 
   const totals: CostUpdate = {
     input_tokens: 0, output_tokens: 0,
@@ -99,13 +107,12 @@ function processJSONL(filePath: string): CostUpdate | null {
     context_used: 0, context_window: 200_000
   }
 
-  // Accumulators for the last entry — overwritten on each iteration
   let lastInputUsd    = 0
   let lastOutputUsd   = 0
   let lastInputTokens  = 0
   let lastOutputTokens = 0
-  let lastModel: string | undefined = undefined   // stays undefined until first real assistant line
-  let firstTs: number | undefined = undefined     // timestamp of first assistant message
+  let lastModel: string | undefined = undefined
+  let firstTs: number | undefined = undefined
 
   for (const raw of fileContent.split('\n')) {
     const line = raw.trim()
@@ -120,7 +127,6 @@ function processJSONL(filePath: string): CostUpdate | null {
 
       if (!usage) continue
 
-      // Capture timestamp of first assistant message for sub-agent detection
       if (firstTs === undefined && obj.timestamp) {
         try { firstTs = new Date(obj.timestamp as string).getTime() } catch {}
       }
@@ -132,13 +138,11 @@ function processJSONL(filePath: string): CostUpdate | null {
       const resolvedModel = model ?? 'claude-sonnet-4-6'
       totals.cost_usd       += calcCost(resolvedModel, usage)
 
-      // The context of the LAST message is most relevant — how much context Claude "sees" now
       totals.context_used   = (usage.input_tokens ?? 0)
                             + (usage.cache_read_input_tokens ?? 0)
                             + (usage.cache_creation_input_tokens ?? 0)
-      totals.context_window = CONTEXT_WINDOW[resolvedModel] ?? 200_000
+      totals.context_window = getContextWindow(resolvedModel)
 
-      // Store cost breakdown for THIS entry (overwritten until the last one)
       const price   = PRICING[resolvedModel] ?? DEFAULT_PRICING
       const M       = 1_000_000
       lastInputUsd     = ((usage.input_tokens                  ?? 0) * price.input       +
@@ -147,10 +151,8 @@ function processJSONL(filePath: string): CostUpdate | null {
       lastOutputUsd    = ((usage.output_tokens                 ?? 0) * price.output)     / M
       lastInputTokens  = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
       lastOutputTokens = usage.output_tokens ?? 0
-      lastModel        = model ?? lastModel   // keep previous model if current line has none
-    } catch {
-      // Línea malformada — ignorar y continuar
-    }
+      lastModel        = model ?? lastModel
+    } catch {}
   }
 
   if (lastInputUsd + lastOutputUsd > 0) {
@@ -165,7 +167,7 @@ function processJSONL(filePath: string): CostUpdate | null {
   totals.lastModel = lastModel
   totals.firstTs   = firstTs
 
-  fileOffsets.set(filePath, currentSize)
+  fileOffsets.set(filePath, { offset: currentSize, lastAccess: Date.now() })
   return totals
 }
 
@@ -173,32 +175,27 @@ function processJSONL(filePath: string): CostUpdate | null {
 
 import type { BlockCostEntry } from './db'
 
-// Caché con TTL 5 min — evita re-leer el filesystem completo en cada reconexión SSE
 const blockCostCache = new Map<string, { data: BlockCostEntry[]; ts: number }>()
 const BLOCK_COST_TTL = 5 * 60_000
 
-/**
- * Lee el JSONL completo de una sesión y devuelve los costos de CADA bloque
- * (una entrada por mensaje `assistant`). Usado en el init SSE para restaurar
- * los blockCosts históricos cuando el dashboard se reconecta.
- */
-export function getAllBlockCostsForSession(sessionId: string): BlockCostEntry[] {
+export async function getAllBlockCostsForSession(sessionId: string): Promise<BlockCostEntry[]> {
   const cached = blockCostCache.get(sessionId)
   if (cached && Date.now() - cached.ts < BLOCK_COST_TTL) return cached.data
   try {
-    if (!fs.existsSync(PROJECTS_DIR)) return []
-    for (const dir of fs.readdirSync(PROJECTS_DIR)) {
+    if (!fsSync.existsSync(PROJECTS_DIR)) return []
+    const dirs = await fs.readdir(PROJECTS_DIR)
+    for (const dir of dirs) {
       const dirPath = path.join(PROJECTS_DIR, dir)
-      try { if (!fs.statSync(dirPath).isDirectory()) continue } catch { continue }
+      try {
+        const stat = await fs.stat(dirPath)
+        if (!stat.isDirectory()) continue
+      } catch { continue }
       const filePath = path.join(dirPath, `${sessionId}.jsonl`)
-      if (!fs.existsSync(filePath)) continue
+      try { await fs.access(filePath) } catch { continue }
 
-      // Agrupar por bloque (prompt humano real → todos sus sub-turnos assistant)
-      // Un bloque = un prompt del usuario + todos los mensajes assistant que Claude
-      // genera en respuesta (puede ser más de uno si usa múltiples rondas de tool calls).
       const result: BlockCostEntry[] = []
       let current: BlockCostEntry | null = null
-      const content = fs.readFileSync(filePath, 'utf8')
+      const content = await fs.readFile(filePath, 'utf8')
 
       for (const raw of content.split('\n')) {
         const line = raw.trim()
@@ -206,22 +203,18 @@ export function getAllBlockCostsForSession(sessionId: string): BlockCostEntry[] 
         try {
           const obj = JSON.parse(line)
 
-          // Detectar prompt humano real (no tool_result, no system-reminder)
           if (obj.type === 'human' || obj.type === 'user') {
             const msgContent = obj.message?.content
-            // Saltar tool_result — son respuestas de herramientas, no prompts del usuario
             if (Array.isArray(msgContent) && msgContent[0]?.type === 'tool_result') continue
             const text = typeof msgContent === 'string' ? msgContent
               : Array.isArray(msgContent)
                 ? ((msgContent as any[]).find((c: any) => c?.type === 'text')?.text ?? '')
                 : ''
             if (text.includes('<system-reminder>') || text.includes('<command-name>')) continue
-            // Nuevo bloque: crear acumulador y añadir a resultados
             current = { inputUsd: 0, outputUsd: 0, totalUsd: 0, inputTokens: 0, outputTokens: 0 }
             result.push(current)
           }
 
-          // Sub-turno de assistant: acumular en el bloque actual
           if (obj.type === 'assistant' && current) {
             const usage = obj.message?.usage
             const model = (obj.message?.model as string) ?? 'claude-sonnet-4-6'
@@ -243,7 +236,6 @@ export function getAllBlockCostsForSession(sessionId: string): BlockCostEntry[] 
         } catch {}
       }
 
-      // Filtrar bloques vacíos (sin coste — pueden ser prompts sin respuesta aún)
       const filtered = result.filter(b => b.totalUsd > 0)
       blockCostCache.set(sessionId, { data: filtered, ts: Date.now() })
       return filtered
@@ -255,30 +247,29 @@ export function getAllBlockCostsForSession(sessionId: string): BlockCostEntry[] 
 // ─── Prompts del usuario por sesión ──────────────────────────────────────────
 
 export interface SessionPrompt {
-  index: number   // 1-based — corresponde al bloque del mismo índice
-  ts:    number   // timestamp ms
-  text:  string   // texto del prompt completo
+  index: number
+  ts:    number
+  text:  string
 }
 
-/**
- * Lee los mensajes humanos del JSONL de una sesión.
- * El mensaje #N corresponde al bloque #N del trace.
- */
-export function getSessionPrompts(sessionId: string): SessionPrompt[] {
+export async function getSessionPrompts(sessionId: string): Promise<SessionPrompt[]> {
   try {
-    if (!fs.existsSync(PROJECTS_DIR)) return []
-    for (const dir of fs.readdirSync(PROJECTS_DIR)) {
+    if (!fsSync.existsSync(PROJECTS_DIR)) return []
+    const dirs = await fs.readdir(PROJECTS_DIR)
+    for (const dir of dirs) {
       const dirPath = path.join(PROJECTS_DIR, dir)
-      try { if (!fs.statSync(dirPath).isDirectory()) continue } catch { continue }
+      try {
+        const stat = await fs.stat(dirPath)
+        if (!stat.isDirectory()) continue
+      } catch { continue }
 
-      // Buscar también en subdirectorios (subagents)
       const candidates = [
         path.join(dirPath, `${sessionId}.jsonl`),
       ]
       for (const file of candidates) {
-        if (!fs.existsSync(file)) continue
+        try { await fs.access(file) } catch { continue }
         const results: SessionPrompt[] = []
-        const content = fs.readFileSync(file, 'utf8')
+        const content = await fs.readFile(file, 'utf8')
         let index = 0
         for (const raw of content.split('\n')) {
           const line = raw.trim()
@@ -289,19 +280,16 @@ export function getSessionPrompts(sessionId: string): SessionPrompt[] {
             const ts = obj.timestamp ? new Date(obj.timestamp as string).getTime() : 0
             if (!ts || isNaN(ts)) continue
 
-            // Extraer solo el texto del usuario (ignorar tool_result y system-reminders)
             const msgContent = obj.message?.content
             let text = ''
             if (typeof msgContent === 'string') {
               text = msgContent
             } else if (Array.isArray(msgContent)) {
-              // Filtrar bloques tipo 'text', ignorar 'tool_result'
               const textBlocks = (msgContent as any[]).filter(c => c?.type === 'text')
-              if (textBlocks.length === 0) continue   // solo tool_result → no es prompt del usuario
+              if (textBlocks.length === 0) continue
               text = textBlocks.map((c: any) => c.text ?? '').join('\n').trim()
             }
 
-            // Filtrar mensajes internos del sistema
             if (
               text.includes('<command-name>') ||
               text.includes('<local-command-stdout>') ||
@@ -310,11 +298,7 @@ export function getSessionPrompts(sessionId: string): SessionPrompt[] {
             ) continue
 
             index++
-            results.push({
-              index,
-              ts,
-              text,
-            })
+            results.push({ index, ts, text })
           } catch {}
         }
         return results
@@ -330,97 +314,99 @@ const PROJECTS_DIR = path.join(getClaudeDir(), 'projects')
 
 export type CostUpdateCallback    = (sessionId: string, cost: CostUpdate) => void
 export type CompactDetectedCallback = (sessionId: string) => void
+export type SessionEndCallback = (sessionId: string) => void
 
-// Rastrear el último context_used por sesión para detectar auto-compact
 const prevContextBySession = new Map<string, number>()
 
-/**
- * Inicia el watcher sobre ~/.claude/projects/.
- * Cuando un .jsonl cambia, calcula el coste y llama al callback.
- *
- * Usamos chokidar porque fs.watch con {recursive:true} no funciona en Linux.
- */
-export function startEnricher(onUpdate: CostUpdateCallback, onCompact?: CompactDetectedCallback) {
-  if (!fs.existsSync(PROJECTS_DIR)) {
-    console.warn(`[enricher] Directorio no encontrado: ${PROJECTS_DIR}`)
+let watcher: chokidar.FSWatcher | null = null
+const pendingFiles = new Map<string, ReturnType<typeof setTimeout>>()
+
+let offsetCleanupInterval: ReturnType<typeof setInterval> | null = null
+
+export function startEnricher(
+  onUpdate: CostUpdateCallback,
+  onCompact?: CompactDetectedCallback,
+  onSessionEnd?: SessionEndCallback,
+) {
+  if (!fsSync.existsSync(PROJECTS_DIR)) {
+    console.warn(`[enricher] Directory not found: ${PROJECTS_DIR}`)
     return
   }
 
-  const watcher = chokidar.watch(`${PROJECTS_DIR}/**/*.jsonl`, {
+  watcher = chokidar.watch(`${PROJECTS_DIR}/**/*.jsonl`, {
     persistent: true,
-    ignoreInitial: true,   // no procesar archivos existentes al arrancar (pueden ser grandes)
+    ignoreInitial: true,
     awaitWriteFinish: {
-      stabilityThreshold: 200,   // esperar 200ms sin cambios antes de procesar
+      stabilityThreshold: 200,
       pollInterval: 100
     }
   })
 
-  // Debounce por archivo: evita doble-procesamiento si chokidar emite eventos rápidos
-  // para el mismo archivo (común en algunos sistemas de archivos).
-  const pendingFiles = new Map<string, ReturnType<typeof setTimeout>>()
-
   const handleFile = (filePath: string) => {
-    // Extract sessionId from filename: "path/to/{sessionId}.jsonl"
     const sessionId = path.basename(filePath, '.jsonl')
-
-    // Ignore files that don't look like session UUIDs
     if (!sessionId.includes('-') || sessionId.length < 10) return
 
-    // Cancelar procesamiento previo pendiente para este archivo
     const existing = pendingFiles.get(filePath)
     if (existing) clearTimeout(existing)
 
-    // Procesar con un pequeño delay (100ms) para colapsar eventos duplicados
     const timer = setTimeout(() => {
       pendingFiles.delete(filePath)
-      const cost = processJSONL(filePath)
-      if (cost && cost.cost_usd >= 0) {
-        // Detect auto-compact: context drops sharply within the same session
-        // (Claude compacts and restarts from near-zero active tokens)
-        const prev = prevContextBySession.get(sessionId)
-        if (
-          onCompact &&
-          prev !== undefined &&
-          prev > 140_000 &&
-          cost.context_used < prev * 0.5
-        ) {
-          onCompact(sessionId)
+      processJSONL(filePath).then(cost => {
+        if (cost && cost.cost_usd >= 0) {
+          const prev = prevContextBySession.get(sessionId)
+          if (onCompact && prev !== undefined && prev > 140_000 && cost.context_used < prev * 0.5) {
+            onCompact(sessionId)
+          }
+          prevContextBySession.set(sessionId, cost.context_used)
+          onUpdate(sessionId, cost)
         }
-        prevContextBySession.set(sessionId, cost.context_used)
-        onUpdate(sessionId, cost)
-      }
+      }).catch(err => console.error('[enricher] Error processing JSONL:', err))
     }, 100)
     pendingFiles.set(filePath, timer)
   }
 
-  // Listen to both 'change' (appends to existing file) and 'add' (new session file).
-  // Without 'add', the first assistant response in a brand-new session is missed,
-  // leaving lastModel stuck at the Sonnet default.
   watcher.on('change', handleFile)
   watcher.on('add',    handleFile)
 
-  console.log(`[enricher] Observando ${PROJECTS_DIR}`)
+  offsetCleanupInterval = setInterval(cleanupStaleOffsets, 5 * 60_000)
+
+  console.log(`[enricher] Watching ${PROJECTS_DIR}`)
 }
 
-/**
- * Busca y procesa el JSONL de una sesión específica.
- * Usado al conectar un nuevo cliente SSE para entregar el contexto actual
- * sin esperar al próximo cambio en el archivo.
- */
-export function processLatestForSession(sessionId: string, onUpdate: CostUpdateCallback): void {
+export function stopEnricher() {
+  if (watcher) { watcher.close(); watcher = null }
+  if (offsetCleanupInterval) { clearInterval(offsetCleanupInterval); offsetCleanupInterval = null }
+  for (const [, timer] of pendingFiles) clearTimeout(timer)
+  pendingFiles.clear()
+  fileOffsets.clear()
+  prevContextBySession.clear()
+  blockCostCache.clear()
+  console.log('[enricher] Stopped')
+}
+
+export function cleanupSession(sessionId: string) {
+  blockCostCache.delete(sessionId)
+  prevContextBySession.delete(sessionId)
+  for (const [key, entry] of fileOffsets) {
+    if (key.includes(sessionId)) fileOffsets.delete(key)
+  }
+}
+
+export async function processLatestForSession(sessionId: string, onUpdate: CostUpdateCallback): Promise<void> {
   try {
-    if (!fs.existsSync(PROJECTS_DIR)) return
-    for (const dir of fs.readdirSync(PROJECTS_DIR)) {
+    if (!fsSync.existsSync(PROJECTS_DIR)) return
+    const dirs = await fs.readdir(PROJECTS_DIR)
+    for (const dir of dirs) {
       const dirPath = path.join(PROJECTS_DIR, dir)
       try {
-        if (!fs.statSync(dirPath).isDirectory()) continue
+        const stat = await fs.stat(dirPath)
+        if (!stat.isDirectory()) continue
       } catch { continue }
       const filePath = path.join(dirPath, `${sessionId}.jsonl`)
-      if (fs.existsSync(filePath)) {
-        const cost = processJSONL(filePath)
-        if (cost && cost.cost_usd >= 0) onUpdate(sessionId, cost)
-        return
-      }
+      try { await fs.access(filePath) } catch { continue }
+      const cost = await processJSONL(filePath)
+      if (cost && cost.cost_usd >= 0) onUpdate(sessionId, cost)
+      return
     }
-  } catch { /* ignore — sesión nueva sin JSONL todavía */ }
+  } catch {}
 }

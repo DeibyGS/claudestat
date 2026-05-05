@@ -2,16 +2,12 @@ import { test, describe, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import { readConfig, writeConfig, validateConfig, getWarnLevel } from '../src/config'
+import { getClaudestatDir } from '../src/paths'
 
-// ─── Setup: redirect CONFIG_PATH via env ──────────────────────────────────────
-// config.ts uses os.homedir() + '.claudestat/config.json', so we use a temp dir
-// and test the exported functions directly — they always hit the real path.
-// For readConfig/writeConfig we test via the actual CLAUDESTAT data dir mechanism.
-
-const TMP_DIR = path.join(os.tmpdir(), `claudestat-test-config-${Math.random().toString(36).slice(2)}`)
-const CONFIG_FILE = path.join(os.homedir(), '.claudestat', 'config.json')
+// CONFIG_FILE must match what config.ts actually uses, which respects
+// CLAUDESTAT_DATA_DIR (set to os.tmpdir() during tests via tests/index.ts).
+const CONFIG_FILE = path.join(getClaudestatDir(), 'config.json')
 let originalConfig: string | null = null
 
 function backupConfig() {

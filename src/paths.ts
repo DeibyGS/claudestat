@@ -1,14 +1,13 @@
 /**
  * paths.ts — Cross-platform path resolution for Claude Code data directories
  *
- * Claude Code stores data in different locations depending on the OS:
- *   macOS/Linux: ~/.claude/
- *   Windows:     %APPDATA%/claude/  (e.g. C:\Users\<user>\AppData\Roaming\claude\)
+ * Claude Code stores data in the same location on all platforms:
+ *   All platforms: ~/.claude/
  *
  * ClaudeStat stores its own data in:
  *   All platforms: ~/.claudestat/  (or CLAUDESTAT_DATA_DIR env var)
  *
- * Claude Code encodes project paths by replacing path separators with '-'.
+ * Claude Code encodes project paths by replacing path separators AND colons with '-'.
  * This module provides helpers to encode/decode those paths cross-platform.
  */
 
@@ -20,17 +19,10 @@ const isWin = process.platform === 'win32'
 // ─── Claude Code data directory ────────────────────────────────────────────────
 
 /**
- * Returns the Claude Code data directory for the current platform:
- *   macOS/Linux: ~/.claude
- *   Windows:     %APPDATA%/claude
+ * Returns the Claude Code data directory (~/.claude on all platforms).
+ * Empirically verified: Claude Code CLI stores settings at ~/.claude on macOS, Linux, and Windows.
  */
 export function getClaudeDir(): string {
-  if (isWin) {
-    return path.join(
-      process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'),
-      'claude'
-    )
-  }
   return path.join(os.homedir(), '.claude')
 }
 
@@ -55,18 +47,13 @@ export function getPidFile(): string {
 
 /**
  * Encodes a real filesystem path into Claude Code's internal format.
- * Claude Code replaces path separators with '-'.
+ * Claude Code replaces path separators AND colons with '-'.
  *
- *   macOS:  /Users/db/Documents/GitHub → -Users-db-Documents-GitHub
- *   Windows: C:\Users\db\Documents     → -C--Users-db-Documents
- *
- * On Windows, also strips the colon after the drive letter (C: → C).
+ *   macOS:   /Users/db/Documents/GitHub → -Users-db-Documents-GitHub
+ *   Windows: C:\Users\db\Documents      → C--Users-db-Documents
  */
 export function encodeClaudePath(realPath: string): string {
-  const normalized = realPath.replace(/[/\\]/g, '-')
-  // On Windows, "C:-Users-db" → strip the colon: "C--Users-db" → keep as-is
-  // Claude Code on Windows may keep the colon; we normalize it away
-  return normalized.replace(/^([A-Za-z]):/, '$1')
+  return realPath.replace(/[/\\:]/g, '-')
 }
 
 /**
@@ -98,21 +85,18 @@ export function decodeClaudePath(encoded: string): string | null {
  * Handles both / and \ separators.
  */
 export function homeSlugRegex(): RegExp {
-  const homeDir = os.homedir()
-  const encoded = homeDir.replace(/[/\\]/g, '-')
-  // Escape special regex chars in the encoded path
-  const escaped = encoded.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const escaped = encodeClaudePath(os.homedir()).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return new RegExp('^' + escaped)
 }
 
 /**
  * Returns the engram-compatible slug for the home directory.
  * Used for MEMORY.md path resolution.
- *   macOS:  /Users/db  → -Users-db
- *   Windows: C:\Users\db → -C--Users-db
+ *   macOS:   /Users/db   → -Users-db
+ *   Windows: C:\Users\db → C--Users-db
  */
 export function getHomeSlug(): string {
-  return os.homedir().replace(/[/\\]/g, '-').replace(/^([A-Za-z]):/, '$1')
+  return encodeClaudePath(os.homedir())
 }
 
 // ─── Platform utilities ────────────────────────────────────────────────────────

@@ -10,7 +10,7 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 [![npm version](https://img.shields.io/npm/v/@deibygs/claudestat?color=blue)](https://www.npmjs.com/package/@deibygs/claudestat)
 [![npm downloads](https://img.shields.io/npm/dw/@deibygs/claudestat?color=blue)](https://www.npmjs.com/package/@deibygs/claudestat)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-brightgreen)]()
 [![Tests](https://img.shields.io/badge/tests-153%2F153-brightgreen)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
@@ -86,6 +86,7 @@ npm install -g @deibygs/claudestat
 > ```bash
 > nvm use default && npm install -g @deibygs/claudestat
 > ```
+> Works with [nvm](https://github.com/nvm-sh/nvm) (macOS/Linux) and [nvm-windows](https://github.com/coreybutler/nvm-windows).
 
 Then wire up the hooks into Claude Code:
 
@@ -105,8 +106,13 @@ This modifies `~/.claude/settings.json` to add `SessionStart`, `PreToolUse`, `Po
 # 1. Start the background daemon
 claudestat start
 
-# 2. Open the dashboard
+# 2. Open the dashboard in your browser
+#    macOS:
 open http://localhost:7337
+#    Windows:
+start http://localhost:7337
+#    Linux:
+xdg-open http://localhost:7337
 
 # 3. Or watch a live terminal trace
 claudestat watch
@@ -235,7 +241,7 @@ Daemon health, DB size, Node version, config file paths, and memory context.
 
 ## Configuration reference
 
-Config is stored at `~/.claudestat/config.json` and created automatically on first run.
+Config is stored at `~/.claudestat/config.json` (macOS/Linux) or `%USERPROFILE%\.claudestat\config.json` (Windows) and created automatically on first run.
 
 ```json
 {

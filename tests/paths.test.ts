@@ -30,10 +30,9 @@ describe('getClaudeDir', () => {
     assert.match(getClaudeDir(), /\.claude$/)
   })
 
-  test('on Windows, returns APPDATA/claude', () => {
+  test('on Windows, returns ~/.claude', () => {
     if (process.platform !== 'win32') return
-    const dir = getClaudeDir()
-    assert.ok(dir.includes('claude') || dir.includes('Claude'))
+    assert.match(getClaudeDir(), /\.claude$/)
   })
 
   test('respects CLAUDE_DATA_DIR env override for claudestat dir', () => {
@@ -55,19 +54,27 @@ describe('getPidFile', () => {
 
 describe('encodeClaudePath', () => {
   test('encodes Unix-style paths', () => {
-    // On macOS/Linux, homeDir is like /Users/db
     if (process.platform === 'win32') return
     const result = encodeClaudePath('/Users/db/Documents/GitHub/myproject')
     assert.ok(result.includes('-'))
     assert.ok(!result.includes('/'))
   })
 
+  test('encodes Windows-style paths with drive letter', () => {
+    if (process.platform !== 'win32') return
+    // C:\Users\DGS → C--Users-DGS (colon becomes dash, backslash becomes dash)
+    const result = encodeClaudePath('C:\\Users\\DGS')
+    assert.equal(result, 'C--Users-DGS')
+    assert.ok(!result.includes(':'))
+    assert.ok(!result.includes('\\'))
+  })
+
   test('encodes home directory correctly', () => {
     const homeDir = os.homedir()
     const encoded = encodeClaudePath(homeDir)
-    // Should not contain path separators
     assert.ok(!encoded.includes('/'))
     assert.ok(!encoded.includes('\\'))
+    assert.ok(!encoded.includes(':'))
   })
 })
 

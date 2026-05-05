@@ -1,7 +1,7 @@
-// IMPORTANT: env vars must be set before db module loads (module-level side effects)
-// These are passed via the npm test script: CLAUDESTAT_DB_PATH=:memory: CLAUDESTAT_DATA_DIR=/tmp
+// IMPORTANT: env vars must be set before db module loads (module-level side effects).
+// tests/index.ts uses require() (not import) to guarantee env vars are set first.
 
-import { test } from 'node:test'
+import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { dbOps } from '../src/db'
 import type { SessionRow, EventRow, CostUpdate } from '../src/db'
@@ -29,6 +29,11 @@ function makeCostUpdate(overrides: Partial<CostUpdate> = {}): CostUpdate {
     ...overrides,
   }
 }
+
+// Wrap all db tests in a describe with concurrency:false to ensure sequential
+// execution. Top-level test() calls run concurrently in Node 22+, which
+// causes interference because tests share a single in-memory SQLite instance.
+describe('db', { concurrency: false }, () => {
 
 // ─── upsertSession / getSession ───────────────────────────────────────────────
 
@@ -244,3 +249,5 @@ test('listWeeklyReports returns inserted reports in DESC order', () => {
   const idx2 = list.findIndex(r => r.date === '2026-05-01')
   assert.ok(idx1 < idx2, 'later date should appear first')
 })
+
+}) // end describe('db')

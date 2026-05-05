@@ -308,7 +308,7 @@ function getJSONLStatsByProject(dirPath: string): Map<string, JSONLStats> {
           for (const block of blocks) {
             if (block.type !== 'tool_use' || !FILE_TOOLS.has(block.name)) continue
             const fp = (block.input?.file_path || block.input?.path) as string | undefined
-            if (!fp?.startsWith('/')) continue
+            if (!fp || !path.isAbsolute(fp)) continue
             const root = findProjectRoot(fp)
             if (root) rootCounts.set(root, (rootCounts.get(root) ?? 0) + 1)
           }

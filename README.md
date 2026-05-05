@@ -65,7 +65,7 @@ Claude Code event
   You see everything — live
 ```
 
-> **Windows paths**: On macOS/Linux, Claude Code data is in `~/.claude/`. On Windows, it's in `%APPDATA%\claude\`. ClaudeStat detects the correct path automatically.
+> **Windows paths**: Claude Code stores its data in `~/.claude/` on all platforms (macOS, Linux, and Windows). ClaudeStat detects the correct path automatically.
 
 ---
 
@@ -93,7 +93,7 @@ Then wire up the hooks into Claude Code:
 claudestat install
 ```
 
-This modifies `~/.claude/settings.json` (macOS/Linux) or `%APPDATA%\claude\settings.json` (Windows) to add `SessionStart`, `PreToolUse`, `PostToolUse`, and `Stop` hooks. A backup is created before any change.
+This modifies `~/.claude/settings.json` to add `SessionStart`, `PreToolUse`, `PostToolUse`, and `Stop` hooks. A backup is created before any change.
 
 > Restart Claude Code after installing so the hooks take effect.
 

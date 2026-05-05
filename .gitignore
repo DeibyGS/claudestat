@@ -8,3 +8,4 @@ AGENTS.md
 *.tsbuildinfo
 *.bak
 *.tgz
+.engram/

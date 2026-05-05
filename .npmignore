@@ -14,5 +14,6 @@ dashboard/public/
 # Dev / local files
 node_modules/
 HANDOFF.md
+testClaudestatWindows.md
 tsconfig.json
 *.bak

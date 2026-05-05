@@ -44,7 +44,7 @@ function connectSSE(onMessage: (msg: any) => void): Promise<void> {
           }
         }
       })
-      res.on('end', () => reject(new Error('Stream cerrado')))
+      res.on('end', () => reject(new Error('Stream closed')))
     })
     req.on('error', reject)
     req.end()
@@ -54,8 +54,8 @@ function connectSSE(onMessage: (msg: any) => void): Promise<void> {
 export async function startWatch() {
   const alive = await checkDaemon()
   if (!alive) {
-    console.error('\n❌ El daemon no está corriendo.')
-    console.error('   Ejecutá: \x1b[36mclaudestat start\x1b[0m\n')
+    console.error('\n❌ Daemon is not running.')
+    console.error('   Run: \x1b[36mclaudestat start\x1b[0m\n')
     process.exit(1)
   }
 
@@ -127,13 +127,13 @@ export async function startWatch() {
   }
 
   clearScreen()
-  process.stdout.write('\x1b[36m● claudestat watch\x1b[0m — conectando...\n')
+  process.stdout.write('\x1b[36m● claudestat watch\x1b[0m — connecting...\n')
 
   while (true) {
     try { await connectSSE(handleMessage) }
     catch {
       clearScreen()
-      console.log('\x1b[33m⚠ Conexión perdida. Reconectando en 2s...\x1b[0m')
+      console.log('\x1b[33m⚠ Connection lost. Reconnecting in 2s...\x1b[0m')
       await new Promise(r => setTimeout(r, 2000))
     }
   }

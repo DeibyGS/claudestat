@@ -126,12 +126,12 @@ function buildSummary(
 
   if (loops.length > 0) {
     const loopDesc = loops.map(l => `${l.toolName} x${l.count}`).join(', ')
-    parts.push(`⚠️  Loop detectado: ${loopDesc}`)
+    parts.push(`⚠️  Loop detected: ${loopDesc}`)
   }
 
-  if (score >= 90) parts.push('✅ Sesión eficiente')
-  else if (score >= 70) parts.push('⚡ Eficiencia media')
-  else parts.push('🔴 Sesión ineficiente')
+  if (score >= 90) parts.push('✅ Efficient session')
+  else if (score >= 70) parts.push('⚡ Medium efficiency')
+  else parts.push('🔴 Inefficient session')
 
   const toolCalls = events.filter(e => e.type === 'Done').length
   parts.push(`${toolCalls} tool calls · $${costUsd.toFixed(4)}`)

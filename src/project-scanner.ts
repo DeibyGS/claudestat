@@ -71,8 +71,9 @@ export function decodeProjectDir(encodedName: string): string | null {
  * Ejemplo: base="/Users/db/Documents/GitHub", remaining="gmail-ai-agent"
  *   → prueba "gmail" (no existe), "gmail-ai" (no existe), "gmail-ai-agent" (✓)
  */
-export function findRealPath(base: string, remaining: string): string | null {
+export function findRealPath(base: string, remaining: string, depth = 0): string | null {
   if (!remaining) return fs.existsSync(base) ? base : null
+  if (depth > 10) return null
 
   const parts    = remaining.split('-')
   let   segment  = ''
@@ -86,7 +87,7 @@ export function findRealPath(base: string, remaining: string): string | null {
     const leftover = parts.slice(i + 1).join('-')
     if (!leftover) return candidate           // consumido todo → éxito
 
-    const deeper = findRealPath(candidate, leftover)
+    const deeper = findRealPath(candidate, leftover, depth + 1)
     if (deeper) return deeper
   }
 

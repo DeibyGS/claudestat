@@ -13,6 +13,7 @@ import { isRateLimited }                       from '../middleware/rate-limiter'
 import { broadcast, sessionLastEvent }         from './stream'
 import {
   processLatestForSession,
+  cleanupSession,
   type CostUpdateCallback,
   type CompactDetectedCallback,
 } from '../enricher'
@@ -70,14 +71,14 @@ export function findProjectCwdForFile(filePath: string): string | undefined {
 eventsRouter.post('/event', (req: Request, res: Response) => {
   const ip = req.ip ?? '127.0.0.1'
   if (isRateLimited(ip)) {
-    res.status(429).json({ error: 'Demasiadas peticiones — espera 1 minuto' })
+    res.status(429).json({ error: 'Too many requests — wait 1 minute' })
     return
   }
 
   const { type, session_id, tool_name, tool_input, tool_response, ts, cwd, transcript_path } = req.body
 
   if (!session_id || !type) {
-    res.status(400).json({ error: 'Faltan session_id o type' })
+    res.status(400).json({ error: 'Missing session_id or type' })
     return
   }
 
@@ -101,7 +102,7 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
     // Truncar tool_response a 4000 chars para no saturar SSE con archivos grandes
     const rawResp  = typeof tool_response === 'string' ? tool_response : JSON.stringify(tool_response ?? '')
     const tool_output = rawResp.length > 4000
-      ? rawResp.slice(0, 4000) + `\n…[truncado: ${rawResp.length} chars]`
+      ? rawResp.slice(0, 4000) + `\n…[truncated: ${rawResp.length} chars]`
       : rawResp
     broadcast({ type: 'event', payload: { type: 'Done', session_id, tool_name, tool_input: tool_input != null ? JSON.stringify(tool_input) : undefined, tool_output, ts, pairedId, skill_parent: skillParent } })
 
@@ -122,7 +123,10 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
     broadcast({ type: 'event', payload: { ...req.body, skill_parent: skillParent } })
 
     // Stop limpia el skill activo para esta sesión
-    if (type === 'Stop') activeSkillBySession.delete(session_id)
+    if (type === 'Stop') {
+      activeSkillBySession.delete(session_id)
+      cleanupSession(session_id)
+    }
 
     // Registrar Agent PreToolUse para detección de sub-sesiones
     if (type === 'PreToolUse' && tool_name === 'Agent' && resolvedCwd) {
@@ -180,18 +184,20 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
     // Generar resumen IA solo si el usuario lo activa explícitamente
     // Activar: CLAUDESTAT_AI_SUMMARY=true claudestat start
     if (process.env.CLAUDESTAT_AI_SUMMARY === 'true') {
-      setImmediate(async () => {
-        try {
-          const session = dbOps.getSession(session_id)
-          if (!session) return
-          const events      = dbOps.getSessionEvents(session_id)
-          const projectName = session.project_path ? path.basename(session.project_path) : undefined
-          const summary     = await summarizeSession(events, session.total_cost_usd ?? 0, projectName)
-          if (summary) {
-            dbOps.updateSessionSummary(session_id, summary)
-            broadcast({ type: 'summary_ready', payload: { session_id, summary } })
-          }
-        } catch { /* ignorar errores del summarizer */ }
+      setImmediate(() => {
+        (async () => {
+          try {
+            const session = dbOps.getSession(session_id)
+            if (!session) return
+            const events      = dbOps.getSessionEvents(session_id)
+            const projectName = session.project_path ? path.basename(session.project_path) : undefined
+            const summary     = await summarizeSession(events, session.total_cost_usd ?? 0, projectName)
+            if (summary) {
+              dbOps.updateSessionSummary(session_id, summary)
+              broadcast({ type: 'summary_ready', payload: { session_id, summary } })
+            }
+          } catch (err) { console.error('[events] Summary error:', err) }
+        })()
       })
     }
   }

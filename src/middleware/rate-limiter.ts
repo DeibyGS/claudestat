@@ -18,7 +18,12 @@ export function isRateLimited(ip: string): boolean {
 }
 
 // Limpiar entradas expiradas cada 5 minutos para no acumular IPs inactivas
-setInterval(() => {
+const rateLimitCleanupInterval = setInterval(() => {
   const now = Date.now()
   rateLimitMap.forEach((v, k) => { if (now - v.windowStart > RATE_LIMIT_WINDOW_MS) rateLimitMap.delete(k) })
 }, 5 * 60_000)
+
+export function stopRateLimiter() {
+  clearInterval(rateLimitCleanupInterval)
+  rateLimitMap.clear()
+}

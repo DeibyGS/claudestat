@@ -17,7 +17,7 @@ import express, { type Request, type Response } from 'express'
 import path   from 'path'
 import fs     from 'fs'
 import { dbOps }                                                    from './db'
-import { startEnricher }                                            from './enricher'
+import { startEnricher, stopEnricher, cleanupSession }                        from './enricher'
 import { readConfig }                                               from './config'
 import { eventsRouter, onCostUpdate, onCompactDetected }            from './routes/events'
 import { streamRouter, getSseClientsSize }                          from './routes/stream'
@@ -25,7 +25,10 @@ import { projectsRouter, inferProjectCwd }                          from './rout
 import { historyRouter }                                            from './routes/history'
 import { miscRouter }                                               from './routes/misc'
 import { reportsRouter, getReportDateLabel, generateReport }        from './routes/reports'
+import { topRouter }                                                  from './routes/top'
 import { getProjectsCached, invalidateProjectsCache }               from './cache/projects-cache'
+import { stopRateLimiter }                                            from './middleware/rate-limiter'
+import { startWatchdog }                                              from './watchdog'
 import { summarizeSession }                                         from './summarizer'
 import { getPidFile, getClaudestatDir, portCheckCmd }              from './paths'
 
@@ -41,6 +44,7 @@ app.use(projectsRouter)
 app.use(historyRouter)
 app.use(miscRouter)
 app.use(reportsRouter)
+app.use(topRouter)
 
 // ─── GET /health — necesita acceso al tamaño del pool SSE ─────────────────────
 
@@ -72,7 +76,7 @@ function migrateSessionProjects() {
       tagged++
     }
   }
-  if (tagged > 0) console.log(`[daemon] ${tagged} sesiones etiquetadas con proyecto`)
+    if (tagged > 0) console.log(`[daemon] ${tagged} sessions tagged with project`)
 }
 
 /**
@@ -93,8 +97,22 @@ async function migrateSessionSummaries(limit = 5) {
         dbOps.updateSessionSummary(s.id, summary)
         console.log(`[daemon] Summary generado para sesión ${s.id.slice(0, 8)}: "${summary}"`)
       }
-    } catch { /* ignorar errores individuales */ }
+    } catch (err) { console.error('[daemon] Error generating summary:', err) }
   }
+}
+
+// ─── Interval refs for cleanup ────────────────────────────────────────────────
+
+let projectCacheInterval: ReturnType<typeof setInterval> | null = null
+let reportInterval: ReturnType<typeof setInterval> | null = null
+
+function shutdown(server: import('http').Server) {
+  stopEnricher()
+  stopRateLimiter()
+  if (projectCacheInterval) { clearInterval(projectCacheInterval); projectCacheInterval = null }
+  if (reportInterval) { clearInterval(reportInterval); reportInterval = null }
+  cleanPid()
+  server.close()
 }
 
 // ─── Report scheduler ─────────────────────────────────────────────────────────
@@ -119,12 +137,12 @@ export function startDaemon() {
   const server = app.listen(PORT, '127.0.0.1', () => {
     writePid()
     process.on('exit', cleanPid)
-    process.on('SIGTERM', () => { cleanPid(); process.exit(0) })
-    process.on('SIGINT',  () => { cleanPid(); process.exit(0) })
+    process.on('SIGTERM', () => { shutdown(server); process.exit(0) })
+    process.on('SIGINT',  () => { shutdown(server); process.exit(0) })
 
     console.log(`\n● claudestat daemon  →  http://localhost:${PORT}`)
-    console.log(`  Esperando eventos de Claude Code...\n`)
-    console.log(`  En otra terminal: \x1b[36mclaudestat watch\x1b[0m\n`)
+    console.log(`  Waiting for Claude Code events...\n`)
+    console.log(`  In another terminal: \x1b[36mclaudestat watch\x1b[0m\n`)
 
     // Etiquetar sesiones históricas que no tienen proyecto asignado
     migrateSessionProjects()
@@ -133,12 +151,12 @@ export function startDaemon() {
     // Se ejecuta en background para no retrasar el inicio del servidor
     setImmediate(() => {
       const projects = getProjectsCached()
-      console.log(`[daemon] ${projects?.length ?? 0} proyectos escaneados`)
+      console.log(`[daemon] ${projects?.length ?? 0} projects scanned`)
     })
 
     // Refresh automático del cache de proyectos cada 2 minutos
     // Recoge cambios en HANDOFF.md aunque el daemon lleve horas corriendo
-    setInterval(() => {
+    projectCacheInterval = setInterval(() => {
       invalidateProjectsCache()
       getProjectsCached()
     }, PROJECTS_CACHE_TTL)
@@ -147,7 +165,7 @@ export function startDaemon() {
     startEnricher(onCostUpdate, onCompactDetected)
 
     // Scheduler de informes automáticos — corre cada minuto
-    setInterval(() => {
+    reportInterval = setInterval(() => {
       const cfg = readConfig()
       if (!cfg.reportsEnabled) return
       const dateLabel = getReportDateLabel(new Date(), cfg)
@@ -155,7 +173,7 @@ export function startDaemon() {
       if (dbOps.getWeeklyReportByDate(dateLabel)) return   // ya existe
       const markdown = generateReport(dateLabel, cfg)
       dbOps.insertWeeklyReport(dateLabel, markdown)
-      console.log(`[daemon] Informe generado automáticamente: ${dateLabel}`)
+      console.log(`[daemon] Report auto-generated: ${dateLabel}`)
     }, 60_000)
 
     // Summaries IA solo si opt-in explícito (CLAUDESTAT_AI_SUMMARY=true)
@@ -167,9 +185,9 @@ export function startDaemon() {
   // Manejo de error de puerto ocupado — fuera del callback para capturar EADDRINUSE
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
-      console.error(`\n❌ Error: El puerto ${PORT} ya está en uso.`)
+      console.error(`\n❌ Error: Port ${PORT} is already in use.`)
       console.error(`   Is claudestat already running? Check with: ${portCheckCmd(PORT)}`)
-      console.error(`   Si es así, no necesitas iniciarlo de nuevo.\n`)
+      console.error(`   If so, you don't need to start it again.\n`)
       process.exit(1)
     }
     throw err

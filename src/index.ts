@@ -22,21 +22,24 @@ import { installHooks, uninstallHooks } from './install'
 import { readConfig, writeConfig }      from './config'
 import type { ClaudestatConfig }        from './config'
 import { runDoctor }                    from './doctor'
+import { getPidFile, whichCmd, isWindows } from './paths'
 
 const program  = new Command()
-const PID_FILE = path.join(process.env.HOME!, '.claudestat', 'daemon.pid')
+const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version
+const PID_FILE = getPidFile()
 
 // Warn if the active binary is outside the current npm global prefix (NVM conflict)
-if (process.env.NVM_DIR) {
+if (process.env.NVM_DIR || process.env.NVM_HOME) {
   try {
     const npmPrefix  = execSync('npm prefix -g', { stdio: 'pipe' }).toString().trim()
     const runningFrom = process.argv[1]
     if (runningFrom && !runningFrom.startsWith(npmPrefix)) {
+      const refreshCmd = isWindows ? 'refreshenv' : 'hash -r claudestat'
       process.stderr.write(
         `\x1b[33m⚠️  claudestat is running from ${runningFrom}\x1b[0m\n` +
         `   This binary may not match the active Node version (${process.version}).\n` +
         `   Fix: \x1b[36mnvm use default && npm install -g @deibygs/claudestat\x1b[0m\n` +
-        `   Then restart your terminal or run: \x1b[36mhash -r claudestat\x1b[0m\n\n`
+        `   Then restart your terminal or run: \x1b[36m${refreshCmd}\x1b[0m\n\n`
       )
     }
   } catch {}
@@ -45,7 +48,7 @@ if (process.env.NVM_DIR) {
 program
   .name('claudestat')
   .description('Real-time execution trace and cost intelligence for Claude Code')
-  .version('0.2.1')
+  .version(PKG_VERSION)
 
 program
   .command('start')
@@ -62,7 +65,7 @@ program
 
 program
   .command('install')
-  .description('Install hooks into Claude Code (~/.claude/settings.json)')
+  .description('Install hooks into Claude Code settings')
   .action(installHooks)
 
 program
@@ -165,6 +168,8 @@ program
   .action(() => {
     try {
       const pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10)
+      // On Windows, SIGTERM is ungraceful — equivalent to SIGKILL
+      // We still use it but the daemon handles cleanup via process.on('exit')
       process.kill(pid, 'SIGTERM')
       console.log(`✅ claudestat daemon stopped (pid ${pid})`)
     } catch (e: any) {

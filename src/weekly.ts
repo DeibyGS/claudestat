@@ -6,8 +6,9 @@
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import { getClaudeDir } from './paths'
 
-const STATS_PATH = path.join(os.homedir(), '.claude', 'stats-cache.json')
+const STATS_PATH = path.join(getClaudeDir(), 'stats-cache.json')
 
 export interface WeeklyStats {
   totalTokens: number

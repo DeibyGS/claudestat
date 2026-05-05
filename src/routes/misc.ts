@@ -17,6 +17,7 @@ import { getCachedGitInfo, getCachedPRStatus } from '../cache/projects-cache'
 import { inferProjectCwd }      from './projects'
 import { deriveSessionState }   from '../session-state'
 import { sessionLastEvent }     from './stream'
+import { getClaudeDir, getClaudestatDir, getHomeSlug } from '../paths'
 
 export const miscRouter = Router()
 
@@ -149,14 +150,13 @@ miscRouter.get('/system-config', (_req: Request, res: Response) => {
   }
   try {
     const home = os.homedir()
+    const claudeDir = getClaudeDir()
 
-    // 1. Hooks desde ~/.claude/settings.json
-    // Claude Code almacena hooks en formato anidado: cada entrada tiene un array `hooks` interno.
-    // Aplanamos a { matcher, command } porque el dashboard solo necesita mostrar el comando final.
+    // 1. Hooks desde Claude Code settings.json
     interface RawHookEntry { matcher?: string; hooks: Array<{ type: string; command: string }> }
     let hooks: Record<string, { matcher?: string; command: string }[]> = {}
     try {
-      const raw      = fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf-8')
+      const raw      = fs.readFileSync(path.join(claudeDir, 'settings.json'), 'utf-8')
       const rawHooks = JSON.parse(raw).hooks as Record<string, RawHookEntry[]> ?? {}
       for (const [event, entries] of Object.entries(rawHooks)) {
         hooks[event] = entries.flatMap(e =>
@@ -176,12 +176,10 @@ miscRouter.get('/system-config', (_req: Request, res: Response) => {
         let itemName: string
 
         if (nested) {
-          // Modo anidado: busca nested (ej. SKILL.md) dentro de carpetas/symlinks
           if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
           filePath = path.join(dir, entry.name, nested)
           itemName = entry.name
         } else {
-          // Modo directo: archivos .md
           if (!entry.isFile() || !entry.name.endsWith('.md') || excludes.includes(entry.name)) continue
           filePath = path.join(dir, entry.name)
           itemName = entry.name.replace('.md', '')
@@ -198,21 +196,21 @@ miscRouter.get('/system-config', (_req: Request, res: Response) => {
       return items
     }
 
-    // 2. Agentes desde ~/.claude/agents/ (excluye archivos de sistema — no son agentes invocables)
+    // 2. Agentes desde Claude Code agents/
     let agents: { name: string; description: string; lines: number }[] = []
-    try { agents = scanMarkdownDir(path.join(home, '.claude', 'agents'), ['CLAUDE.md', 'ORCHESTRATOR.md', 'AGENTS.md']) } catch {}
+    try { agents = scanMarkdownDir(path.join(claudeDir, 'agents'), ['CLAUDE.md', 'ORCHESTRATOR.md', 'AGENTS.md']) } catch {}
 
-    // 2b. Workflows desde ~/.claude/agents/workflows/
+    // 2b. Workflows desde Claude Code agents/workflows/
     let workflows: { name: string; description: string; lines: number }[] = []
-    try { workflows = scanMarkdownDir(path.join(home, '.claude', 'agents', 'workflows')) } catch {}
+    try { workflows = scanMarkdownDir(path.join(claudeDir, 'agents', 'workflows')) } catch {}
 
     // 3. Archivos de contexto relevantes
-    const engramSlugCtx  = home.replace(/\//g, '-')
+    const engramSlugCtx  = getHomeSlug()
     const contextPaths = [
-      { key: 'CLAUDE.md global',  filePath: path.join(home, '.claude', 'CLAUDE.md') },
-      { key: 'MEMORY.md',         filePath: path.join(home, '.claude', 'projects', engramSlugCtx, 'memory', 'MEMORY.md') },
-      { key: 'settings.json',     filePath: path.join(home, '.claude', 'settings.json') },
-      { key: 'config claudestat',filePath: path.join(home, '.claudestat', 'config.json') },
+      { key: 'CLAUDE.md global',  filePath: path.join(claudeDir, 'CLAUDE.md') },
+      { key: 'MEMORY.md',         filePath: path.join(claudeDir, 'projects', engramSlugCtx, 'memory', 'MEMORY.md') },
+      { key: 'settings.json',     filePath: path.join(claudeDir, 'settings.json') },
+      { key: 'config claudestat',filePath: path.join(getClaudestatDir(), 'config.json') },
     ]
     const contextFiles = contextPaths.map(({ key, filePath }) => {
       try {
@@ -225,15 +223,15 @@ miscRouter.get('/system-config', (_req: Request, res: Response) => {
       }
     })
 
-    // 3b. Skills: ~/.claude/commands/ (skills nativos de Claude Code) + ~/.claude/skills/ (skills.sh)
+    // 3b. Skills: commands/ (skills nativos de Claude Code) + skills/ (skills.sh)
     let skills: { name: string; description: string; lines: number }[] = []
-    try { skills = scanMarkdownDir(path.join(home, '.claude', 'commands')) } catch {}
-    try { skills = [...skills, ...scanMarkdownDir(path.join(home, '.claude', 'skills'), [], 'SKILL.md')] } catch {}
+    try { skills = scanMarkdownDir(path.join(claudeDir, 'commands')) } catch {}
+    try { skills = [...skills, ...scanMarkdownDir(path.join(claudeDir, 'skills'), [], 'SKILL.md')] } catch {}
 
-    // 4. Archivos de memoria Engram — slug deriva de homedir: /Users/db → -Users-db
+    // 4. Archivos de memoria Engram
     let memoryFiles: string[] = []
     try {
-      const memDir = path.join(home, '.claude', 'projects', engramSlugCtx, 'memory')
+      const memDir = path.join(claudeDir, 'projects', engramSlugCtx, 'memory')
       memoryFiles  = fs.readdirSync(memDir).filter(f => f.endsWith('.md')).sort()
     } catch {}
 

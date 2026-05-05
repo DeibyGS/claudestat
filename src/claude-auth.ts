@@ -69,14 +69,16 @@ function readFromKeychain(): ClaudeAuthInfo | null {
 // ─── Leer desde archivo (Linux / Electron userData) ──────────────────────────
 
 function readFromFile(): ClaudeAuthInfo | null {
+  const homeDir = os.homedir()
   const candidates = [
+    // Windows Credential Manager / Electron userData
+    path.join(process.env.APPDATA ?? path.join(homeDir, 'AppData', 'Roaming'), 'Claude', 'credentials.json'),
+    path.join(process.env.LOCALAPPDATA ?? path.join(homeDir, 'AppData', 'Local'), 'Claude', 'credentials.json'),
     // Linux Electron userData
-    path.join(os.homedir(), '.config', 'Claude', 'credentials.json'),
-    path.join(os.homedir(), '.config', 'Claude', '.credentials.json'),
+    path.join(homeDir, '.config', 'Claude', 'credentials.json'),
+    path.join(homeDir, '.config', 'Claude', '.credentials.json'),
     // macOS Electron userData fallback
-    path.join(os.homedir(), 'Library', 'Application Support', 'Claude', 'credentials.json'),
-    // Windows
-    path.join(process.env.APPDATA ?? '', 'Claude', 'credentials.json'),
+    path.join(homeDir, 'Library', 'Application Support', 'Claude', 'credentials.json'),
   ]
 
   for (const p of candidates) {

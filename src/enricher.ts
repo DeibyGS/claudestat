@@ -20,6 +20,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import chokidar from 'chokidar'
+import { getClaudeDir } from './paths'
 import type { CostUpdate } from './db'
 
 // ─── Tabla de precios (USD por millón de tokens) ──────────────────────────────
@@ -325,7 +326,7 @@ export function getSessionPrompts(sessionId: string): SessionPrompt[] {
 
 // ─── Watcher ─────────────────────────────────────────────────────────────────
 
-const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects')
+const PROJECTS_DIR = path.join(getClaudeDir(), 'projects')
 
 export type CostUpdateCallback    = (sessionId: string, cost: CostUpdate) => void
 export type CompactDetectedCallback = (sessionId: string) => void

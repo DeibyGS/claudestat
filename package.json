@@ -1,6 +1,6 @@
 {
   "name": "@deibygs/claudestat",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "description": "Real-time execution trace and cost intelligence for Claude Code",
   "keywords": [
     "claude",
@@ -38,7 +38,7 @@
     "dev": "tsx src/index.ts",
     "dev:full": "tsx src/index.ts start & sleep 1 && cd dashboard && npm run dev",
     "start": "node dist/index.js",
-    "test": "CLAUDESTAT_DB_PATH=:memory: CLAUDESTAT_DATA_DIR=/tmp ${NVM_BIN:-$(dirname $(which node))}/node --require tsx/cjs tests/index.ts"
+    "test": "node --require tsx/cjs tests/index.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",

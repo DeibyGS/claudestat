@@ -9,6 +9,7 @@
 import fs   from 'fs'
 import path from 'path'
 import os   from 'os'
+import { getClaudeDir, encodeClaudePath } from './paths'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -52,19 +53,19 @@ const history: MetaSnapshot[] = []
  */
 function resolveProjectCwd(storedCwd: string): string {
   const homeDir = os.homedir()
-  const projectsDir = path.join(homeDir, '.claude', 'projects')
+  const projectsDir = path.join(getClaudeDir(), 'projects')
 
-  if (!storedCwd.startsWith(projectsDir + '/')) return storedCwd
+  if (!storedCwd.startsWith(projectsDir + path.sep)) return storedCwd
 
   const encodedPath = storedCwd.slice(projectsDir.length + 1)
-  const encodedHome = homeDir.replace(/\//g, '-')
+  const encodedHome = encodeClaudePath(homeDir)
 
   if (encodedPath.startsWith(encodedHome)) {
     const rest = encodedPath.slice(encodedHome.length)
-    return homeDir + rest.replace(/-/g, '/')
+    return homeDir + rest.replace(/-/g, path.sep)
   }
 
-  return '/' + encodedPath.replace(/-/g, '/')
+  return path.sep + encodedPath.replace(/-/g, path.sep)
 }
 
 function estimateTokens(text: string): number {
@@ -101,10 +102,11 @@ function resolveContextCandidates(
   homeDir: string,
   projectCwd?: string,
 ): { label: string; filePath: string }[] {
+  const claudeDir = getClaudeDir()
   const candidates = [
-    { label: 'CLAUDE.md (global)',         filePath: path.join(homeDir, '.claude', 'CLAUDE.md') },
-    { label: 'settings.json',              filePath: path.join(homeDir, '.claude', 'settings.json') },
-    { label: 'settings.local.json',        filePath: path.join(homeDir, '.claude', 'settings.local.json') },
+    { label: 'CLAUDE.md (global)',         filePath: path.join(claudeDir, 'CLAUDE.md') },
+    { label: 'settings.json',              filePath: path.join(claudeDir, 'settings.json') },
+    { label: 'settings.local.json',        filePath: path.join(claudeDir, 'settings.local.json') },
   ]
 
   if (projectCwd) {

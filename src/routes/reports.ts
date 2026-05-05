@@ -7,6 +7,7 @@ import os   from 'os'
 import { Router, type Request, type Response } from 'express'
 import { dbOps }                               from '../db'
 import { readConfig, type ClaudestatConfig }   from '../config'
+import { getClaudeDir }                        from '../paths'
 
 export const reportsRouter = Router()
 
@@ -82,7 +83,7 @@ reportsRouter.post('/api/weekly-reports/generate-now', (_req: Request, res: Resp
 // ─── POST /api/weekly-reports/import-local — importar .md desde ~/.claude/reports ─
 
 reportsRouter.post('/api/weekly-reports/import-local', (_req: Request, res: Response) => {
-  const reportsDir = path.join(os.homedir(), '.claude', 'reports')
+  const reportsDir = path.join(getClaudeDir(), 'reports')
   if (!fs.existsSync(reportsDir)) {
     res.json({ imported: 0, skipped: 0 })
     return

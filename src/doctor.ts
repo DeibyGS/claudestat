@@ -2,6 +2,7 @@ import fs            from 'fs'
 import path          from 'path'
 import os            from 'os'
 import { execSync }  from 'child_process'
+import { getClaudeDir, getClaudestatDir, whichCmd, whichAllCmd, isWindows } from './paths'
 
 interface Check {
   label: string
@@ -35,8 +36,8 @@ export async function runDoctor(): Promise<void> {
     fix:   claudeOk ? undefined : 'npm install -g @anthropic-ai/claude-code',
   })
 
-  // 3. Hooks wired into ~/.claude/settings.json
-  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json')
+  // 3. Hooks wired into Claude Code settings
+  const settingsPath = path.join(getClaudeDir(), 'settings.json')
   let hooksOk = false
   try {
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
@@ -56,8 +57,8 @@ export async function runDoctor(): Promise<void> {
     fix:   hooksOk ? undefined : 'claudestat install',
   })
 
-  // 4. ~/.claudestat/ data directory
-  const dataDir    = path.join(os.homedir(), '.claudestat')
+  // 4. Data directory
+  const dataDir    = getClaudestatDir()
   const dataDirOk  = fs.existsSync(dataDir)
   checks.push({
     label: '~/.claudestat/ data directory exists',
@@ -87,7 +88,7 @@ export async function runDoctor(): Promise<void> {
   let symlinkNote: string | undefined
   let activeBinary = ''
   try {
-    activeBinary = execSync('which claudestat', { stdio: 'pipe' }).toString().trim()
+    activeBinary = execSync(whichCmd('claudestat'), { stdio: 'pipe' }).toString().trim()
     const realPath = fs.realpathSync(activeBinary)
     symlinkOk = fs.existsSync(realPath)
     if (!symlinkOk) symlinkNote = `Symlink points to missing file: ${realPath}`
@@ -105,7 +106,7 @@ export async function runDoctor(): Promise<void> {
   let duplicatesOk = true
   let duplicatesNote: string | undefined
   try {
-    const allBinaries = execSync('which -a claudestat 2>/dev/null', { stdio: 'pipe' })
+    const allBinaries = execSync(whichAllCmd('claudestat'), { stdio: 'pipe' })
       .toString().trim().split('\n').filter(Boolean)
     if (allBinaries.length > 1) {
       duplicatesOk = false
@@ -117,7 +118,7 @@ export async function runDoctor(): Promise<void> {
     ok:    duplicatesOk,
     note:  duplicatesNote,
     fix:   duplicatesOk ? undefined :
-      'npm uninstall -g @deibygs/claudestat && npm install -g @deibygs/claudestat\n       Then restart your terminal or run: hash -r claudestat',
+      `npm uninstall -g @deibygs/claudestat && npm install -g @deibygs/claudestat\n       Then restart your terminal or run: ${isWindows ? 'refreshenv' : 'hash -r claudestat'}`,
   })
 
   // 9. Active binary version matches installed package
@@ -142,11 +143,11 @@ export async function runDoctor(): Promise<void> {
     ok:    versionOk,
     note:  versionNote,
     fix:   versionOk ? undefined :
-      'hash -r claudestat  (or restart terminal)\n       If persists: npm uninstall -g @deibygs/claudestat && npm install -g @deibygs/claudestat',
+      `${isWindows ? 'refreshenv' : 'hash -r claudestat'}  (or restart terminal)\n       If persists: npm uninstall -g @deibygs/claudestat && npm install -g @deibygs/claudestat`,
   })
 
   // 10. NVM prefix sanity (only when NVM is active)
-  if (process.env.NVM_DIR && activeBinary) {
+  if ((process.env.NVM_DIR || process.env.NVM_HOME) && activeBinary) {
     let nvmOk = true
     let nvmNote: string | undefined
     try {

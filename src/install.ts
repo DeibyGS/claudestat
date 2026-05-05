@@ -11,8 +11,10 @@
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
-const CLAUDESTAT_DIR = path.join(os.homedir(), '.claudestat')
-const CLAUDE_SETTINGS = path.join(os.homedir(), '.claude', 'settings.json')
+import { getClaudeDir, getClaudestatDir, isWindows } from './paths'
+
+const CLAUDESTAT_DIR = getClaudestatDir()
+const CLAUDE_SETTINGS = path.join(getClaudeDir(), 'settings.json')
 const HOOKS_DIR       = path.join(CLAUDESTAT_DIR, 'hooks')
 const HOOK_SCRIPT     = path.join(HOOKS_DIR, 'event.js')
 
@@ -22,7 +24,9 @@ function installHookScript() {
   // El script original está en el paquete junto a este archivo
   const source = path.join(__dirname, '..', 'hooks', 'event.js')
   fs.copyFileSync(source, HOOK_SCRIPT)
-  fs.chmodSync(HOOK_SCRIPT, 0o755)
+  if (!isWindows) {
+    fs.chmodSync(HOOK_SCRIPT, 0o755)
+  }
 
   console.log(`✓ Hook script instalado → ${HOOK_SCRIPT}`)
 }

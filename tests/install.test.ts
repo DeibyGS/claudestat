@@ -71,7 +71,7 @@ describe('already-installed detection', () => {
 // ─── Settings JSON manipulation (install logic) ───────────────────────────────
 
 describe('settings JSON install logic', () => {
-  const HOOK_SCRIPT = '/tmp/claudestat-test-event.js'
+  const HOOK_SCRIPT = path.join(os.tmpdir(), 'claudestat-test-event.js')
   const HOOK_TYPES = ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop']
 
   function simulateInstall(settings: Record<string, any>): { settings: Record<string, any>; added: number } {
@@ -127,7 +127,7 @@ describe('settings JSON install logic', () => {
 // ─── Settings JSON manipulation (uninstall logic) ─────────────────────────────
 
 describe('settings JSON uninstall logic', () => {
-  const HOOK_SCRIPT = '/tmp/claudestat-test-event.js'
+  const HOOK_SCRIPT = path.join(os.tmpdir(), 'claudestat-test-event.js')
   const HOOK_TYPES = ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop']
 
   function simulateUninstall(settings: Record<string, any>): { settings: Record<string, any>; removed: number } {
@@ -184,7 +184,7 @@ describe('settings JSON uninstall logic', () => {
 
 describe('backup file creation', () => {
   test('backup is a copy of original before modification', () => {
-    const tmpFile = `/tmp/claudestat-test-settings-${Date.now()}.json`
+    const tmpFile = path.join(os.tmpdir(), `claudestat-test-settings-${Date.now()}.json`)
     const backupFile = tmpFile + '.bak'
     const original = JSON.stringify({ hooks: {} })
     fs.writeFileSync(tmpFile, original)

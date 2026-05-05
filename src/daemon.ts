@@ -27,6 +27,7 @@ import { miscRouter }                                               from './rout
 import { reportsRouter, getReportDateLabel, generateReport }        from './routes/reports'
 import { getProjectsCached, invalidateProjectsCache }               from './cache/projects-cache'
 import { summarizeSession }                                         from './summarizer'
+import { getPidFile, getClaudestatDir, portCheckCmd }              from './paths'
 
 const PORT = 7337
 const app  = express()
@@ -100,11 +101,12 @@ async function migrateSessionSummaries(limit = 5) {
 
 const PROJECTS_CACHE_TTL = 2 * 60_000  // 2 minutos
 
-const PID_FILE = `${process.env.HOME}/.claudestat/daemon.pid`
+const PID_FILE = getPidFile()
 
 function writePid() {
   try {
-    fs.mkdirSync(`${process.env.HOME}/.claudestat`, { recursive: true })
+    const dir = getClaudestatDir()
+    fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(PID_FILE, String(process.pid))
   } catch {}
 }
@@ -166,7 +168,7 @@ export function startDaemon() {
   server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       console.error(`\n❌ Error: El puerto ${PORT} ya está en uso.`)
-      console.error(`   ¿Claudetrace ya está corriendo? Verifica con: lsof -i :${PORT}`)
+      console.error(`   Is claudestat already running? Check with: ${portCheckCmd(PORT)}`)
       console.error(`   Si es así, no necesitas iniciarlo de nuevo.\n`)
       process.exit(1)
     }

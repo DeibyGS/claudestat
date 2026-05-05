@@ -22,6 +22,7 @@ import fs   from 'fs'
 import path from 'path'
 import os   from 'os'
 import type { ClaudePlan } from './quota-tracker'
+import { getClaudestatDir } from './paths'
 
 export type ReportFrequency = 'weekly' | 'biweekly' | 'monthly'
 
@@ -36,7 +37,7 @@ export interface ClaudestatConfig {
   reportTime:         string           // HH:MM
 }
 
-const CONFIG_PATH = path.join(os.homedir(), '.claudestat', 'config.json')
+const CONFIG_PATH = path.join(getClaudestatDir(), 'config.json')
 
 const DEFAULTS: ClaudestatConfig = {
   killSwitchEnabled:   false,

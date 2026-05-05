@@ -19,6 +19,7 @@ import fs   from 'fs'
 import path from 'path'
 import os   from 'os'
 import { readClaudeAuth, subscriptionTypeToPlan } from './claude-auth'
+import { getClaudeDir } from './paths'
 
 // ─── Planes y límites ─────────────────────────────────────────────────────────
 
@@ -196,7 +197,7 @@ function detectPlan(entries: ParsedEntry[]): ClaudePlan {
 
 // ─── Lector de todos los JSONL ────────────────────────────────────────────────
 
-const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects')
+const PROJECTS_DIR = path.join(getClaudeDir(), 'projects')
 
 function readAllEntries(sinceTs: number): ParsedEntry[] {
   const all: ParsedEntry[] = []

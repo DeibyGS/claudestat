@@ -11,10 +11,10 @@
 
 import { DatabaseSync } from 'node:sqlite'
 import path from 'path'
-import os from 'os'
 import fs from 'fs'
+import { getClaudestatDir } from './paths'
 
-export const CLAUDESTAT_DIR = process.env.CLAUDESTAT_DATA_DIR ?? path.join(os.homedir(), '.claudestat')
+export const CLAUDESTAT_DIR = getClaudestatDir()
 const DB_PATH = process.env.CLAUDESTAT_DB_PATH ?? path.join(CLAUDESTAT_DIR, 'events.db')
 
 fs.mkdirSync(CLAUDESTAT_DIR, { recursive: true })

@@ -5,14 +5,14 @@
 **Real-time execution trace and cost intelligence for Claude Code**
 
 Hook into every tool call, token, and dollar — as it happens.
-Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js. Runs everywhere.
+Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js. Runs on macOS, Linux, and Windows.
 
 [![npm version](https://img.shields.io/npm/v/@deibygs/claudestat?color=blue)](https://www.npmjs.com/package/@deibygs/claudestat)
 [![npm downloads](https://img.shields.io/npm/dw/@deibygs/claudestat?color=blue)](https://www.npmjs.com/package/@deibygs/claudestat)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)]()
-[![Tests](https://img.shields.io/badge/tests-136%2F136-brightgreen)]()
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-152%2F152-brightgreen)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 [Installation](#installation) • [Quick Start](#quick-start) • [Commands](#commands) • [Dashboard](#dashboard) • [Contributing](#contributing)
@@ -52,24 +52,26 @@ Claude Code event
       │
       ▼
   Hook script  (~/.claudestat/hooks/event.js)
-      │  POST JSON to daemon
-      ▼
+       │  POST JSON to daemon
+       ▼
   Daemon  (localhost:7337)
-      │  stores events in SQLite
-      │  enriches with JSONL token data from ~/.claude/projects/
-      │  runs pattern analyzer
-      ▼
+       │  stores events in SQLite
+       │  enriches with JSONL token data
+       │  runs pattern analyzer
+       ▼
   Dashboard  (React + Vite, auto-refreshes)
-      │
-      ▼
+       │
+       ▼
   You see everything — live
 ```
+
+> **Windows paths**: On macOS/Linux, Claude Code data is in `~/.claude/`. On Windows, it's in `%APPDATA%\claude\`. ClaudeStat detects the correct path automatically.
 
 ---
 
 ## Requirements
 
-- **Node.js >= 18** (Node 22 recommended — uses `node:sqlite`)
+- **Node.js >= 22** (required for `node:sqlite`)
 - **Claude Code** installed (`npm install -g @anthropic-ai/claude-code`)
 
 ---
@@ -91,7 +93,7 @@ Then wire up the hooks into Claude Code:
 claudestat install
 ```
 
-This modifies `~/.claude/settings.json` to add `SessionStart`, `PreToolUse`, `PostToolUse`, and `Stop` hooks. A backup is created at `~/.claude/settings.json.bak` before any change.
+This modifies `~/.claude/settings.json` (macOS/Linux) or `%APPDATA%\claude\settings.json` (Windows) to add `SessionStart`, `PreToolUse`, `PostToolUse`, and `Stop` hooks. A backup is created before any change.
 
 > Restart Claude Code after installing so the hooks take effect.
 
@@ -191,7 +193,7 @@ claudestat config --kill-switch true --threshold 95
 claudestat config --plan max5   # pro | max5 | max20 | auto
 ```
 
-Config is stored at `~/.claudestat/config.json`.
+Config is stored at `~/.claudestat/config.json` (macOS/Linux) or `%USERPROFILE%\.claudestat\config.json` (Windows).
 
 ---
 
@@ -273,7 +275,6 @@ Planned for upcoming versions:
 
 - **`claudestat export`** — export session data to CSV or JSON
 - **`claudestat top`** — show top tools by cost and frequency across all sessions
-- **Windows support** — currently macOS and Linux only
 - **Multi-account support** — track usage across multiple Claude accounts
 - **Slack / webhook alerts** — get notified when quota reaches warning thresholds
 - **VS Code extension** — sidebar panel with live stats inside the editor
@@ -285,9 +286,13 @@ Have an idea? [Open an issue](https://github.com/DeibyGS/claudestat/issues) or s
 ## Uninstall
 
 ```bash
-claudestat uninstall        # removes hooks from ~/.claude/settings.json
-npm uninstall -g @deibygs/claudestat
+claudestat uninstall        # removes hooks from Claude Code settings
+
+# macOS / Linux:
 rm -rf ~/.claudestat        # removes DB, config, and PID file
+
+# Windows (PowerShell):
+Remove-Item -Recurse -Force "$env:USERPROFILE\.claudestat"
 ```
 
 ---
@@ -303,7 +308,7 @@ Whether you want to fix a bug, improve a dashboard view, add a new pattern to th
 1. Fork the repository
 2. Create a branch: `git checkout -b feat/your-feature`
 3. Make your changes
-4. Run the test suite: `npm test` (44 tests — pattern analyzer + SQLite integration)
+4. Run the test suite: `npm test` (152 tests)
 5. Open a PR with a clear description of what you changed and why
 
 ### Good first areas

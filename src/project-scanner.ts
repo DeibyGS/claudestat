@@ -8,6 +8,7 @@
 import fs   from 'fs'
 import path from 'path'
 import os   from 'os'
+import { getClaudeDir, encodeClaudePath } from './paths'
 
 export interface HandoffProgress {
   done:     number
@@ -51,7 +52,7 @@ export interface JSONLStats {
  */
 export function decodeProjectDir(encodedName: string): string | null {
   const homeDir     = os.homedir()
-  const encodedHome = homeDir.replace(/\//g, '-')   // "/Users/db" → "-Users-db"
+  const encodedHome = encodeClaudePath(homeDir)
 
   if (!encodedName.startsWith(encodedHome)) return null
 
@@ -70,7 +71,7 @@ export function decodeProjectDir(encodedName: string): string | null {
  * Ejemplo: base="/Users/db/Documents/GitHub", remaining="gmail-ai-agent"
  *   → prueba "gmail" (no existe), "gmail-ai" (no existe), "gmail-ai-agent" (✓)
  */
-function findRealPath(base: string, remaining: string): string | null {
+export function findRealPath(base: string, remaining: string): string | null {
   if (!remaining) return fs.existsSync(base) ? base : null
 
   const parts    = remaining.split('-')
@@ -163,7 +164,7 @@ export function parseHandoffProgress(content: string): HandoffProgress {
 
 // ─── JSONL stats (datos históricos sin daemon) ────────────────────────────────
 
-const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects')
+const PROJECTS_DIR = path.join(getClaudeDir(), 'projects')
 
 // Precios en USD por millón de tokens (misma tabla que enricher.ts)
 const PRICING: Record<string, { input: number; output: number; cacheRead: number; cacheCreate: number }> = {

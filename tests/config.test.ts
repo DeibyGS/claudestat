@@ -10,7 +10,7 @@ import { readConfig, writeConfig, validateConfig, getWarnLevel } from '../src/co
 // and test the exported functions directly — they always hit the real path.
 // For readConfig/writeConfig we test via the actual CLAUDESTAT data dir mechanism.
 
-const TMP_DIR = `/tmp/claudestat-test-config-${Math.random().toString(36).slice(2)}`
+const TMP_DIR = path.join(os.tmpdir(), `claudestat-test-config-${Math.random().toString(36).slice(2)}`)
 const CONFIG_FILE = path.join(os.homedir(), '.claudestat', 'config.json')
 let originalConfig: string | null = null
 

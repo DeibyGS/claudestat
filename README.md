@@ -12,7 +12,7 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-152%2F152-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-153%2F153-brightgreen)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 [Installation](#installation) • [Quick Start](#quick-start) • [Commands](#commands) • [Dashboard](#dashboard) • [Contributing](#contributing)
@@ -308,7 +308,7 @@ Whether you want to fix a bug, improve a dashboard view, add a new pattern to th
 1. Fork the repository
 2. Create a branch: `git checkout -b feat/your-feature`
 3. Make your changes
-4. Run the test suite: `npm test` (152 tests)
+4. Run the test suite: `npm test` (153 tests)
 5. Open a PR with a clear description of what you changed and why
 
 ### Good first areas

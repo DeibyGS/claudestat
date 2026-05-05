@@ -3,6 +3,7 @@ dist/
 *.js.map
 .DS_Store
 HANDOFF.md
+CLAUDE.md
 AGENTS.md
 *.tsbuildinfo
 *.bak

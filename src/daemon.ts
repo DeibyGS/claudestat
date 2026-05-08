@@ -36,6 +36,16 @@ const PORT = 7337
 const app  = express()
 app.use(express.json())
 
+// ─── Shutdown graceful (cross-platform, no depende de SIGTERM) ────────────────
+
+let _server: ReturnType<typeof app.listen> | null = null
+
+app.post('/shutdown', (_req: Request, res: Response) => {
+  res.json({ ok: true })
+  if (_server) shutdown(_server)
+  process.exit(0)
+})
+
 // ─── Montar rutas ─────────────────────────────────────────────────────────────
 
 app.use(eventsRouter)
@@ -134,11 +144,11 @@ function cleanPid() {
 }
 
 export function startDaemon() {
-  const server = app.listen(PORT, '127.0.0.1', () => {
+  _server = app.listen(PORT, '127.0.0.1', () => {
     writePid()
     process.on('exit', cleanPid)
-    process.on('SIGTERM', () => { shutdown(server); process.exit(0) })
-    process.on('SIGINT',  () => { shutdown(server); process.exit(0) })
+    process.on('SIGTERM', () => { shutdown(_server!); process.exit(0) })
+    process.on('SIGINT',  () => { shutdown(_server!); process.exit(0) })
 
     console.log(`\n● claudestat daemon  →  http://localhost:${PORT}`)
     console.log(`  Waiting for Claude Code events...\n`)
@@ -183,7 +193,7 @@ export function startDaemon() {
   })
 
   // Manejo de error de puerto ocupado — fuera del callback para capturar EADDRINUSE
-  server.on('error', (err: NodeJS.ErrnoException) => {
+  _server!.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       console.error(`\n❌ Error: Port ${PORT} is already in use.`)
       console.error(`   Is claudestat already running? Check with: ${portCheckCmd(PORT)}`)

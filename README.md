@@ -25,7 +25,7 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 
 *Live dashboard · terminal trace · quota guard — all running in real time*
 
-![claudestat demo](https://res.cloudinary.com/dgscloudinary/image/upload/v1778226840/My%20portfolio%7D/demoClaudestat_bifbgu.gif)
+![claudestat demo](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/demoClaudestat.gif)
 
 </div>
 

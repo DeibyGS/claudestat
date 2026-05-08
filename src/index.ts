@@ -17,6 +17,7 @@ import fs                       from 'fs'
 import path                     from 'path'
 import { execSync, spawn }      from 'child_process'
 import { startDaemon }                  from './daemon'
+import { startWatchdog }                from './watchdog'
 import { startWatch }                   from './watch'
 import { installHooks, uninstallHooks } from './install'
 import { readConfig, writeConfig }      from './config'
@@ -94,9 +95,11 @@ program
 program
   .command('start')
   .description('Start the background daemon (receives Claude Code hook events)')
-  .action(() => {
+  .option('--watchdog', 'Auto-restart daemon if it crashes')
+  .action((opts) => {
     if (process.env.CLAUDESTAT_DAEMON) {
       startDaemon()
+      if (opts.watchdog) startWatchdog()
     } else {
       spawnDaemon()
       process.exit(0)
@@ -124,23 +127,39 @@ program
 program
   .command('status')
   .description('Show current quota, cost and burn rate')
-  .action(async () => {
+  .option('--json', 'Output raw JSON instead of formatted text')
+  .action(async (opts) => {
     try {
       const [quotaRes, healthRes] = await Promise.all([
         fetch('http://localhost:7337/quota'),
         fetch('http://localhost:7337/health'),
       ])
-      if (!quotaRes.ok) throw new Error('Daemon no disponible')
+      if (!quotaRes.ok) throw new Error('Daemon unavailable')
 
       const q    = await quotaRes.json() as any
       const _h   = await healthRes.json().catch(() => ({})) as any
 
-      // Colores ANSI
+      if (opts.json) {
+        console.log(JSON.stringify({
+          cyclePrompts: q.cyclePrompts,
+          cycleLimit:   q.cycleLimit,
+          cyclePct:     q.cyclePct,
+          cycleResetMs: q.cycleResetMs,
+          plan:         q.detectedPlan,
+          weeklyHoursSonnet: q.weeklyHoursSonnet,
+          weeklyLimitSonnet: q.weeklyLimitSonnet,
+          weeklyHoursOpus:   q.weeklyHoursOpus,
+          weeklyLimitOpus:   q.weeklyLimitOpus,
+          burnRateTokensPerMin: q.burnRateTokensPerMin,
+        }))
+        return
+      }
+
       const R = '\x1b[0m'
-      const pctColor = q.cyclePct >= 95 ? '\x1b[31m'   // rojo
-        : q.cyclePct >= 85 ? '\x1b[33m'                  // naranja
-        : q.cyclePct >= 70 ? '\x1b[33m'                  // amarillo
-        : '\x1b[32m'                                      // verde
+      const pctColor = q.cyclePct >= 95 ? '\x1b[31m'
+        : q.cyclePct >= 85 ? '\x1b[33m'
+        : q.cyclePct >= 70 ? '\x1b[33m'
+        : '\x1b[32m'
 
       const resetMin   = Math.ceil(q.cycleResetMs / 60_000)
       const resetLabel = resetMin >= 60
@@ -229,6 +248,47 @@ program
     await new Promise(r => setTimeout(r, 500))
     spawnDaemon()
     process.exit(0)
+  })
+
+program
+  .command('top')
+  .description('Rank tools by cost, frequency, or duration')
+  .option('--by <metric>',    'Sort by: cost, count, duration (default: cost)')
+  .option('--limit <number>', 'Number of tools to show (default: 10)')
+  .option('--days <number>',  'Look back N days (default: 30)')
+  .action(async (opts) => {
+    try {
+      const by    = opts.by ?? 'cost'
+      const limit = opts.limit ?? 10
+      const days  = opts.days ?? 30
+      const url   = `http://localhost:7337/api/top?by=${by}&limit=${limit}&days=${days}`
+      const res   = await fetch(url)
+      if (!res.ok) throw new Error('Daemon unavailable')
+      const data  = await res.json() as any
+
+      const label = by === 'count' ? 'calls' : by === 'duration' ? 'duration' : 'est. cost'
+      console.log(`\n🏆 claudestat top — by ${label} (last ${days} days)\n`)
+      console.log('  #  Tool              Calls    Duration   Est. Cost      %')
+      console.log('  ── ───────────────── ──────── ───────────── ───────── ────')
+      for (let i = 0; i < data.tools.length; i++) {
+        const t = data.tools[i]
+        const isOther = t.tool === 'Other'
+        const dur = isOther ? '—'
+          : t.totalDurationMs >= 60_000
+          ? `${(t.totalDurationMs / 60_000).toFixed(1)}m`
+          : `${(t.totalDurationMs / 1000).toFixed(0)}s`
+        const cost = t.estimatedCostUsd < 0.01
+          ? `$${t.estimatedCostUsd.toFixed(4)}`
+          : `$${t.estimatedCostUsd.toFixed(2)}`
+        const pct = by === 'cost' ? `${t.pctCost}%` : isOther ? '' : `${t.pctCount}%`
+        const countStr = isOther ? '—' : String(t.count)
+        console.log(`  ${(i + 1).toString().padStart(2)}  ${t.tool.padEnd(18)} ${countStr.padStart(8)} ${dur.padStart(13)} ${cost.padStart(9)} ${pct.padStart(4)}`)
+      }
+      console.log()
+    } catch {
+      console.error('\n❌ Daemon is not running. Start it with: claudestat start\n')
+      process.exit(1)
+    }
   })
 
 program

@@ -25,7 +25,7 @@ export const miscRouter = Router()
 
 miscRouter.get('/git', (req: Request, res: Response) => {
   const projectPath = req.query.path as string | undefined
-  if (!projectPath) { res.status(400).json({ error: 'Falta parámetro path' }); return }
+  if (!projectPath) { res.status(400).json({ error: 'Missing path parameter' }); return }
   res.json(getCachedGitInfo(projectPath) ?? null)
 })
 
@@ -33,7 +33,7 @@ miscRouter.get('/git', (req: Request, res: Response) => {
 
 miscRouter.get('/pr', (req: Request, res: Response) => {
   const projectPath = req.query.path as string | undefined
-  if (!projectPath) { res.status(400).json({ error: 'Falta parámetro path' }); return }
+  if (!projectPath) { res.status(400).json({ error: 'Missing path parameter' }); return }
   res.json(getCachedPRStatus(projectPath) ?? null)
 })
 
@@ -57,7 +57,7 @@ miscRouter.get('/meta-stats', (_req: Request, res: Response) => {
 miscRouter.get('/intelligence/:sessionId', (req: Request, res: Response) => {
   const { sessionId } = req.params
   const session = dbOps.getSession(sessionId)
-  if (!session) { res.status(404).json({ error: 'Sesión no encontrada' }); return }
+  if (!session) { res.status(404).json({ error: 'Session not found' }); return }
 
   const events = dbOps.getSessionEvents(sessionId)
   const report = analyzeSession(events, session.total_cost_usd ?? 0)
@@ -72,7 +72,7 @@ miscRouter.get('/quota', (_req: Request, res: Response) => {
     const data = computeQuota(cfg.plan ?? undefined)
     res.json(data)
   } catch (err) {
-    res.status(500).json({ error: 'Error calculando quota' })
+    res.status(500).json({ error: 'Error computing quota' })
   }
 })
 
@@ -94,7 +94,7 @@ miscRouter.get('/kill-switch', (_req: Request, res: Response) => {
 
     const blocked = cfg.killSwitchEnabled && data.cyclePct >= cfg.killSwitchThreshold
     const reason  = blocked
-      ? `Cuota 5h al ${data.cyclePct}% (límite: ${cfg.killSwitchThreshold}%). Reset en ${formatMs(data.cycleResetMs)}.`
+      ? `5h quota at ${data.cyclePct}% (limit: ${cfg.killSwitchThreshold}%). Resets in ${formatMs(data.cycleResetMs)}.`
       : undefined
 
     res.json({ blocked, reason, cyclePct: data.cyclePct })
@@ -119,10 +119,10 @@ miscRouter.get('/sessions', (_req: Request, res: Response) => {
 
 // ─── GET /prompts — mensajes del usuario para una sesión ─────────────────────
 
-miscRouter.get('/prompts', (req: Request, res: Response) => {
+miscRouter.get('/prompts', async (req: Request, res: Response) => {
   const sessionId = req.query.session_id as string | undefined
   if (!sessionId) return res.status(400).json({ error: 'session_id required' })
-  res.json({ prompts: getSessionPrompts(sessionId) })
+  res.json({ prompts: await getSessionPrompts(sessionId) })
 })
 
 // ─── GET /hidden-cost — coste oculto en loops (últimos 7 días) ───────────────
@@ -267,5 +267,31 @@ miscRouter.put('/config', (req: Request, res: Response) => {
   } catch (e) {
     res.status(500).json({ error: String(e) })
   }
+})
+
+// ─── GET /cost-projection — weekly/monthly cost projection ──────────────────
+
+miscRouter.get('/cost-projection', (_req: Request, res: Response) => {
+  const week = dbOps.getCostProjection(7)
+  const month = dbOps.getCostProjection(30)
+
+  const weekSpan = week.latest && week.earliest ? (week.latest - week.earliest) / 86_400_000 : 0
+  const monthSpan = month.latest && month.earliest ? (month.latest - month.earliest) / 86_400_000 : 0
+
+  const weeklyProjected = weekSpan > 0.5 ? (week.total_cost_usd ?? 0) / weekSpan * 7 : 0
+  const monthlyProjected = monthSpan > 1 ? (month.total_cost_usd ?? 0) / monthSpan * 30 : 0
+
+  res.json({
+    weekly: {
+      daysWithData: Math.round(weekSpan * 10) / 10,
+      costSoFar: week.total_cost_usd ?? 0,
+      projected: Math.round(weeklyProjected * 100) / 100,
+    },
+    monthly: {
+      daysWithData: Math.round(monthSpan * 10) / 10,
+      costSoFar: month.total_cost_usd ?? 0,
+      projected: Math.round(monthlyProjected * 100) / 100,
+    },
+  })
 })
 

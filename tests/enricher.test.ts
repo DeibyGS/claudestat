@@ -174,9 +174,8 @@ describe('JSONL parser — multiple entries aggregation', () => {
 // ─── getAllBlockCostsForSession — no PROJECTS_DIR ─────────────────────────────
 
 describe('getAllBlockCostsForSession', () => {
-  test('returns empty array for unknown session when PROJECTS_DIR missing', () => {
-    // When ~/.claude/projects does not exist or session is unknown, result is []
-    const result = getAllBlockCostsForSession('nonexistent-session-id-00000000')
+  test('returns empty array for unknown session when PROJECTS_DIR missing', async () => {
+    const result = await getAllBlockCostsForSession('nonexistent-session-id-00000000')
     assert.deepEqual(result, [])
   })
 })

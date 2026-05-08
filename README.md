@@ -12,12 +12,12 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-153%2F153-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-202%2F202-brightgreen)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 [Installation](#installation) • [Quick Start](#quick-start) • [Commands](#commands) • [Dashboard](#dashboard) • [Contributing](#contributing)
 
-![ClaudeStat dashboard](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/ClaudeStat.png)
+![ClaudeStat dashboard](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225605/My%20portfolio%7D/ClaudeStat_vnfmup.png)
 
 ---
 
@@ -25,7 +25,7 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 
 *Live dashboard · terminal trace · quota guard — all running in real time*
 
-![claudestat demo](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/demo.gif)
+[▶ Watch demo](https://res.cloudinary.com/dgscloudinary/video/upload/v1778225611/My%20portfolio%7D/demoClaudestat_ezuifx.mov)
 
 </div>
 
@@ -134,6 +134,7 @@ That's it. Start a Claude Code session and watch the events flow in.
 | `claudestat watch` | Live terminal trace view |
 | `claudestat status` | Show quota, cost, and burn rate |
 | `claudestat config` | View or edit configuration |
+| `claudestat top` | Rank tools by cost, call count, or duration |
 | `claudestat doctor` | Check installation health and diagnose issues |
 
 ### `claudestat watch`
@@ -153,6 +154,26 @@ claudestat watch
 
   Context: 42,800 / 200,000 (21%)  │  Session cost: $0.0065  │  🟢 healthy
 ```
+
+### `claudestat top`
+
+Ranks your most-used tools by estimated cost, call count, or duration across all sessions.
+
+```
+claudestat top
+
+  🏆 claudestat top — by est. cost (last 30 days)
+
+  #  Tool              Calls    Duration   Est. Cost      %
+  ── ───────────────── ──────── ───────────── ───────── ────
+   1  Bash              1,240       18.3m     $1.24    38%
+   2  Read                890        4.1m     $0.87    27%
+   3  Edit                430        2.8m     $0.61    19%
+   4  Agent (haiku)       120        9.2m     $0.38    12%
+   5  Write               210        1.1m     $0.12     4%
+```
+
+Options: `--by cost|count|duration` · `--days 7|30|90` · `--limit N`
 
 ### `claudestat status`
 
@@ -205,22 +226,22 @@ Config is stored at `~/.claudestat/config.json` (macOS/Linux) or `%USERPROFILE%\
 
 ## Dashboard
 
-The dashboard lives at `http://localhost:7337` and has five tabs:
+The dashboard lives at `http://localhost:7337` and has six tabs:
 
 ### Live
 Real-time stream of every tool call in the active session. Shows tool name, duration, and token cost. Agent sub-calls expand into nested traces; Skill invocations collapse into labeled containers.
 
-![Live tab](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/live.png)
+![Live tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225605/My%20portfolio%7D/live_oeucqs.png)
 
 ### History
 All past sessions sorted by date. Each card shows total tokens (input + cache read + output), USD cost, efficiency score, and detected loops. Click any session to open its full tool trace, DAG view, and a compare panel.
 
-![History tab](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/history.png)
+![History tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225605/My%20portfolio%7D/history_gy4tpb.png)
 
 ### Projects
 Grid of every project you've worked on. Shows last active date, total sessions, cost, model usage breakdown (Sonnet / Haiku), and an efficiency progress bar.
 
-![Projects tab](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/projects.png)
+![Projects tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225606/My%20portfolio%7D/projects_yeftby.png)
 
 ### Analytics
 - 6 KPIs: total cost, tokens, cache savings, hidden loop waste, avg efficiency, session count
@@ -228,14 +249,19 @@ Grid of every project you've worked on. Shows last active date, total sessions, 
 - Hours by project
 - AI-generated weekly reports (auto-scheduled or on demand)
 
-![Analytics KPIs](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/analitycsOne.png)
+![Analytics KPIs](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225605/My%20portfolio%7D/analitycsOne_yx9tcp.png)
 
-![Analytics charts](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/analitycsTwo.png)
+![Analytics charts](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225604/My%20portfolio%7D/analitycsTwo_wzjsf2.png)
+
+### Top
+Tool rankings across all your sessions. Sortable by estimated cost, call count, or duration — with a time filter (7 / 30 / 90 days). Also shows projected weekly and monthly spend based on your recent burn rate.
+
+![Top tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225606/My%20portfolio%7D/top_pybyxy.png)
 
 ### System
 Daemon health, DB size, Node version, config file paths, and memory context.
 
-![System tab](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/system.png)
+![System tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225606/My%20portfolio%7D/system_ixurjb.png)
 
 ---
 
@@ -280,7 +306,6 @@ claudestat config --plan max5
 Planned for upcoming versions:
 
 - **`claudestat export`** — export session data to CSV or JSON
-- **`claudestat top`** — show top tools by cost and frequency across all sessions
 - **Multi-account support** — track usage across multiple Claude accounts
 - **Slack / webhook alerts** — get notified when quota reaches warning thresholds
 - **VS Code extension** — sidebar panel with live stats inside the editor
@@ -314,14 +339,14 @@ Whether you want to fix a bug, improve a dashboard view, add a new pattern to th
 1. Fork the repository
 2. Create a branch: `git checkout -b feat/your-feature`
 3. Make your changes
-4. Run the test suite: `npm test` (153 tests)
+4. Run the test suite: `npm test` (202 tests)
 5. Open a PR with a clear description of what you changed and why
 
 ### Good first areas
 
 - **Pattern analyzer** (`src/pattern-analyzer.ts`) — add new usage patterns or improve thresholds
 - **Dashboard components** (`dashboard/src/components/`) — UI improvements, new charts, accessibility
-- **New commands** — ideas like `claudestat export`, `claudestat compare`, `claudestat top`
+- **New commands** — ideas like `claudestat export`, `claudestat compare`
 - **Bug reports** — open an issue with steps to reproduce and your Node/OS version
 
 ### Running locally

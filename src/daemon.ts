@@ -33,6 +33,16 @@ const PORT = 7337
 const app  = express()
 app.use(express.json())
 
+// ─── Shutdown graceful (cross-platform, no depende de SIGTERM) ────────────────
+
+let _server: ReturnType<typeof app.listen> | null = null
+
+app.post('/shutdown', (_req: Request, res: Response) => {
+  res.json({ ok: true })
+  _server?.close()
+  process.exit(0)
+})
+
 // ─── Montar rutas ─────────────────────────────────────────────────────────────
 
 app.use(eventsRouter)
@@ -116,7 +126,7 @@ function cleanPid() {
 }
 
 export function startDaemon() {
-  const server = app.listen(PORT, '127.0.0.1', () => {
+  _server = app.listen(PORT, '127.0.0.1', () => {
     writePid()
     process.on('exit', cleanPid)
     process.on('SIGTERM', () => { cleanPid(); process.exit(0) })
@@ -165,7 +175,7 @@ export function startDaemon() {
   })
 
   // Manejo de error de puerto ocupado — fuera del callback para capturar EADDRINUSE
-  server.on('error', (err: NodeJS.ErrnoException) => {
+  _server!.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       console.error(`\n❌ Error: El puerto ${PORT} ya está en uso.`)
       console.error(`   Is claudestat already running? Check with: ${portCheckCmd(PORT)}`)

@@ -12,10 +12,10 @@ process.on('warning', (w) => {
   process.stderr.write(`${w.name}: ${w.message}\n`)
 })
 
-import { Command }   from 'commander'
-import fs            from 'fs'
-import path          from 'path'
-import { execSync }  from 'child_process'
+import { Command }              from 'commander'
+import fs                       from 'fs'
+import path                     from 'path'
+import { execSync, spawn }      from 'child_process'
 import { startDaemon }                  from './daemon'
 import { startWatch }                   from './watch'
 import { installHooks, uninstallHooks } from './install'
@@ -27,6 +27,47 @@ import { getPidFile, whichCmd, isWindows } from './paths'
 const program  = new Command()
 const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version
 const PID_FILE = getPidFile()
+
+function spawnDaemon() {
+  const child = spawn(process.execPath, process.argv.slice(1), {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env, CLAUDESTAT_DAEMON: '1' },
+  })
+  child.unref()
+  console.log(`✅ claudestat daemon started (pid ${child.pid})`)
+  console.log(`   Dashboard → http://localhost:7337`)
+}
+
+function removePidFile() {
+  try { fs.unlinkSync(PID_FILE) } catch {}
+}
+
+async function stopDaemon(): Promise<void> {
+  try {
+    const res = await fetch('http://localhost:7337/shutdown', {
+      method: 'POST',
+      signal: AbortSignal.timeout(2000),
+    })
+    if (res.ok) {
+      console.log('✅ claudestat daemon stopped')
+      removePidFile()
+      return
+    }
+  } catch {}
+
+  try {
+    const pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10)
+    process.kill(pid, 'SIGTERM')
+    console.log(`✅ claudestat daemon stopped (pid ${pid})`)
+    removePidFile()
+  } catch (e: any) {
+    removePidFile()
+    if (e.code === 'ENOENT') throw new Error('Daemon is not running (no PID file found)')
+    if (e.code === 'ESRCH') throw new Error('Daemon process not found — stale PID file removed')
+    throw new Error(`Error stopping daemon: ${e.message}`)
+  }
+}
 
 // Warn if the active binary is outside the current npm global prefix (NVM conflict)
 if (process.env.NVM_DIR || process.env.NVM_HOME) {
@@ -53,7 +94,14 @@ program
 program
   .command('start')
   .description('Start the background daemon (receives Claude Code hook events)')
-  .action(startDaemon)
+  .action(() => {
+    if (process.env.CLAUDESTAT_DAEMON) {
+      startDaemon()
+    } else {
+      spawnDaemon()
+      process.exit(0)
+    }
+  })
 
 program
   .command('watch')
@@ -103,6 +151,10 @@ program
         ? ` │ 🔥 ${q.burnRateTokensPerMin.toLocaleString()} tok/min`
         : ''
 
+      const burnRow = q.burnRateTokensPerMin > 0
+        ? `  Burn rate   ${q.burnRateTokensPerMin.toLocaleString()} tok/min\n`
+        : ''
+
       console.log(
         `\n📊 claudestat status\n` +
         `──────────────────────────────────────────\n` +
@@ -112,7 +164,7 @@ program
         (q.weeklyLimitOpus > 0
           ? `  Opus        ${q.weeklyHoursOpus}h / ${q.weeklyLimitOpus}h  this week\n`
           : '') +
-        `${burnLabel ? `  Burn rate  ${q.burnRateTokensPerMin.toLocaleString()} tok/min\n` : ''}` +
+        `${burnRow}` +
         `──────────────────────────────────────────\n`
       )
     } catch {
@@ -165,35 +217,18 @@ program
 program
   .command('stop')
   .description('Stop the claudestat daemon')
-  .action(() => {
-    try {
-      const pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10)
-      // On Windows, SIGTERM is ungraceful — equivalent to SIGKILL
-      // We still use it but the daemon handles cleanup via process.on('exit')
-      process.kill(pid, 'SIGTERM')
-      console.log(`✅ claudestat daemon stopped (pid ${pid})`)
-    } catch (e: any) {
-      if (e.code === 'ENOENT') console.error('❌ Daemon is not running (no PID file found)')
-      else if (e.code === 'ESRCH') console.error('❌ Daemon process not found — stale PID file removed')
-      else console.error('❌ Error stopping daemon:', e.message)
-      try { fs.unlinkSync(PID_FILE) } catch {}
-      process.exit(1)
-    }
+  .action(async () => {
+    await stopDaemon().catch((e: Error) => { console.error(`❌ ${e.message}`); process.exit(1) })
   })
 
 program
   .command('restart')
   .description('Restart the claudestat daemon')
   .action(async () => {
-    try {
-      const pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10)
-      process.kill(pid, 'SIGTERM')
-      console.log(`  Stopped pid ${pid}, restarting…`)
-      await new Promise(r => setTimeout(r, 800))
-    } catch {
-      console.log('  Daemon was not running, starting fresh…')
-    }
-    startDaemon()
+    await stopDaemon().catch(() => { console.log('  Daemon was not running, starting fresh…') })
+    await new Promise(r => setTimeout(r, 500))
+    spawnDaemon()
+    process.exit(0)
   })
 
 program

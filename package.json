@@ -1,17 +1,33 @@
 {
-  "name": "@deibygs/claudestat",
-  "version": "1.0.0",
-  "description": "Real-time execution trace and cost intelligence for Claude Code",
+  "name": "@statforge/claudestat",
+  "version": "1.0.1",
+  "description": "Observability layer for Claude Code — live token tracking, cost analytics, quota guard, loop detection, and usage dashboard. The htop for Claude Code.",
   "keywords": [
-    "claude",
     "claude-code",
+    "claude",
     "anthropic",
-    "ai",
+    "claude-monitoring",
+    "token-tracker",
+    "cost-tracker",
+    "ai-observability",
+    "claude-dashboard",
+    "quota-guard",
+    "rate-limit",
+    "ai-agent",
+    "llm-cost",
+    "token-usage",
+    "claude-hooks",
+    "ai-productivity",
+    "terminal-dashboard",
+    "developer-tools",
     "cli",
     "monitoring",
-    "cost",
-    "token",
-    "dashboard"
+    "analytics",
+    "claude-pro",
+    "claude-max",
+    "ai-coding",
+    "agentic-workflow",
+    "observability"
   ],
   "homepage": "https://github.com/DeibyGS/claudestat#readme",
   "repository": {
@@ -22,6 +38,10 @@
     "url": "https://github.com/DeibyGS/claudestat/issues"
   },
   "license": "MIT",
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/DeibyGS"
+  },
   "files": [
     "dist/",
     "hooks/",

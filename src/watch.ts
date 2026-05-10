@@ -61,8 +61,23 @@ export async function startWatch() {
 
   let state: RenderState = {
     sessionId: '', cwd: '', startedAt: Date.now(), events: [],
-    weekly: readWeeklyStats()
+    weekly: readWeeklyStats(),
+    cyclePct: 0
   }
+
+  // Fetch quota para cyclePct cada 30 segundos
+  async function fetchQuota(): Promise<number> {
+    try {
+      const res = await fetch('http://localhost:7337/quota')
+      if (res.ok) {
+        const q = await res.json()
+        return q.cyclePct
+      }
+    } catch {}
+    return 0
+  }
+  fetchQuota().then(pct => { state.cyclePct = pct })
+  setInterval(async () => { state.cyclePct = await fetchQuota() }, 30_000)
 
   // Refrescar stats semanales cada 5 minutos
   setInterval(() => { state.weekly = readWeeklyStats() }, 5 * 60 * 1000)
@@ -78,17 +93,19 @@ export async function startWatch() {
           sessionId:  msg.session.id,
           cwd:        msg.session.cwd || '',
           startedAt:  msg.session.started_at,
-          events:     (msg.events || []) as TraceEvent[],
-          cost:       buildCostFromSession(msg.session)
+          events:     Array.isArray(msg.events) ? msg.events : [],
+          cost:       buildCostFromSession(msg.session),
+          cyclePct:   state.cyclePct  // preservar de inicial o anterior
         }
       }
 
     } else if (msg.type === 'event') {
+      if (!msg.payload?.session_id) return
       const evt = msg.payload as TraceEvent & { session_id: string }
 
       // Nueva sesión → resetear estado
       if (evt.session_id && evt.session_id !== state.sessionId && state.sessionId !== '') {
-        state = { sessionId: evt.session_id, cwd: evt.cwd || '', startedAt: evt.ts, events: [] }
+        state = { sessionId: evt.session_id, cwd: evt.cwd || '', startedAt: evt.ts, events: [], cyclePct: state.cyclePct }
       } else if (!state.sessionId && evt.session_id) {
         state.sessionId = evt.session_id
         state.cwd       = evt.cwd || ''
@@ -97,7 +114,7 @@ export async function startWatch() {
 
       if (evt.type === 'Done' && evt.tool_name) {
         // Actualizar el PreToolUse pendiente a Done
-        const pending = [...state.events].reverse()
+        const pending = [...(state.events ?? [])].reverse()
           .find(e => e.type === 'PreToolUse' && e.tool_name === evt.tool_name)
         if (pending) { pending.type = 'Done'; pending.duration_ms = evt.ts - pending.ts }
       } else {
@@ -129,9 +146,15 @@ export async function startWatch() {
   clearScreen()
   process.stdout.write('\x1b[36m● claudestat watch\x1b[0m — connecting...\n')
 
+  // Fetch quota antes del primer render para evitar 0%
+  const initialCyclePct = await fetchQuota()
+
   while (true) {
-    try { await connectSSE(handleMessage) }
-    catch {
+    try {
+      // Inicializar state con cyclePct obtenido
+      state.cyclePct = initialCyclePct
+      await connectSSE(handleMessage)
+    } catch {
       clearScreen()
       console.log('\x1b[33m⚠ Connection lost. Reconnecting in 2s...\x1b[0m')
       await new Promise(r => setTimeout(r, 2000))

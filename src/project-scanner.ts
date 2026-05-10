@@ -9,6 +9,7 @@ import fs   from 'fs'
 import path from 'path'
 import os   from 'os'
 import { getClaudeDir, encodeClaudePath } from './paths'
+import { calcCost, PRICING, DEFAULT_PRICING } from './pricing'
 
 export interface HandoffProgress {
   done:     number
@@ -166,26 +167,6 @@ export function parseHandoffProgress(content: string): HandoffProgress {
 // ─── JSONL stats (datos históricos sin daemon) ────────────────────────────────
 
 const PROJECTS_DIR = path.join(getClaudeDir(), 'projects')
-
-// Precios en USD por millón de tokens (misma tabla que enricher.ts)
-const PRICING: Record<string, { input: number; output: number; cacheRead: number; cacheCreate: number }> = {
-  'claude-opus-4-6':           { input: 15,   output: 75,  cacheRead: 1.50, cacheCreate: 18.75 },
-  'claude-sonnet-4-6':         { input: 3,    output: 15,  cacheRead: 0.30, cacheCreate: 3.75  },
-  'claude-haiku-4-5':          { input: 0.80, output: 4,   cacheRead: 0.08, cacheCreate: 1.00  },
-  'claude-haiku-4-5-20251001': { input: 0.80, output: 4,   cacheRead: 0.08, cacheCreate: 1.00  },
-}
-const DEFAULT_PRICING = PRICING['claude-sonnet-4-6']
-
-function calcCost(model: string, usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }): number {
-  const p = PRICING[model] ?? DEFAULT_PRICING
-  const M = 1_000_000
-  return (
-    (usage.input_tokens                  * p.input)       / M +
-    (usage.output_tokens                 * p.output)      / M +
-    (usage.cache_read_input_tokens       * p.cacheRead)   / M +
-    (usage.cache_creation_input_tokens   * p.cacheCreate) / M
-  )
-}
 
 /**
  * Lee todos los JSONL del directorio codificado de un proyecto y acumula

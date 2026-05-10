@@ -24,6 +24,8 @@ import { runExport } from './export'
 import { readConfig, writeConfig }      from './config'
 import type { ClaudestatConfig }        from './config'
 import { runDoctor }                    from './doctor'
+import { runShare }                   from './share'
+import { runRoast }                  from './roast'
 import { getPidFile, whichCmd, isWindows } from './paths'
 
 const program  = new Command()
@@ -146,6 +148,7 @@ program
   .command('status')
   .description('Show current quota, cost and burn rate')
   .option('--json', 'Output raw JSON instead of formatted text')
+  .option('--compact', 'One-line output for tmux')
   .action(async (opts) => {
     try {
       const [quotaRes, healthRes] = await Promise.all([
@@ -156,6 +159,14 @@ program
 
       const q    = await quotaRes.json() as any
       const _h   = await healthRes.json().catch(() => ({})) as any
+
+      if (opts.compact) {
+        const pctCycle = q.cyclePct
+        const cycleEmoji = pctCycle >= 95 ? '🔴' : pctCycle >= 70 ? '🟡' : '🟢'
+        
+        console.log(`Current ${pctCycle}%${cycleEmoji} ${q.detectedPlan}`)
+        process.exit(0)
+      }
 
       if (opts.json) {
         console.log(JSON.stringify({
@@ -170,7 +181,7 @@ program
           weeklyLimitOpus:   q.weeklyLimitOpus,
           burnRateTokensPerMin: q.burnRateTokensPerMin,
         }))
-        return
+        process.exit(0)
       }
 
       const R = '\x1b[0m'
@@ -327,5 +338,38 @@ program
     console.error('\n❌ Error:', err.message)
     process.exit(1)
   }))
+
+program
+  .command('share [session-id]')
+  .description('Generate a shareable session card (ASCII or JSON)')
+  .option('--format <type>', 'Output format: ascii, json (default: ascii)')
+  .option('--copy', 'Copy to clipboard (macOS only)')
+  .action(async (sessionId: string | undefined, opts) => {
+    try {
+      const format = (opts.format ?? 'ascii') as 'ascii' | 'json'
+      const copy = !!opts.copy
+      await runShare({ sessionId, format, copy })
+      process.exit(0)
+    } catch (err: any) {
+      console.error('\n❌ Error:', err.message)
+      process.exit(1)
+    }
+  })
+
+program
+  .command('roast')
+  .description('Roast your Claude Code usage habits')
+  .option('--stats', 'Show raw stats only, no roast')
+  .option('--months <n>', 'Look back N months (default: 1)', String, '1')
+  .action(async (opts) => {
+    try {
+      const months = parseInt(opts.months || '1', 10)
+      await runRoast({ stats: !!opts.stats, months })
+      process.exit(0)
+    } catch (err: any) {
+      console.error('\n❌ Error:', err.message)
+      process.exit(1)
+    }
+  })
 
 program.parse()

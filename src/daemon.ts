@@ -87,7 +87,7 @@ function migrateSessionProjects() {
   const sessions = dbOps.getAllSessions()
   let tagged = 0
   for (const session of sessions) {
-    if ((session as any).project_path) continue
+    if (session?.project_path) continue
     const events = dbOps.getSessionEvents(session.id)
     const projectCwd = inferProjectCwd(events)
     if (projectCwd) {
@@ -95,7 +95,7 @@ function migrateSessionProjects() {
       tagged++
     }
   }
-    if (tagged > 0) console.log(`[daemon] ${tagged} sessions tagged with project`)
+  if (tagged > 0) console.log(`[daemon] ${tagged} sessions tagged with project`)
 }
 
 /**
@@ -104,7 +104,7 @@ function migrateSessionProjects() {
  */
 async function migrateSessionSummaries(limit = 5) {
   const sessions = dbOps.getAllSessions()
-    .filter(s => !(s as any).ai_summary)
+    .filter(s => !s?.ai_summary)
     .slice(0, limit)
 
   for (const s of sessions) {
@@ -202,8 +202,8 @@ export function startDaemon() {
   _server = app.listen(PORT, '127.0.0.1', () => {
     writePid()
     process.on('exit', cleanPid)
-    process.on('SIGTERM', () => { shutdown(_server!); process.exit(0) })
-    process.on('SIGINT',  () => { shutdown(_server!); process.exit(0) })
+    process.on('SIGTERM', () => { if (_server) shutdown(_server); process.exit(0) })
+    process.on('SIGINT',  () => { if (_server) shutdown(_server); process.exit(0) })
 
     console.log(`\n● claudestat daemon  →  http://localhost:${PORT}`)
     console.log(`  Waiting for Claude Code events...\n`)

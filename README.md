@@ -12,7 +12,7 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-208%2F208-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-214%2F214-brightgreen)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 [Installation](#installation) • [Quick Start](#quick-start) • [Commands](#commands) • [Dashboard](#dashboard) • [Contributing](#contributing)
@@ -137,9 +137,12 @@ That's it. Start a Claude Code session and watch the events flow in.
 | `claudestat uninstall` | Remove hooks from Claude Code |
 | `claudestat watch` | Live terminal trace view |
 | `claudestat status` | Show quota, cost, and burn rate |
+| `claudestat status --compact` | One-line output for tmux status bar |
 | `claudestat config` | View or edit configuration |
 | `claudestat top` | Rank tools by cost, call count, or duration |
 | `claudestat export [format]` | Export session data to JSON or CSV |
+| `claudestat share [session-id]` | Generate shareable session card (ASCII/JSON) |
+| `claudestat roast` | Sarcastic usage analysis with roast jokes |
 | `claudestat doctor` | Check installation health and diagnose issues |
 
 ### `claudestat watch`
@@ -189,6 +192,68 @@ claudestat status
   Plan        MAX5
   Sonnet      3.2h / 5h  this week
   Burn rate   1,240 tok/min
+```
+
+### `claudestat status --compact`
+
+One-line output for tmux status bar or scripting. Shows the 5h cycle quota percentage.
+
+```bash
+claudestat status --compact
+Current 45%🟡 pro
+```
+
+### `claudestat share`
+
+Generate a shareable session card — perfect for sharing on social media or in bug reports.
+
+```bash
+claudestat share
+╔═══════════════════════════════════╗
+║     Session Report · claudestat   ║
+╠═══════════════════════════════════╣
+║  Project     my-project          ║
+║  Duration   2h 14m               ║
+║  Tools      847 calls            ║
+║  Cost       $0.84                ║
+║  Cache hit  27% saved ($0.31)    ║
+║  Top tool  Bash (38%)            ║
+║  Efficiency 91 / 100             ║
+╚═══════════════════════════════════╝
+  github.com/DeibyGS/claudestat
+```
+
+Options:
+- `--format ascii|json` — output format (default: ascii)
+- `--copy` — copy to clipboard automatically (macOS only)
+
+### `claudestat roast`
+
+Get a sarcastic analysis of your Claude Code usage — humor with insights.
+
+```bash
+claudestat roast
+
+=== Claude Code Stats (last 30 days) ===
+Sessions: 47
+Total cost: $12.40
+Bash calls: 1,240
+Loops: 8
+Efficiency: 72/100
+
+🔥 Your Claude Code Roast
+
+  You called Bash 1,240 times last month.
+  That's once every 2.3 minutes.
+  Are you okay?
+
+  You hit 90%+ context in 12 sessions.
+  Claude was writing with amnesia half the time.
+
+  You spent $4.20 on loops you never noticed.
+  That's 14 coffees. Just saying.
+
+  Efficiency: 72/100 — room for growth, champ.
 ```
 
 ### `claudestat doctor`

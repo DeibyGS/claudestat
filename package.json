@@ -1,6 +1,6 @@
 {
   "name": "@statforge/claudestat",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Observability layer for Claude Code — live token tracking, cost analytics, quota guard, loop detection, and usage dashboard. The htop for Claude Code.",
   "keywords": [
     "claude-code",
@@ -58,7 +58,7 @@
     "dev": "tsx src/index.ts",
     "dev:full": "tsx src/index.ts start & sleep 1 && cd dashboard && npm run dev",
     "start": "node dist/index.js",
-    "test": "node --require tsx/cjs tests/index.ts"
+    "test": "bash run-tests.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",

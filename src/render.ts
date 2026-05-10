@@ -65,6 +65,7 @@ export interface RenderState {
   events: TraceEvent[]
   cost?: CostInfo
   weekly?: WeeklyStats
+  cyclePct?: number
 }
 
 // ─── Helpers de formato ───────────────────────────────────────────────────────
@@ -194,10 +195,10 @@ export function renderTrace(state: RenderState): string {
     lines.push(
       `  ${C.dim}auto-compact en:${C.reset} ${bar}  ` +
       `${barColor}${remaining}% restante${C.reset}  ` +
-      `${C.dim}${fmtTok(cost.context_used)} / ${fmtTok(cost.context_window)} tokens usados${C.reset}`
+      `${C.dim}${fmtTok(cost.context_used)} / ${fmtTok(cost.context_window)} tokens used${C.reset}`
     )
   } else {
-    lines.push(`  ${C.dim}contexto: calculando...${C.reset}`)
+    lines.push(`  ${C.dim}context: calculating...${C.reset}`)
   }
 
   lines.push(C.dim + '─'.repeat(72) + C.reset)
@@ -275,6 +276,11 @@ export function renderTrace(state: RenderState): string {
     const scoreColor = score >= 90 ? C.green : score >= 70 ? C.yellow : C.red
     const scoreBar   = progressBar(score, 14, scoreColor)
 
+    // Barra de current cycle (5h quota)
+    const cyclePct    = state.cyclePct ?? 0
+    const pctColor   = cyclePct >= 90 ? C.red : cyclePct >= 70 ? C.yellow : C.green
+    const pctBar     = progressBar(cyclePct, 7, pctColor)
+
     // Tokens
     const tokenLine =
       `${C.dim}↑${C.reset}${fmtTok(cost.input_tokens)} ` +
@@ -284,17 +290,18 @@ export function renderTrace(state: RenderState): string {
     lines.push(
       `  ${C.bold}💰 $${cost.cost_usd.toFixed(4)}${C.reset}   ` +
       `${tokenLine}   ` +
-      `eficiencia: ${scoreBar} ${scoreColor}${score}/100${C.reset}`
+      `current: ${pctBar} ${pctColor}${cyclePct}%  |  efficiency: ${scoreBar} ${scoreColor}${score}/100${C.reset}`
     )
   } else {
     const totalDone = events.filter(e => e.type === 'Done').length
     const elapsed   = fmtMs((events.at(-1)?.ts ?? startedAt) - startedAt)
+    const cyclePct  = state.cyclePct ?? 0
     lines.push(
-      `  ${C.dim}⏱ ${elapsed}  ✅ ${totalDone} tools  💰 calculando...${C.reset}`
+      `  ${C.dim}⏱ ${elapsed}  ✅ ${totalDone} tools  💰 calculating... current: ${cyclePct}%${C.reset}`
     )
   }
 
-  // ── Barra semanal (stats-cache.json) ──────────────────────────────────────
+  // ── Weekly bar (stats-cache.json) ──────────────────────────────────────
   if (state.weekly && state.weekly.totalTokens > 0) {
     const { totalTokens, byDay, lastUpdated } = state.weekly
     // Mini sparkline: un char por día de la semana
@@ -304,9 +311,9 @@ export function renderTrace(state: RenderState): string {
     const padded  = spark.padStart(7, '▁')   // garantizar 7 chars (1 por día)
 
     lines.push(
-      `  ${C.dim}semanal:${C.reset}  ${C.cyan}${padded}${C.reset}  ` +
+      `  ${C.dim}weekly:${C.reset}  ${C.cyan}${padded}${C.reset}  ` +
       `${C.bold}${fmtTok(totalTokens)} tokens${C.reset}  ` +
-      `${C.dim}(últimos 7 días${lastUpdated ? ' · datos al ' + lastUpdated : ''})${C.reset}`
+      `${C.dim}(last 7 days${lastUpdated ? ' · data from ' + lastUpdated : ''})${C.reset}`
     )
   }
 

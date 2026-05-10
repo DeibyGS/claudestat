@@ -115,6 +115,15 @@ reportsRouter.get('/api/weekly-reports/:date', (req: Request, res: Response) => 
   res.json(report)
 })
 
+// ─── DELETE /api/weekly-reports/:date — eliminar un reporte ──────────────────
+
+reportsRouter.delete('/api/weekly-reports/:date', (req: Request, res: Response) => {
+  const report = dbOps.getWeeklyReportByDate(req.params.date)
+  if (!report) { res.status(404).json({ error: 'not found' }); return }
+  dbOps.deleteWeeklyReport(req.params.date)
+  res.json({ ok: true })
+})
+
 // ─── GET /api/quota-stats — P90 de tokens y coste (últimos 30 días) ──────────
 
 reportsRouter.get('/api/quota-stats', (_req: Request, res: Response) => {

@@ -269,6 +269,10 @@ const stmts = {
     SELECT id, date, report_markdown, created_at FROM weekly_reports WHERE date = ?
   `),
 
+  deleteWeeklyReport: db.prepare(`
+    DELETE FROM weekly_reports WHERE date = ?
+  `),
+
   // Coste oculto: dinero estimado perdido en loops en los últimos N días
   // Fórmula: cost × (loops / done_count)  — fracción de tool calls que fueron desperdicio
   // Ejemplo: 5 loops / 88 tools × $6.49 = $0.37  (mucho más realista que usar efficiency_score)
@@ -585,6 +589,10 @@ export const dbOps = {
 
   insertWeeklyReport(date: string, markdown: string) {
     stmts.insertWeeklyReport.run(date, markdown)
+  },
+
+  deleteWeeklyReport(date: string) {
+    stmts.deleteWeeklyReport.run(date)
   },
 
   listWeeklyReports(): { id: number; date: string; preview: string; created_at: string }[] {

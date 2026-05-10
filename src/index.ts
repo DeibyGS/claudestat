@@ -19,7 +19,8 @@ import { execSync, spawn }      from 'child_process'
 import { startDaemon }                  from './daemon'
 import { startWatchdog }                from './watchdog'
 import { startWatch }                   from './watch'
-import { installHooks, uninstallHooks } from './install'
+import { runInstall, uninstallHooks } from './install'
+import { runExport } from './export'
 import { readConfig, writeConfig }      from './config'
 import type { ClaudestatConfig }        from './config'
 import { runDoctor }                    from './doctor'
@@ -30,7 +31,7 @@ const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'packa
 const PID_FILE = getPidFile()
 
 function spawnDaemon() {
-  const child = spawn(process.execPath, process.argv.slice(1), {
+  const child = spawn(process.execPath, [process.argv[1], 'start'], {
     detached: true,
     stdio: 'ignore',
     env: { ...process.env, CLAUDESTAT_DAEMON: '1' },
@@ -117,12 +118,29 @@ program
 program
   .command('install')
   .description('Install hooks into Claude Code settings')
-  .action(installHooks)
+  .action(runInstall)
 
 program
   .command('uninstall')
   .description('Remove hooks from Claude Code')
   .action(uninstallHooks)
+
+program
+  .command('export [format]')
+  .description('Export session data (json | csv, default: json). Max 500 sessions.')
+  .option('--from <date>', 'Start date YYYY-MM-DD (inclusive)')
+  .option('--to <date>',   'End date YYYY-MM-DD (inclusive)')
+  .option('--project <name>', 'Filter by project path (case-insensitive substring)')
+  .option('--output <path>',  'Write to file instead of stdout')
+  .action((format: string | undefined, opts) => {
+    const fmt = (format ?? 'json').toLowerCase()
+    if (fmt !== 'json' && fmt !== 'csv') {
+      console.error('Error: format must be "json" or "csv"')
+      process.exit(1)
+    }
+    runExport({ format: fmt as 'json' | 'csv', ...opts })
+    process.exit(0)
+  })
 
 program
   .command('status')
@@ -186,6 +204,7 @@ program
         `${burnRow}` +
         `──────────────────────────────────────────\n`
       )
+      process.exit(0)
     } catch {
       console.error('\n❌ Daemon is not running. Start it with: claudestat start\n')
       process.exit(1)
@@ -198,6 +217,7 @@ program
   .option('--kill-switch <bool>',  'Enable/disable kill switch: true|false')
   .option('--threshold <number>',  'Quota percentage to trigger the kill switch (default: 95)')
   .option('--plan <plan>',         'Force plan detection: pro|max5|max20|auto')
+  .option('--alerts <bool>',       'Enable/disable daemon rate limit alerts: true|false')
   .action((opts) => {
     const cfg = readConfig()
     let changed = false
@@ -219,6 +239,10 @@ program
         console.warn('  ⚠️  plan must be: pro | max5 | max20 | auto')
       }
     }
+    if (opts.alerts !== undefined) {
+      cfg.alertsEnabled = opts.alerts === 'true'
+      changed = true
+    }
 
     if (changed) {
       writeConfig(cfg)
@@ -230,7 +254,9 @@ program
     console.log(`   killSwitchEnabled:  ${cfg.killSwitchEnabled}`)
     console.log(`   killSwitchThreshold: ${cfg.killSwitchThreshold}%`)
     console.log(`   warnThresholds:     ${cfg.warnThresholds.join('%, ')}%`)
+    console.log(`   alertsEnabled:      ${cfg.alertsEnabled}`)
     console.log(`   plan:               ${cfg.plan ?? 'auto-detect'}\n`)
+    process.exit(0)
   })
 
 program
@@ -238,12 +264,14 @@ program
   .description('Stop the claudestat daemon')
   .action(async () => {
     await stopDaemon().catch((e: Error) => { console.error(`❌ ${e.message}`); process.exit(1) })
+    process.exit(0)
   })
 
 program
   .command('restart')
   .description('Restart the claudestat daemon')
   .action(async () => {
+    setTimeout(() => process.exit(0), 5000).unref()
     await stopDaemon().catch(() => { console.log('  Daemon was not running, starting fresh…') })
     await new Promise(r => setTimeout(r, 500))
     spawnDaemon()
@@ -285,6 +313,7 @@ program
         console.log(`  ${(i + 1).toString().padStart(2)}  ${t.tool.padEnd(18)} ${countStr.padStart(8)} ${dur.padStart(13)} ${cost.padStart(9)} ${pct.padStart(4)}`)
       }
       console.log()
+      process.exit(0)
     } catch {
       console.error('\n❌ Daemon is not running. Start it with: claudestat start\n')
       process.exit(1)

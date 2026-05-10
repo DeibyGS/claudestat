@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts'
-import { FileText, ChevronRight, Download, Zap } from 'lucide-react'
+import { FileText, ChevronRight, Download, Zap, Trash2 } from 'lucide-react'
 
 interface ReportMeta {
   id: number
@@ -20,31 +20,44 @@ function extractTaskCounts(md: string): { done: number; pending: number } {
   return { done, pending }
 }
 
+// ── Parsea inline markdown: **bold** y `code` ────────────────────────────────
+function parseInline(text: string): React.ReactNode {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
+  if (parts.length === 1) return text
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**'))
+      return <strong key={i} style={{ color: '#e6edf3' }}>{part.slice(2, -2)}</strong>
+    if (part.startsWith('`') && part.endsWith('`'))
+      return <code key={i} style={{ background: '#21262d', borderRadius: 3, padding: '1px 5px', fontSize: 11 }}>{part.slice(1, -1)}</code>
+    return part
+  })
+}
+
 // ── Renderizador de markdown básico (sin dependencias extra) ─────────────────
 function MarkdownView({ content }: { content: string }) {
-  const lines = content.split('\n')
+  const lines = (content ?? '').split('\n')
   return (
     <div style={{ fontFamily: 'inherit', lineHeight: 1.7, color: '#c9d1d9' }}>
       {lines.map((line, i) => {
         if (line.startsWith('# '))
-          return <h1 key={i} style={{ fontSize: 18, fontWeight: 700, color: '#e6edf3', margin: '20px 0 8px', borderBottom: '1px solid #21262d', paddingBottom: 6 }}>{line.slice(2)}</h1>
+          return <h1 key={i} style={{ fontSize: 18, fontWeight: 700, color: '#e6edf3', margin: '20px 0 8px', borderBottom: '1px solid #21262d', paddingBottom: 6 }}>{parseInline(line.slice(2))}</h1>
         if (line.startsWith('## '))
-          return <h2 key={i} style={{ fontSize: 15, fontWeight: 600, color: '#e6edf3', margin: '16px 0 6px' }}>{line.slice(3)}</h2>
+          return <h2 key={i} style={{ fontSize: 15, fontWeight: 600, color: '#e6edf3', margin: '16px 0 6px' }}>{parseInline(line.slice(3))}</h2>
         if (line.startsWith('### '))
-          return <h3 key={i} style={{ fontSize: 13, fontWeight: 600, color: '#8b949e', margin: '12px 0 4px' }}>{line.slice(4)}</h3>
+          return <h3 key={i} style={{ fontSize: 13, fontWeight: 600, color: '#8b949e', margin: '12px 0 4px' }}>{parseInline(line.slice(4))}</h3>
         if (line.startsWith('- [x] '))
-          return <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', margin: '3px 0', color: '#3fb950', fontSize: 12 }}>✅ <span style={{ textDecoration: 'line-through', color: '#6e7681' }}>{line.slice(6)}</span></div>
+          return <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', margin: '3px 0', color: '#3fb950', fontSize: 12 }}>✅ <span style={{ textDecoration: 'line-through', color: '#6e7681' }}>{parseInline(line.slice(6))}</span></div>
         if (line.startsWith('- [ ] '))
-          return <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', margin: '3px 0', fontSize: 12 }}>⬜ <span>{line.slice(6)}</span></div>
+          return <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', margin: '3px 0', fontSize: 12 }}>⬜ <span>{parseInline(line.slice(6))}</span></div>
         if (line.startsWith('- '))
-          return <div key={i} style={{ margin: '3px 0', paddingLeft: 16, fontSize: 12 }}>· {line.slice(2)}</div>
+          return <div key={i} style={{ margin: '3px 0', paddingLeft: 16, fontSize: 12 }}>· {parseInline(line.slice(2))}</div>
         if (line.startsWith('---'))
           return <hr key={i} style={{ border: 'none', borderTop: '1px solid #21262d', margin: '14px 0' }} />
         if (line.startsWith('> '))
-          return <blockquote key={i} style={{ margin: '8px 0', paddingLeft: 12, borderLeft: '3px solid #30363d', color: '#8b949e', fontSize: 12 }}>{line.slice(2)}</blockquote>
+          return <blockquote key={i} style={{ margin: '8px 0', paddingLeft: 12, borderLeft: '3px solid #30363d', color: '#8b949e', fontSize: 12 }}>{parseInline(line.slice(2))}</blockquote>
         if (line.trim() === '')
           return <div key={i} style={{ height: 6 }} />
-        return <p key={i} style={{ margin: '3px 0', fontSize: 12 }}>{line}</p>
+        return <p key={i} style={{ margin: '3px 0', fontSize: 12 }}>{parseInline(line)}</p>
       })}
     </div>
   )
@@ -98,6 +111,15 @@ export function WeeklyReportsView() {
       setImportMsg('Error al importar')
     }
     setImporting(false)
+  }
+
+  async function deleteReport(date: string, e: React.MouseEvent) {
+    e.stopPropagation()
+    try {
+      await fetch(`/api/weekly-reports/${date}`, { method: 'DELETE' })
+      if (selected?.date === date) setSelected(null)
+      fetchReports()
+    } catch {}
   }
 
   async function selectReport(date: string) {
@@ -223,7 +245,22 @@ export function WeeklyReportsView() {
             >
               <div style={S.reportDate}>
                 {r.date}
-                <ChevronRight size={11} color="#484f58" />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button
+                    onClick={(e) => deleteReport(r.date, e)}
+                    title="Delete report"
+                    style={{
+                      background: 'none', border: 'none', cursor: 'pointer',
+                      padding: '2px', display: 'flex', alignItems: 'center',
+                      color: '#6e7681', borderRadius: 3,
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.color = '#f85149')}
+                    onMouseLeave={e => (e.currentTarget.style.color = '#6e7681')}
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                  <ChevronRight size={11} color="#484f58" />
+                </div>
               </div>
               <div style={S.reportPreview}>{r.preview}</div>
             </div>

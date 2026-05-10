@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Wrench, DollarSign, Clock, Hash, HelpCircle } from 'lucide-react'
+import { Tip } from './Tip'
 
 interface TopTool {
   tool:           string
@@ -74,24 +75,30 @@ export function TopView() {
         {/* Sort buttons */}
         <div style={{ display: 'flex', gap: 6 }}>
           {([
-            { key: 'cost', label: 'Cost', icon: DollarSign },
-            { key: 'count', label: 'Calls', icon: Hash },
-            { key: 'duration', label: 'Duration', icon: Clock },
-          ] as const).map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              onClick={() => setSortBy(key)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 5,
-                padding: '4px 10px', fontSize: 11, fontWeight: sortBy === key ? 600 : 400,
-                color: sortBy === key ? '#e6edf3' : '#8b949e',
-                background: sortBy === key ? '#21262d' : 'transparent',
-                border: `1px solid ${sortBy === key ? '#30363d' : 'transparent'}`,
-                borderRadius: 5, cursor: 'pointer',
-              }}
-            >
-              <Icon size={11} /> {label}
-            </button>
+            { key: 'cost',     label: 'Cost',     icon: DollarSign, color: '#3fb950', tip: "Estimated USD cost per tool, calculated from each tool's share of total token usage" },
+            { key: 'count',    label: 'Calls',    icon: Hash,        color: '#58a6ff', tip: 'Total number of invocations in the selected period' },
+            { key: 'duration', label: 'Duration', icon: Clock,       color: '#e3b341', tip: 'Cumulative execution time (sum of all calls)' },
+          ] as const).map(({ key, label, icon: Icon, color, tip }) => (
+            <Tip key={key} position="bottom" align="left" content={
+              <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                <div style={{ fontWeight: 700, color, marginBottom: 4 }}>Sort by {label.toLowerCase()}</div>
+                <div style={{ color: '#7d8590' }}>{tip}</div>
+              </div>
+            }>
+              <button
+                onClick={() => setSortBy(key)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '4px 10px', fontSize: 11, fontWeight: sortBy === key ? 600 : 400,
+                  color: sortBy === key ? '#e6edf3' : '#8b949e',
+                  background: sortBy === key ? '#21262d' : 'transparent',
+                  border: `1px solid ${sortBy === key ? '#30363d' : 'transparent'}`,
+                  borderRadius: 5, cursor: 'pointer',
+                }}
+              >
+                <Icon size={11} /> {label}
+              </button>
+            </Tip>
           ))}
         </div>
 
@@ -120,12 +127,14 @@ export function TopView() {
         <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
           <ProjectionCard
             label="This week"
+            tooltip="Cost accumulated since Monday of the current week, extrapolated to 7 days"
             costSoFar={projection.weekly.costSoFar}
             projected={projection.weekly.projected}
             daysWithData={projection.weekly.daysWithData}
           />
           <ProjectionCard
             label="This month"
+            tooltip="Cost accumulated since the 1st of the current month, extrapolated to 30 days"
             costSoFar={projection.monthly.costSoFar}
             projected={projection.monthly.projected}
             daysWithData={projection.monthly.daysWithData}
@@ -146,8 +155,32 @@ export function TopView() {
             gap: 8, padding: '0 8px', fontSize: 10, fontWeight: 600, color: '#8b949e',
             textTransform: 'uppercase', letterSpacing: '0.5px',
           }}>
-            <span>#</span><span>Tool</span><span style={{ textAlign: 'right' }}>Calls</span>
-            <span style={{ textAlign: 'right' }}>Duration</span><span style={{ textAlign: 'right' }}>Est. Cost</span>
+            <span>#</span>
+            <span>Tool</span>
+            <span style={{ textAlign: 'right' }}>
+              <Tip position="bottom" align="right" content={
+                <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                  <div style={{ fontWeight: 700, color: '#58a6ff', marginBottom: 4 }}>Calls</div>
+                  <div style={{ color: '#7d8590' }}>Total invocations in the selected period</div>
+                </div>
+              }>Calls</Tip>
+            </span>
+            <span style={{ textAlign: 'right' }}>
+              <Tip position="bottom" align="right" content={
+                <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                  <div style={{ fontWeight: 700, color: '#e3b341', marginBottom: 4 }}>Duration</div>
+                  <div style={{ color: '#7d8590' }}>Cumulative execution time across all calls</div>
+                </div>
+              }>Duration</Tip>
+            </span>
+            <span style={{ textAlign: 'right' }}>
+              <Tip position="bottom" align="right" content={
+                <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                  <div style={{ fontWeight: 700, color: '#3fb950', marginBottom: 4 }}>Est. Cost</div>
+                  <div style={{ color: '#7d8590' }}>Proportion of total session cost<br/>attributed to each tool by call count</div>
+                </div>
+              }>Est. Cost</Tip>
+            </span>
           </div>
 
           {tools.map((t, i) => {
@@ -170,11 +203,22 @@ export function TopView() {
                 }} />
                 <span style={{ color: '#8b949e', fontWeight: 600, position: 'relative' }}>{i + 1}</span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 6, position: 'relative' }}>
-                   {t.tool === 'Other'
-                     ? <HelpCircle size={11} color="#8b949e" />
-                     : <Wrench size={11} color={COLORS[i % COLORS.length]} />}
-                   {t.tool}
-                 </span>
+                  {t.tool === 'Other' ? (
+                    <Tip position="top" align="left" content={
+                      <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                        <div style={{ fontWeight: 700, color: '#8b949e', marginBottom: 4 }}>Other tools</div>
+                        <div style={{ color: '#7d8590' }}>Remaining cost not attributed to the<br/>top tools listed above</div>
+                      </div>
+                    }>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <HelpCircle size={11} color="#8b949e" />
+                        {t.tool}
+                      </span>
+                    </Tip>
+                  ) : (
+                    <><Wrench size={11} color={COLORS[i % COLORS.length]} />{t.tool}</>
+                  )}
+                </span>
                  <span style={{ textAlign: 'right', color: '#8b949e', position: 'relative' }}>{t.tool === 'Other' ? '—' : t.count.toLocaleString()}</span>
                  <span style={{ textAlign: 'right', color: '#8b949e', position: 'relative' }}>{t.tool === 'Other' ? '—' : fmtDur(t.totalDurationMs)}</span>
                 <span style={{ textAlign: 'right', fontWeight: 600, color: COLORS[i % COLORS.length], position: 'relative' }}>{fmtCost(t.estimatedCostUsd)}</span>
@@ -187,18 +231,32 @@ export function TopView() {
   )
 }
 
-function ProjectionCard({ label, costSoFar, projected, daysWithData }: {
-  label: string; costSoFar: number; projected: number; daysWithData: number
+function ProjectionCard({ label, tooltip, costSoFar, projected, daysWithData }: {
+  label: string; tooltip: string; costSoFar: number; projected: number; daysWithData: number
 }) {
   return (
     <div style={{
       flex: 1, background: '#161b22', border: '1px solid #21262d',
       borderRadius: 8, padding: '14px 16px',
     }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 8 }}>{label}</div>
+      <Tip position="top" align="left" content={
+        <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+          <div style={{ fontWeight: 700, color: '#e6edf3', marginBottom: 4 }}>{label}</div>
+          <div style={{ color: '#7d8590' }}>{tooltip}</div>
+        </div>
+      }>
+        <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 8, cursor: 'default' }}>{label}</div>
+      </Tip>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
         <span style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3' }}>{fmtCost(projected)}</span>
-        <span style={{ fontSize: 11, color: '#8b949e' }}>projected</span>
+        <Tip position="top" align="left" content={
+          <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+            <div style={{ fontWeight: 700, color: '#58a6ff', marginBottom: 4 }}>Projected spend</div>
+            <div style={{ color: '#7d8590' }}>Extrapolated from daily average based on {daysWithData.toFixed(1)} days of data</div>
+          </div>
+        }>
+          <span style={{ fontSize: 11, color: '#8b949e', cursor: 'default' }}>projected</span>
+        </Tip>
       </div>
       <div style={{ fontSize: 11, color: '#484f58' }}>
         {fmtCost(costSoFar)} spent over {daysWithData.toFixed(1)} days

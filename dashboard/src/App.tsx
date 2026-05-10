@@ -1,18 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, WifiOff, Zap, TrendingUp } from 'lucide-react'
 import type {
   AppState, TraceEvent, CostInfo, BlockCost,
   MetaStats, MetaSnapshot, DaySessions, ProjectSummary,
   QuotaData, SessionState, ClaudeStatsData, QuotaStats, SubAgentSession
 } from './types'
+import type { SystemConfig } from './components/SystemView'
 import { type Tab, Header }    from './components/Header'
 import { ConfigPanel }        from './components/ConfigPanel'
 import { TracePanel }          from './components/TracePanel'
-import { HistoryView }         from './components/HistoryView'
-import { ProjectsView }        from './components/ProjectsView'
-import { AnalyticsView }      from './components/AnalyticsView'
-import { SystemView, type SystemConfig } from './components/SystemView'
-import { TopView }                from './components/TopView'
+
+const HistoryView  = lazy(() => import('./components/HistoryView').then(m => ({ default: m.HistoryView })))
+const ProjectsView = lazy(() => import('./components/ProjectsView').then(m => ({ default: m.ProjectsView })))
+const AnalyticsView = lazy(() => import('./components/AnalyticsView').then(m => ({ default: m.AnalyticsView })))
+const TopView      = lazy(() => import('./components/TopView').then(m => ({ default: m.TopView })))
+const SystemView   = lazy(() => import('./components/SystemView').then(m => ({ default: m.SystemView })))
 
 const HEAVY_BLOCK_THRESHOLD = 500_000
 
@@ -261,31 +263,41 @@ export default function App() {
 
       {activeTab === 'history' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <HistoryView days={historyDays} activeSessionId={state.sessionId} />
+          <Suspense fallback={null}>
+            <HistoryView days={historyDays} activeSessionId={state.sessionId} />
+          </Suspense>
         </div>
       )}
 
       {activeTab === 'projects' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <ProjectsView projects={projects} activeProject={activeProject} weeklyData={state.weeklyData} />
+          <Suspense fallback={null}>
+            <ProjectsView projects={projects} activeProject={activeProject} weeklyData={state.weeklyData} />
+          </Suspense>
         </div>
       )}
 
       {activeTab === 'analytics' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <AnalyticsView quota={quota} cost={state.cost} events={state.events} prompts={prompts} claudeStats={claudeStats} />
+          <Suspense fallback={null}>
+            <AnalyticsView quota={quota} cost={state.cost} events={state.events} prompts={prompts} claudeStats={claudeStats} />
+          </Suspense>
         </div>
       )}
 
       {activeTab === 'top' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <TopView />
+          <Suspense fallback={null}>
+            <TopView />
+          </Suspense>
         </div>
       )}
 
       {activeTab === 'system' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <SystemView config={systemConfig} error={systemConfigError} onRetry={fetchSystemConfig} />
+          <Suspense fallback={null}>
+            <SystemView config={systemConfig} error={systemConfigError} onRetry={fetchSystemConfig} />
+          </Suspense>
         </div>
       )}
 

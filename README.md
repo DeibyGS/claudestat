@@ -12,7 +12,7 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-202%2F202-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-208%2F208-brightgreen)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 [Installation](#installation) • [Quick Start](#quick-start) • [Commands](#commands) • [Dashboard](#dashboard) • [Contributing](#contributing)
@@ -135,6 +135,7 @@ That's it. Start a Claude Code session and watch the events flow in.
 | `claudestat status` | Show quota, cost, and burn rate |
 | `claudestat config` | View or edit configuration |
 | `claudestat top` | Rank tools by cost, call count, or duration |
+| `claudestat export [format]` | Export session data to JSON or CSV |
 | `claudestat doctor` | Check installation health and diagnose issues |
 
 ### `claudestat watch`
@@ -210,6 +211,33 @@ If a check fails, `doctor` prints the exact fix command to run.
 
 ---
 
+### `claudestat export`
+
+Export session data to JSON or CSV. Supports date and project filters.
+
+```bash
+# Export all sessions as JSON to stdout
+claudestat export
+
+# Export as CSV to a file
+claudestat export csv --output ~/sessions.csv
+
+# Filter by date range
+claudestat export json --from 2025-05-01 --to 2025-05-31
+
+# Filter by project name (case-insensitive substring match)
+claudestat export csv --project myapp --output myapp-sessions.csv
+
+# Multiple filters combined
+claudestat export json --from 2025-05-01 --project claudestat --output may-claudestat.json
+```
+
+**Options:** `--from YYYY-MM-DD` · `--to YYYY-MM-DD` · `--project <name>` · `--output <path>`
+
+Each row includes: `id`, `started_at`, `cwd`, `project_path`, `total_cost_usd`, `total_input_tokens`, `total_output_tokens`, `efficiency_score`, `loops_detected`.
+
+---
+
 ### `claudestat config`
 
 ```bash
@@ -218,6 +246,9 @@ claudestat config --kill-switch true --threshold 95
 
 # Force plan detection instead of auto
 claudestat config --plan max5   # pro | max5 | max20 | auto
+
+# Disable daemon rate limit alerts
+claudestat config --alerts false
 ```
 
 Config is stored at `~/.claudestat/config.json` (macOS/Linux) or `%USERPROFILE%\.claudestat\config.json` (Windows).
@@ -273,21 +304,27 @@ Config is stored at `~/.claudestat/config.json` (macOS/Linux) or `%USERPROFILE%\
 {
   "killSwitchEnabled": false,
   "killSwitchThreshold": 95,
-  "warnThresholds": [70, 85],
+  "warnThresholds": [70, 85, 95],
   "plan": null,
+  "alertsEnabled": true,
   "reportsEnabled": false,
-  "reportFrequency": "weekly"
+  "reportFrequency": "weekly",
+  "reportDay": 1,
+  "reportTime": "09:00"
 }
 ```
 
 | Key | Default | Description |
 |---|---|---|
-| `killSwitchEnabled` | `false` | Enable the quota kill switch. When `true`, new Claude Code sessions are blocked once your quota reaches the threshold. Disabled by default — enable it only if you want hard quota enforcement. |
+| `killSwitchEnabled` | `false` | Enable the quota kill switch. When `true`, new Claude Code sessions are blocked once your quota reaches the threshold. |
 | `killSwitchThreshold` | `95` | Quota percentage (0–100) at which the kill switch activates. Only relevant when `killSwitchEnabled` is `true`. |
-| `warnThresholds` | `[70, 85]` | Two quota percentages that trigger yellow and orange warnings in the dashboard sidebar. |
-| `plan` | `null` | Force plan detection instead of auto. Valid values: `"pro"`, `"max5"`, `"max20"`. Leave `null` to let claudestat detect your plan from usage data. |
+| `warnThresholds` | `[70, 85, 95]` | Three quota percentages for yellow, orange, and red warnings in the dashboard and daemon alerts. |
+| `plan` | `null` | Force plan detection. Valid values: `"pro"`, `"max5"`, `"max20"`. Leave `null` to auto-detect. |
+| `alertsEnabled` | `true` | Enable daemon rate limit alerts — polls quota every 60s and logs a warning (with optional desktop notification) when thresholds are crossed. |
 | `reportsEnabled` | `false` | Enable automatic AI-generated usage reports on a schedule. |
 | `reportFrequency` | `"weekly"` | How often to generate reports. Valid values: `"weekly"`, `"biweekly"`, `"monthly"`. |
+| `reportDay` | `1` | Day of week for reports (0=Sun, 1=Mon … 6=Sat). |
+| `reportTime` | `"09:00"` | Time of day (HH:MM) when the report is generated. |
 
 You can edit the file directly or use the CLI:
 
@@ -301,11 +338,43 @@ claudestat config --plan max5
 
 ---
 
+## Troubleshooting
+
+**`claudestat start` hangs for ~5 seconds**
+Normal — `require('express')` takes a few seconds on first load. The daemon is starting.
+
+**Hooks are not firing / dashboard shows no events**
+Run `claudestat doctor` — it checks every component and prints the exact fix command.
+If hooks were installed before upgrading, run `claudestat uninstall && claudestat install` to refresh.
+
+**`claudestat` command not found after install**
+If using NVM, the binary may point to the wrong Node version:
+```bash
+nvm use default && npm install -g @deibygs/claudestat
+hash -r claudestat   # macOS/Linux — refresh shell binary cache
+```
+
+**Working with multiple projects**
+claudestat tracks every project automatically. The Projects tab groups sessions by working directory. Use `claudestat export --project <name>` to export data for a specific project.
+
+**Approaching rate limit**
+When the daemon is running, it polls quota every 60s and logs a warning to stderr when you cross 70%, 85%, or 95%. On macOS and Linux you also get a desktop notification at the `killSwitchThreshold`.
+To see current quota at any time: `claudestat status`
+
+**Kill switch is blocking new sessions**
+The kill switch only activates when `killSwitchEnabled: true` AND `cyclePct >= killSwitchThreshold`.
+To disable: `claudestat config --kill-switch false`
+Or wait for the 5h quota window to reset (check time remaining with `claudestat status`).
+
+**`node:sqlite` experimental warning**
+Expected on Node 22+. claudestat suppresses it automatically — you won't see it in normal use.
+
+---
+
 ## Roadmap
 
 Planned for upcoming versions:
 
-- **`claudestat export`** — export session data to CSV or JSON
 - **Multi-account support** — track usage across multiple Claude accounts
 - **Slack / webhook alerts** — get notified when quota reaches warning thresholds
 - **VS Code extension** — sidebar panel with live stats inside the editor
@@ -339,14 +408,14 @@ Whether you want to fix a bug, improve a dashboard view, add a new pattern to th
 1. Fork the repository
 2. Create a branch: `git checkout -b feat/your-feature`
 3. Make your changes
-4. Run the test suite: `npm test` (202 tests)
+4. Run the test suite: `npm test` (208 tests)
 5. Open a PR with a clear description of what you changed and why
 
 ### Good first areas
 
 - **Pattern analyzer** (`src/pattern-analyzer.ts`) — add new usage patterns or improve thresholds
 - **Dashboard components** (`dashboard/src/components/`) — UI improvements, new charts, accessibility
-- **New commands** — ideas like `claudestat export`, `claudestat compare`
+- **New commands** — ideas like `claudestat compare`
 - **Bug reports** — open an issue with steps to reproduce and your Node/OS version
 
 ### Running locally

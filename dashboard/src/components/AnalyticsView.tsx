@@ -6,7 +6,7 @@ import {
 } from 'recharts'
 import {
   TrendingUp, DollarSign, Repeat2, Zap, Activity, Clock, FolderGit2,
-  FileText, ChevronDown, ChevronUp, X,
+  FileText, ChevronDown, ChevronUp, X, Trash2,
 } from 'lucide-react'
 import { Tip } from './Tip'
 import type { QuotaData, CostInfo, TraceEvent, ClaudeStatsData } from '../types'
@@ -72,6 +72,21 @@ function pivotByModel(rows: ModelRow[]): Array<Record<string, string | number>> 
     map.set(r.date, cur)
   }
   return [...map.values()]
+}
+
+function totalsByModel(rows: ModelRow[]): { key: string; label: string; tokens: number; cost: number }[] {
+  const map: Record<string, { tokens: number; cost: number }> = {}
+  for (const r of rows) {
+    const key = modelKey(r.model)
+    if (!map[key]) map[key] = { tokens: 0, cost: 0 }
+    map[key].tokens += r.tokens
+    map[key].cost   += r.cost
+  }
+  const labels: Record<string, string> = { sonnet: 'Sonnet', haiku: 'Haiku', opus: 'Opus' }
+  return Object.entries(map)
+    .map(([key, v]) => ({ key, label: labels[key] ?? key, ...v }))
+    .filter(r => r.tokens > 0)
+    .sort((a, b) => b.tokens - a.tokens)
 }
 
 const sectionTitle: React.CSSProperties = {
@@ -166,6 +181,13 @@ function ReportsPanel() {
     if (r.ok) { setSelected(await r.json()); setExpanded(false) }
   }
 
+  async function handleDelete(date: string, e: React.MouseEvent) {
+    e.stopPropagation()
+    await fetch(`/api/weekly-reports/${date}`, { method: 'DELETE' }).catch(() => {})
+    if (selected?.date === date) setSelected(null)
+    fetchReports()
+  }
+
   const btnStyle: React.CSSProperties = {
     display: 'inline-flex', alignItems: 'center', gap: 5,
     padding: '4px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600,
@@ -206,17 +228,31 @@ function ReportsPanel() {
           {reports.length === 0
             ? <span style={{ fontSize: 11, color: '#484f58', padding: '4px 4px' }}>No reports — use "Generate" to create one</span>
             : reports.map(r => (
-                <button
-                  key={r.id} onClick={() => handleSelect(r.date)}
-                  style={{ background: 'none', border: '1px solid #21262d', borderRadius: 5, padding: '7px 10px', cursor: 'pointer', textAlign: 'left', display: 'flex', gap: 10, alignItems: 'center', color: 'inherit', transition: 'background 0.1s' }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#21262d' }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none' }}
+                <div
+                  key={r.id}
+                  style={{ border: '1px solid #21262d', borderRadius: 5, display: 'flex', alignItems: 'center', transition: 'background 0.1s' }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = '#21262d' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = 'none' }}
                 >
-                  <span style={{ fontSize: 11, fontWeight: 600, color: '#58a6ff', minWidth: 90, flexShrink: 0 }}>{r.date}</span>
-                  <span style={{ fontSize: 11, color: '#6e7681', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {r.preview}
-                  </span>
-                </button>
+                  <button
+                    onClick={() => handleSelect(r.date)}
+                    style={{ background: 'none', border: 'none', padding: '7px 10px', cursor: 'pointer', textAlign: 'left', display: 'flex', gap: 10, alignItems: 'center', color: 'inherit', flex: 1, minWidth: 0 }}
+                  >
+                    <span style={{ fontSize: 11, fontWeight: 600, color: '#58a6ff', minWidth: 90, flexShrink: 0 }}>{r.date}</span>
+                    <span style={{ fontSize: 11, color: '#6e7681', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.preview}
+                    </span>
+                  </button>
+                  <button
+                    onClick={(e) => handleDelete(r.date, e)}
+                    title="Delete report"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '7px 10px', display: 'flex', alignItems: 'center', color: '#6e7681', flexShrink: 0 }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#f85149' }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = '#6e7681' }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
               ))
           }
         </div>
@@ -277,6 +313,7 @@ export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Pro
   }, [period, projectPeriod])
 
   const modelPivot  = pivotByModel(byModel)
+  const modelTotals = totalsByModel(byModel)
   const totalInput  = daily.reduce((a, d) => a + d.input_tokens, 0)
   const totalOutput = daily.reduce((a, d) => a + d.output_tokens, 0)
   const totalCache  = daily.reduce((a, d) => a + d.cache_read, 0)
@@ -410,19 +447,28 @@ export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Pro
               </div>
 
               <div style={{ flex: 1, background: '#161b22', border: '1px solid #21262d', borderRadius: 8, padding: '16px 20px' }}>
-                <div style={sectionTitle}>Tokens by model (daily)</div>
-                <ResponsiveContainer width="100%" height={130}>
-                  <BarChart data={modelPivot} barSize={6} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
-                    <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#6e7681' }} tickFormatter={v => String(v).slice(5)} axisLine={false} tickLine={false} interval="preserveStartEnd" />
-                    <YAxis tick={{ fontSize: 9, fill: '#6e7681' }} axisLine={false} tickLine={false} tickFormatter={v => fmtTok(v)} />
-                    <Tooltip {...tooltipStyle} cursor={{ fill: '#21262d' }} formatter={(v: number) => [fmtTok(v)]} />
-                    <Legend iconSize={8} wrapperStyle={{ fontSize: 10, color: '#8b949e' }} />
-                    <Bar dataKey="sonnet" name="Sonnet" fill={MODEL_COLORS.sonnet} stackId="a" />
-                    <Bar dataKey="haiku"  name="Haiku"  fill={MODEL_COLORS.haiku}  stackId="a" />
-                    <Bar dataKey="opus"   name="Opus"   fill={MODEL_COLORS.opus}   stackId="a" />
-                  </BarChart>
-                </ResponsiveContainer>
+                <div style={sectionTitle}>Token share by model</div>
+                {(() => {
+                  const total = modelTotals.reduce((s, r) => s + r.tokens, 0)
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {modelTotals.map(r => {
+                        const pct = total > 0 ? (r.tokens / total) * 100 : 0
+                        return (
+                          <div key={r.key}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                              <span style={{ fontSize: 11, fontWeight: 600, color: MODEL_COLORS[r.key] ?? '#8b949e' }}>{r.label}</span>
+                              <span style={{ fontSize: 11, color: '#8b949e' }}>{fmtTok(r.tokens)} · {pct.toFixed(1)}%</span>
+                            </div>
+                            <div style={{ height: 6, background: '#21262d', borderRadius: 3 }}>
+                              <div style={{ height: '100%', width: `${pct}%`, background: MODEL_COLORS[r.key] ?? '#8b949e', borderRadius: 3, minWidth: pct > 0 ? 3 : 0 }} />
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })()}
               </div>
             </div>
 

@@ -18,7 +18,9 @@ import path   from 'path'
 import fs     from 'fs'
 import { dbOps }                                                    from './db'
 import { startEnricher, stopEnricher, cleanupSession }                        from './enricher'
-import { readConfig }                                               from './config'
+import { readConfig, getWarnLevel }                                 from './config'
+import { computeQuota }                                              from './quota-tracker'
+import { sendDesktopNotification }                                   from './notifier'
 import { eventsRouter, onCostUpdate, onCompactDetected }            from './routes/events'
 import { streamRouter, getSseClientsSize }                          from './routes/stream'
 import { projectsRouter, inferProjectCwd }                          from './routes/projects'
@@ -65,10 +67,17 @@ app.get('/health', (_req: Request, res: Response) => {
 // ─── Dashboard React (servir estáticos del build de Vite) ────────────────────
 
 const DASHBOARD_DIST = path.join(__dirname, '..', 'dashboard', 'dist')
-app.use(express.static(DASHBOARD_DIST))
+app.use(express.static(DASHBOARD_DIST, {
+  setHeaders(res, filePath) {
+    if (filePath.endsWith('.html')) {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
+    }
+  },
+}))
 
 // SPA fallback: cualquier ruta no capturada sirve index.html
 app.get('*', (_req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
   res.sendFile(path.join(DASHBOARD_DIST, 'index.html'))
 })
 
@@ -115,14 +124,60 @@ async function migrateSessionSummaries(limit = 5) {
 
 let projectCacheInterval: ReturnType<typeof setInterval> | null = null
 let reportInterval: ReturnType<typeof setInterval> | null = null
+let alertInterval:  ReturnType<typeof setInterval> | null = null
 
 function shutdown(server: import('http').Server) {
   stopEnricher()
   stopRateLimiter()
   if (projectCacheInterval) { clearInterval(projectCacheInterval); projectCacheInterval = null }
   if (reportInterval) { clearInterval(reportInterval); reportInterval = null }
+  if (alertInterval)  { clearInterval(alertInterval);  alertInterval  = null }
   cleanPid()
   server.close()
+}
+
+const LEVEL_RANK = { yellow: 1, orange: 2, red: 3 } as const
+const LEVEL_COLOR = {
+  yellow: '\x1b[33m',
+  orange: '\x1b[33m',
+  red:    '\x1b[31m',
+} as const
+
+let _lastAlertLevel: string | null = null
+
+function startAlertPolling() {
+  alertInterval = setInterval(() => {
+    try {
+      const cfg  = readConfig()
+      if (!cfg.alertsEnabled) return
+      const data = computeQuota(cfg.plan ?? undefined)
+      const level = getWarnLevel(data.cyclePct, cfg.warnThresholds)
+
+      if (!level) {
+        _lastAlertLevel = null
+        return
+      }
+
+      const prevRank = _lastAlertLevel ? LEVEL_RANK[_lastAlertLevel as keyof typeof LEVEL_RANK] ?? 0 : 0
+      const currRank = LEVEL_RANK[level as keyof typeof LEVEL_RANK] ?? 0
+
+      if (currRank > prevRank) {
+        const color = LEVEL_COLOR[level]
+        process.stderr.write(`${color}[claudestat] ⚠️  Rate limit alert: ${data.cyclePct}% of quota used (${data.cyclePrompts}/${data.cycleLimit} prompts)\x1b[0m\n`)
+
+        if (data.cyclePct >= cfg.killSwitchThreshold) {
+          sendDesktopNotification(
+            'claudestat — Rate limit warning',
+            `${data.cyclePct}% of 5h quota used (${data.cyclePrompts}/${data.cycleLimit} prompts)`
+          )
+        }
+
+        _lastAlertLevel = level
+      }
+    } catch {
+      // quota read failed — ignore
+    }
+  }, 60_000)
 }
 
 // ─── Report scheduler ─────────────────────────────────────────────────────────
@@ -190,6 +245,9 @@ export function startDaemon() {
     if (process.env.CLAUDESTAT_AI_SUMMARY === 'true') {
       migrateSessionSummaries(5).catch(() => {})
     }
+
+    // Polling de alertas de rate limit cada 60s
+    startAlertPolling()
   })
 
   // Manejo de error de puerto ocupado — fuera del callback para capturar EADDRINUSE

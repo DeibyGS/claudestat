@@ -7,7 +7,7 @@ import os from 'os'
 process.env.CLAUDESTAT_DB_PATH ??= ':memory:'
 process.env.CLAUDESTAT_DATA_DIR ??= require('os').tmpdir()
 
-import { getAllBlockCostsForSession, stopEnricher, cleanupSession, getContextWindow } from '../src/enricher'
+import { getAllBlockCostsForSession, stopEnricher, cleanupSession, getContextWindow, getSessionPrompts } from '../src/enricher'
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claudestat-enricher-'))
 
@@ -82,6 +82,73 @@ describe('cleanupSession', () => {
 describe('stopEnricher', () => {
   test('does not throw when no watcher is active', () => {
     assert.doesNotThrow(() => stopEnricher())
+  })
+})
+
+describe('getSessionPrompts', () => {
+  const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects', 'test-claudestat-prompts')
+  const sessionId = `test-prompts-${Date.now()}`
+  const jsonlPath = path.join(claudeProjectsDir, `${sessionId}.jsonl`)
+
+  function line(obj: object) { return JSON.stringify(obj) }
+
+  before(() => { fs.mkdirSync(claudeProjectsDir, { recursive: true }) })
+  after(() => { try { fs.rmSync(claudeProjectsDir, { recursive: true }) } catch {} })
+
+  test('returns empty array when session file does not exist', async () => {
+    const result = await getSessionPrompts('nonexistent-session-00000')
+    assert.ok(Array.isArray(result))
+    assert.equal(result.length, 0)
+  })
+
+  test('parses human message with string content', async () => {
+    fs.writeFileSync(jsonlPath, [
+      line({ type: 'human', timestamp: new Date().toISOString(), message: { content: 'fix the bug' } }),
+      line({ type: 'assistant', timestamp: new Date().toISOString(), message: { model: 'claude-sonnet-4-6', usage: { input_tokens: 100, output_tokens: 50 } } }),
+    ].join('\n'))
+    const result = await getSessionPrompts(sessionId)
+    assert.ok(result.length >= 1, 'should find 1 prompt')
+    assert.equal(result[0].text, 'fix the bug')
+    assert.equal(result[0].index, 1)
+  })
+
+  test('parses human message with array text block content', async () => {
+    fs.writeFileSync(jsonlPath, [
+      line({ type: 'human', timestamp: new Date().toISOString(), message: { content: [{ type: 'text', text: 'write a function' }] } }),
+    ].join('\n'))
+    const result = await getSessionPrompts(sessionId)
+    assert.ok(result.length >= 1)
+    assert.equal(result[0].text, 'write a function')
+  })
+
+  test('filters out system-reminder content', async () => {
+    fs.writeFileSync(jsonlPath, [
+      line({ type: 'human', timestamp: new Date().toISOString(), message: { content: '<system-reminder>some hook output</system-reminder>' } }),
+      line({ type: 'human', timestamp: new Date().toISOString(), message: { content: 'real user prompt' } }),
+    ].join('\n'))
+    const result = await getSessionPrompts(sessionId)
+    assert.equal(result.length, 1, 'system-reminder lines should be filtered')
+    assert.equal(result[0].text, 'real user prompt')
+  })
+
+  test('filters out empty text messages', async () => {
+    fs.writeFileSync(jsonlPath, [
+      line({ type: 'human', timestamp: new Date().toISOString(), message: { content: '' } }),
+      line({ type: 'human', timestamp: new Date().toISOString(), message: { content: 'valid' } }),
+    ].join('\n'))
+    const result = await getSessionPrompts(sessionId)
+    const valid = result.filter(p => p.text === 'valid')
+    assert.ok(valid.length >= 1, 'non-empty messages should be included')
+  })
+
+  test('skips malformed JSON lines without throwing', async () => {
+    fs.writeFileSync(jsonlPath, [
+      'this is not json',
+      line({ type: 'human', timestamp: new Date().toISOString(), message: { content: 'after bad line' } }),
+      '{incomplete json',
+    ].join('\n'))
+    const result = await getSessionPrompts(sessionId)
+    assert.ok(Array.isArray(result), 'should not throw on malformed lines')
   })
 })
 

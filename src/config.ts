@@ -35,6 +35,7 @@ export interface ClaudestatConfig {
   reportFrequency:    ReportFrequency
   reportDay:          number           // 0=Dom, 1=Lun … 6=Sáb
   reportTime:         string           // HH:MM
+  alertsEnabled:      boolean          // daemon polling + desktop notifications
 }
 
 const CONFIG_PATH = path.join(getClaudestatDir(), 'config.json')
@@ -48,6 +49,7 @@ const DEFAULTS: ClaudestatConfig = {
   reportFrequency:     'weekly',
   reportDay:           1,
   reportTime:          '09:00',
+  alertsEnabled:       true,
 }
 
 /** Lee la config del disco. Valores ausentes se rellenan con defaults. */
@@ -94,6 +96,9 @@ export function validateConfig(raw: unknown): string | null {
 
   if ('plan' in cfg && !VALID_PLANS.has(cfg.plan as string | null))
     return `plan debe ser uno de: free, pro, max5, max20 o null`
+
+  if ('alertsEnabled' in cfg && typeof cfg.alertsEnabled !== 'boolean')
+    return 'alertsEnabled debe ser boolean'
 
   if ('reportsEnabled' in cfg && typeof cfg.reportsEnabled !== 'boolean')
     return 'reportsEnabled debe ser boolean'

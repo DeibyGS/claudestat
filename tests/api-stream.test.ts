@@ -88,4 +88,24 @@ describe('GET /stream — SSE integration tests', () => {
     const after = getSseClientsSize()
     assert.ok(after <= before, 'clients should decrease after disconnect')
   })
+
+  test('multiple concurrent clients both receive broadcast', async () => {
+    const [c1, c2] = await Promise.all([connectSSE(), connectSSE()])
+    const uniqueType = `multi-test-${Date.now()}`
+    broadcast({ type: uniqueType, payload: {} })
+    await new Promise(r => setTimeout(r, 300))
+    c1.close()
+    c2.close()
+    const has = (data: string[]) => data.some(d => { try { return JSON.parse(d).type === uniqueType } catch { return false } })
+    assert.ok(has(c1.data) && has(c2.data), 'both clients should receive the broadcast')
+  })
+
+  test('reconnect: new connection after close receives array data', async () => {
+    const { close: close1 } = await connectSSE()
+    close1()
+    await new Promise(r => setTimeout(r, 200))
+    const { data, close: close2 } = await connectSSE()
+    close2()
+    assert.ok(Array.isArray(data), 'reconnected client receives data array')
+  })
 })

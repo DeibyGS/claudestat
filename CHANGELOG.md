@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-05-11
+
+### Added
+
+- **`claudestat share`** — Session shareable cards (ASCII + JSON)
+- **`claudestat roast`** — Sarcastic usage analysis
+- **`claudestat status --compact`** — One-line tmux output showing 5h cycle quota percentage
+
+### Fixed
+
+- **Null checks** — Added proper type guards to prevent crashes from malformed events
+- **Race conditions** — Added file locks to prevent concurrent JSONL processing corruption
+- **Error logging** — Empty catch blocks now log errors with `console.warn`
+- **PRICING duplication** — Centralized pricing constants to `src/pricing.ts`
+- **Share card alignment** — Fixed ASCII art borders alignment for perfect square
+
+### Changed
+
+- **CLI labels in English** — All labels now in English (internationalization)
+- **Token-based quota** — `status --compact` now shows token percentage instead of prompt count
+- **Current quota label** — Changed to "Current" with emoji indicator
+
 ## [0.3.0] - 2026-05-05
 
 ### Added

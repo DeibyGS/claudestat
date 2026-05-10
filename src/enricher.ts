@@ -23,24 +23,7 @@ import os from 'os'
 import chokidar from 'chokidar'
 import { getClaudeDir } from './paths'
 import type { CostUpdate } from './db'
-
-// ─── Tabla de precios (USD por millón de tokens) ──────────────────────────────
-
-interface ModelPricing {
-  input: number
-  output: number
-  cacheRead: number
-  cacheCreate: number
-}
-
-const PRICING: Record<string, ModelPricing> = {
-  'claude-opus-4-6':            { input: 15,   output: 75,  cacheRead: 1.50, cacheCreate: 18.75 },
-  'claude-sonnet-4-6':          { input: 3,    output: 15,  cacheRead: 0.30, cacheCreate: 3.75  },
-  'claude-haiku-4-5':           { input: 0.80, output: 4,   cacheRead: 0.08, cacheCreate: 1.00  },
-  'claude-haiku-4-5-20251001':  { input: 0.80, output: 4,   cacheRead: 0.08, cacheCreate: 1.00  },
-}
-
-const DEFAULT_PRICING = PRICING['claude-sonnet-4-6']
+import { calcCost, PRICING, DEFAULT_PRICING } from './pricing'
 
 interface UsageEntry {
   input_tokens: number
@@ -61,24 +44,12 @@ export function getContextWindow(model: string): number {
   return KNOWN_CONTEXT_WINDOWS[model] ?? 200_000
 }
 
-// ─── Calculo de coste ─────────────────────────────────────────────────────────
-
-function calcCost(model: string, usage: UsageEntry): number {
-  const price = PRICING[model] ?? DEFAULT_PRICING
-  const M = 1_000_000
-  return (
-    (usage.input_tokens                  * price.input)       / M +
-    (usage.output_tokens                 * price.output)      / M +
-    (usage.cache_read_input_tokens       * price.cacheRead)   / M +
-    (usage.cache_creation_input_tokens   * price.cacheCreate) / M
-  )
-}
-
 // ─── Procesamiento de JSONL ───────────────────────────────────────────────────
 
 interface FileOffsetEntry { offset: number; lastAccess: number }
 
 const fileOffsets = new Map<string, FileOffsetEntry>()
+const fileLocks = new Map<string, Promise<void>>()  // Lock per file
 const FILE_OFFSET_TTL = 30 * 60_000 // 30 minutos
 
 function cleanupStaleOffsets() {
@@ -89,6 +60,11 @@ function cleanupStaleOffsets() {
 }
 
 async function processJSONL(filePath: string): Promise<CostUpdate | null> {
+  // Skip if already processing this file
+  if (fileLocks.has(filePath)) return null
+  
+  fileLocks.set(filePath, Promise.resolve())
+  
   let fileContent: string
   try {
     fileContent = await fs.readFile(filePath, 'utf8')
@@ -122,13 +98,13 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
       if (obj.type !== 'assistant') continue
 
       const msg   = obj.message
-      const usage = msg?.usage as UsageEntry | undefined
-      const model = (msg?.model as string) ?? undefined
-
-      if (!usage) continue
+      if (!msg?.usage) continue
+      
+      const usage = msg.usage as UsageEntry
+      const model = msg.model ?? 'claude-sonnet-4-6'
 
       if (firstTs === undefined && obj.timestamp) {
-        try { firstTs = new Date(obj.timestamp as string).getTime() } catch {}
+        try { firstTs = new Date(obj.timestamp as string).getTime() } catch (e) { /* ignore invalid timestamp */ }
       }
 
       totals.input_tokens   += usage.input_tokens                  ?? 0
@@ -152,7 +128,7 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
       lastInputTokens  = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
       lastOutputTokens = usage.output_tokens ?? 0
       lastModel        = model ?? lastModel
-    } catch {}
+    } catch (e) { console.warn('[enricher] Error calculating cost:', e) }
   }
 
   if (lastInputUsd + lastOutputUsd > 0) {
@@ -168,28 +144,39 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
   totals.firstTs   = firstTs
 
   fileOffsets.set(filePath, { offset: currentSize, lastAccess: Date.now() })
+  fileLocks.delete(filePath)
   return totals
 }
 
-// ─── Todos los block costs históricos de una sesión ──────────────────────────
+// ─── Todos los block costs históricos de una sesión —─────────────────────────
 
 import type { BlockCostEntry } from './db'
 
 const blockCostCache = new Map<string, { data: BlockCostEntry[]; ts: number }>()
+const costCacheLocks = new Map<string, boolean>()  // Simple lock flag
 const BLOCK_COST_TTL = 5 * 60_000
 
 export async function getAllBlockCostsForSession(sessionId: string): Promise<BlockCostEntry[]> {
+  // Return cached if available and not expired
   const cached = blockCostCache.get(sessionId)
   if (cached && Date.now() - cached.ts < BLOCK_COST_TTL) return cached.data
+  
+  // Skip if already calculating for this session
+  if (costCacheLocks.get(sessionId)) return cached?.data ?? []
+  
+  costCacheLocks.set(sessionId, true)
+  
   try {
     if (!fsSync.existsSync(PROJECTS_DIR)) return []
     const dirs = await fs.readdir(PROJECTS_DIR)
+    
     for (const dir of dirs) {
       const dirPath = path.join(PROJECTS_DIR, dir)
       try {
         const stat = await fs.stat(dirPath)
         if (!stat.isDirectory()) continue
       } catch { continue }
+      
       const filePath = path.join(dirPath, `${sessionId}.jsonl`)
       try { await fs.access(filePath) } catch { continue }
 
@@ -233,15 +220,20 @@ export async function getAllBlockCostsForSession(sessionId: string): Promise<Blo
             current.inputTokens  += inTok
             current.outputTokens += outTok
           }
-        } catch {}
+        } catch (e) { console.warn('[enricher] Error reading JSONL block:', e) }
       }
 
       const filtered = result.filter(b => b.totalUsd > 0)
       blockCostCache.set(sessionId, { data: filtered, ts: Date.now() })
       return filtered
     }
-  } catch {}
-  return []
+  } catch (e) { 
+    console.warn('[enricher] Error calculating block costs:', e)
+  } finally {
+    costCacheLocks.delete(sessionId)
+  }
+  
+  return cached?.data ?? []
 }
 
 // ─── Prompts del usuario por sesión ──────────────────────────────────────────

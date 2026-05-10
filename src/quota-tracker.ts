@@ -27,13 +27,14 @@ export type ClaudePlan = 'free' | 'pro' | 'max5' | 'max20'
 
 const PLAN_LIMITS: Record<ClaudePlan, {
   prompts5h:         number
+  tokens5h:        number   // límite de tokens por ciclo de 5h
   weeklyHoursSonnet: number
   weeklyHoursOpus:   number
 }> = {
-  free:  { prompts5h: 10,  weeklyHoursSonnet: 40,  weeklyHoursOpus: 0  },
-  pro:   { prompts5h: 45,  weeklyHoursSonnet: 80,  weeklyHoursOpus: 0  },
-  max5:  { prompts5h: 225, weeklyHoursSonnet: 280, weeklyHoursOpus: 35 },
-  max20: { prompts5h: 900, weeklyHoursSonnet: 480, weeklyHoursOpus: 40 },
+  free:  { prompts5h: 10,  tokens5h: 100000,    weeklyHoursSonnet: 40,  weeklyHoursOpus: 0  },
+  pro:   { prompts5h: 45,  tokens5h: 382000,    weeklyHoursSonnet: 80,  weeklyHoursOpus: 0  },
+  max5:  { prompts5h: 225, tokens5h: 2000000,  weeklyHoursSonnet: 280, weeklyHoursOpus: 35 },
+  max20: { prompts5h: 900, tokens5h: 8000000,  weeklyHoursSonnet: 480, weeklyHoursOpus: 40 },
 }
 
 // ─── Tipos públicos ───────────────────────────────────────────────────────────
@@ -42,7 +43,9 @@ export interface QuotaData {
   // Ciclo de 5 horas
   cyclePrompts:    number   // prompts enviados en el ciclo actual
   cycleLimit:      number   // límite del plan para este ciclo
-  cyclePct:        number   // porcentaje usado (0–100)
+  cyclePct:        number   // porcentaje basado en tokens (coincide con claude.ai)
+  cycleTokens:      number   // tokens usados en el ciclo actual (input + output)
+  cycleLimitTokens: number   // límite de tokens del plan
   cycleResetMs:    number   // ms hasta el próximo reset (calculado desde resetAt)
   cycleResetAt:    number   // timestamp absoluto del próximo reset (rolling window)
   cycleStartTs:    number   // timestamp (ms) del primer mensaje del ciclo actual
@@ -297,8 +300,12 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
   const cycleResetAt = computeResetAt(entries, now)
   const cycleStart   = fiveHAgo   // inicio real de la ventana de conteo
 
-  const cyclePrompts = entries.filter(e => e.type === 'human' && e.ts >= fiveHAgo).length
-  const cyclePct     = Math.min(100, Math.round(cyclePrompts / limits.prompts5h * 100))
+  // Basado en tokens (como claude.ai/settings/usage)
+  const cycleEntries = entries.filter(e => e.ts >= fiveHAgo)
+  const cycleTokens = cycleEntries.reduce(
+    (sum, e) => sum + (e.inputTokens ?? 0) + (e.outputTokens ?? 0), 0
+  )
+  const cyclePct     = Math.min(100, Math.round(cycleTokens / limits.tokens5h * 100))
   const cycleResetMs = Math.max(0, cycleResetAt - now)
 
   // ─ Semanal por modelo: ventanas de 5 min con actividad ─
@@ -333,9 +340,11 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
     : 0
 
   const data: QuotaData = {
-    cyclePrompts,
+    cyclePrompts:       cycleEntries.filter(e => e.type === 'human').length,
     cycleLimit:        limits.prompts5h,
     cyclePct,
+    cycleTokens,
+    cycleLimitTokens: limits.tokens5h,
     cycleResetMs,
     cycleResetAt,
     cycleStartTs:      cycleStart,

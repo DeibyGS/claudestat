@@ -10,6 +10,6 @@ AGENTS.md
 *.tgz
 .engram/
 implementar.md
-
 GROWTH.md
-testClaudestatWindows.md
+docs/
+*.md

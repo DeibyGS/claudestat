@@ -109,7 +109,7 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
     // Activar skill parent para los eventos siguientes si este fue un Skill Done
     if (tool_name === 'Skill') {
       try {
-        const inp = typeof tool_input === 'object' ? tool_input : JSON.parse(tool_input ?? '{}')
+        const inp = typeof tool_input === 'object' ? tool_input : (typeof tool_input === 'string' ? JSON.parse(tool_input) : {})
         activeSkillBySession.set(session_id, inp?.skill || inp?.name || 'skill')
       } catch { activeSkillBySession.set(session_id, 'skill') }
     }
@@ -138,9 +138,9 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
   const FILE_TOOLS = new Set(['Read','Write','Edit','Glob','Grep'])
   if (FILE_TOOLS.has(tool_name || '') && tool_input) {
     try {
-      const inp      = typeof tool_input === 'string' ? JSON.parse(tool_input) : tool_input
-      const filePath = (inp.file_path || inp.path) as string | undefined
-      if (filePath?.startsWith('/')) {
+      const inp      = typeof tool_input === 'string' ? JSON.parse(tool_input) : (tool_input ?? {})
+      const filePath = inp?.file_path ?? inp?.path
+      if (typeof filePath === 'string' && filePath.startsWith('/')) {
         const projectCwd = findProjectCwdForFile(filePath)
         if (projectCwd) dbOps.updateSessionProject(session_id, projectCwd)
       }

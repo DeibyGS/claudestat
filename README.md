@@ -7,8 +7,8 @@
 Hook into every tool call, token, and dollar — as it happens.
 Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js. Runs on macOS, Linux, and Windows.
 
-[![npm version](https://img.shields.io/npm/v/@deibygs/claudestat?color=blue)](https://www.npmjs.com/package/@deibygs/claudestat)
-[![npm downloads](https://img.shields.io/npm/dw/@deibygs/claudestat?color=blue)](https://www.npmjs.com/package/@deibygs/claudestat)
+[![npm version](https://img.shields.io/npm/v/@statforge/claudestat?color=blue)](https://www.npmjs.com/package/@statforge/claudestat)
+[![npm downloads](https://img.shields.io/npm/dw/@statforge/claudestat?color=blue)](https://www.npmjs.com/package/@statforge/claudestat)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-brightgreen)]()
@@ -79,12 +79,12 @@ Claude Code event
 ## Installation
 
 ```bash
-npm install -g @deibygs/claudestat
+npm install -g @statforge/claudestat
 ```
 
 > **Using NVM?** Make sure you're on your default Node version before installing to avoid stale binary conflicts:
 > ```bash
-> nvm use default && npm install -g @deibygs/claudestat
+> nvm use default && npm install -g @statforge/claudestat
 > ```
 > Works with [nvm](https://github.com/nvm-sh/nvm) (macOS/Linux) and [nvm-windows](https://github.com/coreybutler/nvm-windows).
 
@@ -350,7 +350,7 @@ If hooks were installed before upgrading, run `claudestat uninstall && claudesta
 **`claudestat` command not found after install**
 If using NVM, the binary may point to the wrong Node version:
 ```bash
-nvm use default && npm install -g @deibygs/claudestat
+nvm use default && npm install -g @statforge/claudestat
 hash -r claudestat   # macOS/Linux — refresh shell binary cache
 ```
 

@@ -242,7 +242,7 @@ Would love feedback — especially from Max5/Max20 users who hit limits often.
 
 - [ ] Extraer datos reales propios (ver sección "Datos para contenido" abajo)
 - [ ] Post en r/ClaudeAI
-- [ ] Post en r/LocalLLaMA (versión más técnica, mencionar la arquitectura)
+- [ ] Post en r/LocalLLaMA (versión más técnica, mencionar la arquitectura) — BLOQUEADO: requiere más actividad en el subreddit primero
 - [ ] Post en r/commandline (enfocado en el terminal UX y watch command)
 
 ## 1.2 Dev.to — Artículo 1 (storytelling)
@@ -295,12 +295,11 @@ Link in comments 👇
 
 Objetivo: 5 PRs abiertos esta semana. La mayoría se acepta en 1-2 semanas.
 
-- [ ] `awesome-claude` — buscar repo existente, si no existe crear uno
-- [ ] `awesome-cli-apps` — abrir PR con descripción: "claudestat — Real-time token monitoring and cost dashboard for Claude Code"
-- [ ] `awesome-developer-tools` — ídem
-- [ ] `awesome-ai-tools` — ídem
-- [ ] `awesome-observability` — ídem
-- [ ] `awesome-llm-tools` — ídem
+- [x] `agarrharr/awesome-cli-apps` — PR abierto ✅
+- [x] `jamesmurdza/awesome-ai-devtools` — PR abierto ✅
+- [x] `mahseema/awesome-ai-tools` — PR abierto ✅
+- [x] `ai-for-developers/awesome-ai-coding-tools` — PR abierto ✅
+- [x] `jondot/awesome-devenv` — PR abierto ✅
 
 **Template de PR:**
 ```markdown
@@ -568,11 +567,11 @@ Herramientas MCP expuestas:
 
 | Día | Canal | Contenido | Estado |
 |-----|-------|-----------|--------|
-| 1 | npm + GitHub | Fase 0 completa (scope, keywords, topics) | [ ] |
-| 2 | Reddit r/ClaudeAI | Post con GIF + datos reales | [ ] |
-| 3 | Dev.to | Artículo 1: storytelling | [ ] |
+| 1 | npm + GitHub | Fase 0 completa (scope, keywords, topics) | [x] |
+| 2 | Reddit r/ClaudeAI | Post con GIF + datos reales | [x] |
+| 3 | Dev.to | Artículo 1: storytelling | [x] |
 | 4 | LinkedIn | Post: datos reales de uso | [ ] |
-| 5 | GitHub | PRs a 5 awesome lists | [ ] |
+| 5 | GitHub | PRs a 5 awesome lists | [x] |
 | 7 | Reddit r/LocalLLaMA | Post versión técnica | [ ] |
 | 8 | Dev.to | Artículo 2: evergreen SEO quota guide | [ ] |
 | 10 | Reddit r/commandline | Post enfocado en terminal UX | [ ] |

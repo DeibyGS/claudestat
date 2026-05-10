@@ -1,0 +1,42 @@
+# claudestat
+> Real-time token monitoring and cost dashboard for Claude Code
+
+claudestat is an open-source CLI tool that provides observability for Claude Code sessions.
+It tracks token usage, API costs, quota consumption, and detects inefficiency patterns
+like loops and excessive context usage.
+
+## Installation
+npm install -g @statforge/claudestat
+
+## Quick start
+claudestat install   # wire hooks into Claude Code
+claudestat start     # start background daemon
+open http://localhost:7337  # live dashboard
+
+## Key capabilities
+- Real-time token cost tracking per tool call
+- Quota guard with configurable kill switch (block new sessions at X%)
+- Loop detection and pattern analysis
+- Per-session cost breakdown with cache savings
+- Claude Code rate limit alerts (desktop notifications at 70%, 85%, 95%)
+- CLI commands: start, stop, watch, status, top, export, doctor
+- Export session data to JSON or CSV
+
+## Use cases
+- Monitor Claude Code token usage in real time
+- Track AI coding costs per session and project
+- Get alerted before hitting quota limits
+- Detect inefficient patterns (loops, context overuse, Bash overuse)
+- Export usage data for reporting or analysis
+- Kill switch: automatically block new sessions when quota is exceeded
+
+## Compatibility
+- Claude Pro, Max 5, Max 20
+- macOS, Linux, Windows
+- Node.js >= 22
+
+## Keywords
+claude code monitoring, token tracking, AI cost analytics, quota management,
+claude code dashboard, ai observability, claude code hooks, rate limit detection,
+llm cost tracker, claude code token usage, ai agent observability,
+claude code cost tracking, agentic workflow monitoring

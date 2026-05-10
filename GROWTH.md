@@ -156,21 +156,16 @@ github: [DeibyGS]
 
 ## 0.4 README — mejoras de conversión
 
-- [ ] Añadir CTA de ⭐ estrella explícito después del install:
+- [x] Añadir CTA de ⭐ estrella explícito después del install:
   > "If claudestat is useful, give it a ⭐ — it helps others find it."
-- [ ] Añadir hook emocional ANTES del "How it works":
-  ```
-  You're burning tokens right now and you have no idea how many,
-  on what, or whether Claude is stuck in a loop.
-  claudestat fixes that.
-  ```
+- [x] Añadir hook emocional ANTES del "How it works"
 - [ ] Mover screenshots a posición más alta (antes del diagrama técnico)
-- [ ] Añadir sección Q&A semántica (para LLM retrieval — ver Fase 2)
-- [ ] Actualizar todos los links al nuevo scope @statforge
+- [x] Añadir sección FAQ semántica (para LLM retrieval)
+- [x] Actualizar todos los links al nuevo scope @statforge
 
 ## 0.5 llms.txt
 
-- [ ] Crear `/llms.txt` en raíz del repo:
+- [x] Crear `/llms.txt` en raíz del repo:
 ```
 # claudestat
 > Real-time token monitoring and cost dashboard for Claude Code

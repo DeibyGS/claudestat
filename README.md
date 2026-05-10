@@ -33,6 +33,8 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 
 ## Why?
 
+You're burning tokens right now and you have no idea how many, on what, or whether Claude is stuck in a loop.
+
 Claude Code is powerful — but it's a black box while it runs. You can't see what it's spending, how deep the context is, whether it's looping, or if you're about to hit your quota limit.
 
 **claudestat fixes that.** It taps into Claude Code's hook system to capture every event, stores it locally in SQLite, and shows you everything in a live dashboard or terminal trace.
@@ -42,6 +44,8 @@ Claude Code is powerful — but it's a black box while it runs. You can't see wh
 - Pattern analyzer: detects loops, Bash overuse, low cache reuse, and more
 - Per-session cost breakdown + cache savings + burn rate
 - AI-generated weekly usage reports
+
+> If claudestat is useful, give it a ⭐ — it helps other developers find it.
 
 ---
 
@@ -429,6 +433,33 @@ npm test           # run all tests
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
+
+---
+
+## FAQ
+
+**What is claudestat?**
+claudestat is a real-time token monitoring and cost analytics tool for Claude Code.
+It captures every tool call, token usage, and API cost as it happens — locally, with zero cloud dependencies.
+
+**How do I monitor Claude Code token usage?**
+Install with `npm install -g @statforge/claudestat`, run `claudestat start`, and open `http://localhost:7337` for the live dashboard.
+
+**How do I track Claude Code costs?**
+claudestat records every session's token usage and estimates API cost per tool call.
+Use `claudestat status` for a quick summary or `claudestat export` for full data export.
+
+**How do I get alerted when Claude Code hits the rate limit?**
+claudestat polls your quota every 60 seconds and sends desktop notifications when you cross 70%, 85%, or 95%. Configure with `claudestat config --alerts true`.
+
+**Does claudestat work with Claude Pro, Max 5, and Max 20?**
+Yes. claudestat auto-detects your plan. You can also force it with `claudestat config --plan max5`.
+
+**Is my data sent to any server?**
+No. All data is stored locally in SQLite at `~/.claudestat/`. Zero cloud dependencies.
+
+**Does claudestat work on Windows?**
+Yes — macOS, Linux, and Windows are all supported.
 
 ---
 

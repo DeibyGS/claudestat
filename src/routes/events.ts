@@ -83,7 +83,7 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
   }
 
   const resolvedCwd = cwd
-    ?? (transcript_path ? transcript_path.split('/').slice(0, -1).join('/') : undefined)
+    ?? (transcript_path ? path.dirname(transcript_path) || undefined : undefined)
 
   dbOps.upsertSession({ id: session_id, cwd: resolvedCwd, started_at: ts, last_event_at: ts })
 
@@ -140,7 +140,7 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
     try {
       const inp      = typeof tool_input === 'string' ? JSON.parse(tool_input) : (tool_input ?? {})
       const filePath = inp?.file_path ?? inp?.path
-      if (typeof filePath === 'string' && filePath.startsWith('/')) {
+      if (typeof filePath === 'string' && path.isAbsolute(filePath)) {
         const projectCwd = findProjectCwdForFile(filePath)
         if (projectCwd) dbOps.updateSessionProject(session_id, projectCwd)
       }

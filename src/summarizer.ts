@@ -57,7 +57,7 @@ function buildContext(events: EventRow[], costUsd: number, projectName?: string)
     try {
       const inp = JSON.parse(e.tool_input)
       const fp  = inp.file_path || inp.path
-      if (typeof fp === 'string' && fp.startsWith('/')) {
+      if (typeof fp === 'string' && path.isAbsolute(fp)) {
         filesSet.add(path.basename(fp))
       }
     } catch { /* ignorar */ }

@@ -33,6 +33,13 @@ try { db.exec(`
   )
 `) } catch { /* ya existe */ }
 
+try { db.exec(`
+  CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )
+`) } catch { /* ya existe */ }
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     id                     TEXT    PRIMARY KEY,
@@ -436,6 +443,28 @@ const stmts = {
     LIMIT ?
   `),
 
+  getWeeklyInsight: db.prepare(`
+    SELECT
+      COUNT(*)                                                      AS total_sessions,
+      COALESCE(SUM(total_cost_usd),       0)                        AS total_cost,
+      COALESCE(SUM(total_input_tokens),   0)                        AS input_tokens,
+      COALESCE(SUM(total_output_tokens),  0)                        AS output_tokens,
+      COALESCE(SUM(total_cache_read),     0)                        AS cache_read,
+      COALESCE(SUM(loops_detected),       0)                        AS total_loops,
+      COALESCE(AVG(CASE WHEN efficiency_score > 0 THEN efficiency_score END), 100) AS avg_efficiency,
+      MIN(started_at)                                               AS week_start,
+      MAX(last_event_at)                                            AS week_end
+    FROM sessions
+    WHERE started_at >= ?
+  `),
+
+  upsertMeta: db.prepare(`
+    INSERT INTO meta (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `),
+
+  getMeta: db.prepare(`SELECT value FROM meta WHERE key = ?`),
+
   getCostProjection: db.prepare(`
     SELECT
       SUM(total_cost_usd)   AS total_cost_usd,
@@ -637,6 +666,25 @@ export const dbOps = {
       tools.push({ tool_name: 'Other', count: 0, total_duration_ms: 0, total_cost_usd: other.other_cost_usd })
     }
     return tools
+  },
+
+  getWeeklyInsight(days = 7) {
+    const since = Date.now() - days * 86_400_000
+    return stmts.getWeeklyInsight.get(since) as {
+      total_sessions: number; total_cost: number
+      input_tokens: number; output_tokens: number; cache_read: number
+      total_loops: number; avg_efficiency: number
+      week_start: number; week_end: number
+    }
+  },
+
+  setMeta(key: string, value: string) {
+    stmts.upsertMeta.run(key, value)
+  },
+
+  getMeta(key: string): string | undefined {
+    const row = stmts.getMeta.get(key) as { value: string } | undefined
+    return row?.value
   },
 
   getCostProjection(days = 7) {

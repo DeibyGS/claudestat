@@ -1,5 +1,6 @@
 import { dbOps, type SessionRow, type EventRow } from './db.js'
 import { spawn as spawnCb } from 'child_process'
+import path from 'path'
 
 interface SessionData {
   id: string
@@ -62,7 +63,7 @@ async function getSessionData(sessionId?: string): Promise<SessionData | null> {
   }
 
   const durationMs = (session.last_event_at || session.started_at) - session.started_at
-  const project = session.project_path?.split('/').pop() || 'unknown'
+  const project = path.basename(session.project_path ?? '') || 'unknown'
 
   return {
     id: session.id,

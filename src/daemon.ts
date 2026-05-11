@@ -209,6 +209,18 @@ export function startDaemon() {
     console.log(`  Waiting for Claude Code events...\n`)
     console.log(`  In another terminal: \x1b[36mclaudestat watch\x1b[0m\n`)
 
+    // Weekly insight — se muestra una vez por semana al iniciar el daemon
+    import('./insights').then(({ getWeeklyInsightData, shouldShowInsight, markInsightShown, renderWeeklyInsight }) => {
+      try {
+        if (!shouldShowInsight()) return
+        const data = getWeeklyInsightData()
+        if (data.total_sessions >= 3) {
+          console.log(renderWeeklyInsight(data))
+        }
+        markInsightShown()
+      } catch { /* insight is non-critical */ }
+    })
+
     // Etiquetar sesiones históricas que no tienen proyecto asignado
     migrateSessionProjects()
 

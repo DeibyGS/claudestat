@@ -30,7 +30,7 @@ export function inferProjectCwd(events: EventRow[]): string | undefined {
     try {
       const inp      = JSON.parse(ev.tool_input)
       const filePath = (inp.file_path || inp.path) as string | undefined
-      if (!filePath?.startsWith('/')) continue
+      if (!filePath || !path.isAbsolute(filePath)) continue
       const cwd = findProjectCwdForFile(filePath)
       if (cwd) return cwd
     } catch { /* ignorar */ }
@@ -59,7 +59,7 @@ export function inferActiveProjectByMajority(events: EventRow[], windowMs: numbe
     try {
       const inp      = JSON.parse(ev.tool_input)
       const filePath = (inp.file_path || inp.path) as string | undefined
-      if (!filePath?.startsWith('/')) continue
+      if (!filePath || !path.isAbsolute(filePath)) continue
       const project = findProjectCwdForFile(filePath)
       if (!project) continue
       const entry = hits.get(project) ?? { count: 0, lastTs: 0 }

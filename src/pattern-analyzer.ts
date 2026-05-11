@@ -12,6 +12,7 @@
  *   - High cache ratio → positive: great cost efficiency
  *   - High avg cost    → consider Haiku for simpler tasks
  *   - Low efficiency   → linked to loops
+ *   - Write vs Edit    → suggest Edit for incremental changes
  */
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -82,6 +83,19 @@ export function analyzePatterns(
       title:       'Bash used more than Read/Grep',
       description: 'Bash can do the same as cat, grep or find, but is slower and less transparent. Dedicated tools (Read, Grep, Glob) are safer and faster for Claude.',
       metric:      `${bashPct}% Bash (${bashCount}) vs ${readGrep} Read+Grep+Glob`,
+    })
+  }
+
+  // ── Heavy Write vs Edit ────────────────────────────────────────────────────
+  const writeCount = get('Write')
+  const editCount  = get('Edit')
+  const writePct   = Math.round(writeCount / totalTools * 100)
+  if (writeCount > editCount * 3 && writeCount >= 10) {
+    insights.push({
+      level:       'tip',
+      title:       'Heavy Write vs Edit usage',
+      description: 'More than 3× Write calls vs Edit calls. Editing existing files is cheaper in tokens than writing from scratch. Consider using Edit for incremental changes instead of rewriting entire files.',
+      metric:      `${writePct}% Write (${writeCount} writes vs ${editCount} edits)`,
     })
   }
 

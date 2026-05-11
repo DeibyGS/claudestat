@@ -217,3 +217,23 @@ test('metric field is populated for all triggered insights', () => {
     assert.ok(insight.metric, `insight "${insight.title}" missing metric field`)
   }
 })
+
+// ─── Heavy Write vs Edit ────────────────────────────────────────────────────────
+
+test('detects heavy Write vs Edit when Write > 3× Edit and Write >= 10', () => {
+  const result = analyzePatterns(tools({ Write: 20, Edit: 5, Read: 25 }, 50), baseStats)
+  const found = result.find(i => i.title === 'Heavy Write vs Edit usage')
+  assert.ok(found, 'should detect Write dominance')
+  assert.equal(found!.level, 'tip')
+  assert.match(found!.metric!, /20 writes vs/)
+})
+
+test('no Write vs Edit trigger when Write < 3× Edit', () => {
+  const result = analyzePatterns(tools({ Write: 15, Edit: 10, Read: 25 }, 50), baseStats)
+  assert.ok(!result.find(i => i.title === 'Heavy Write vs Edit usage'))
+})
+
+test('no Write vs Edit trigger when Write < 10 even if ratio is high', () => {
+  const result = analyzePatterns(tools({ Write: 9, Edit: 2, Read: 39 }, 50), baseStats)
+  assert.ok(!result.find(i => i.title === 'Heavy Write vs Edit usage'))
+})

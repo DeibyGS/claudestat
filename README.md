@@ -547,6 +547,8 @@ npm test           # run all tests
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 
+This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md).
+
 ---
 
 ## Contributors

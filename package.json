@@ -59,7 +59,7 @@
     "dev": "tsx src/index.ts",
     "dev:full": "tsx src/index.ts start & sleep 1 && cd dashboard && npm run dev",
     "start": "node dist/index.js",
-    "test": "bash run-tests.sh"
+    "test": "node --require tsx/cjs tests/index.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",

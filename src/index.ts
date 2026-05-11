@@ -88,7 +88,7 @@ if (process.env.NVM_DIR || process.env.NVM_HOME) {
       process.stderr.write(
         `\x1b[33m⚠️  claudestat is running from ${runningFrom}\x1b[0m\n` +
         `   This binary may not match the active Node version (${process.version}).\n` +
-        `   Fix: \x1b[36mnvm use default && npm install -g @deibygs/claudestat\x1b[0m\n` +
+        `   Fix: \x1b[36mnvm use default && npm install -g @statforge/claudestat\x1b[0m\n` +
         `   Then restart your terminal or run: \x1b[36m${refreshCmd}\x1b[0m\n\n`
       )
     }

@@ -48,7 +48,8 @@
     "dashboard/dist/"
   ],
   "bin": {
-    "claudestat": "dist/index.js"
+    "claudestat": "dist/index.js",
+    "claudestat-mcp": "dist/mcp-server.js"
   },
   "scripts": {
     "build": "tsc && npm run build:dashboard",

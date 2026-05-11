@@ -43,7 +43,9 @@ Claude Code is powerful — but it's a black box while it runs. You can't see wh
 - Quota guard with configurable kill switch (block new sessions at X%)
 - Pattern analyzer: detects loops, Bash overuse, low cache reuse, and more
 - Per-session cost breakdown + cache savings + burn rate
+- Weekly usage insights with actionable tips
 - AI-generated weekly usage reports
+- MCP server: query quota, sessions, and tools from within Claude Code
 
 > If claudestat is useful, give it a ⭐ — it helps other developers find it.
 
@@ -140,6 +142,7 @@ That's it. Start a Claude Code session and watch the events flow in.
 | `claudestat status --compact` | One-line output for tmux status bar |
 | `claudestat config` | View or edit configuration |
 | `claudestat top` | Rank tools by cost, call count, or duration |
+| `claudestat weekly` | Weekly usage summary with actionable tips |
 | `claudestat export [format]` | Export session data to JSON or CSV |
 | `claudestat share [session-id]` | Generate shareable session card (ASCII/JSON) |
 | `claudestat roast` | Sarcastic usage analysis with roast jokes |
@@ -183,6 +186,22 @@ claudestat top
 
 Options: `--by cost|count|duration` · `--days 7|30|90` · `--limit N`
 
+### `claudestat weekly`
+
+Weekly usage summary with an actionable tip. Detects patterns like Bash overuse, low efficiency, high session count, and loop frequency.
+
+```
+claudestat weekly
+
+📊 claudestat weekly insight (May 5 — May 11)
+──────────────────────────────────────────────
+   Sessions: 42  ·  Cost: $146.21  ·  Loops: 93
+   Top tool: Bash (21% of cost)  ·  Efficiency: 93/100
+   ⚡ Tip: Group bash commands to reduce tool calls — each call costs context
+```
+
+Options: `--json` for machine-readable output.
+
 ### `claudestat status`
 
 ```
@@ -190,17 +209,17 @@ claudestat status
 
   Quota 5h   45/50 prompts (90%)  |  reset in 22m
   Plan        MAX5
-  Sonnet      3.2h / 5h  this week
+  Weekly      3.5h / 40h (9%)  this week
   Burn rate   1,240 tok/min
 ```
 
 ### `claudestat status --compact`
 
-One-line output for tmux status bar or scripting. Shows the 5h cycle quota percentage.
+One-line output for tmux status bar or scripting. Shows cycle quota and weekly usage with colored emoji.
 
 ```bash
 claudestat status --compact
-Current 45%🟡 pro
+C:45%🟡 W:9%🟢 pro
 ```
 
 ### `claudestat share`
@@ -321,6 +340,35 @@ claudestat config --alerts false
 ```
 
 Config is stored at `~/.claudestat/config.json` (macOS/Linux) or `%USERPROFILE%\.claudestat\config.json` (Windows).
+
+---
+
+## MCP Server
+
+claudestat includes an MCP (Model Context Protocol) server that lets Claude Code query its own usage stats — Claude can tell you its quota, session cost, and top tools in real time.
+
+### Tools exposed
+
+| Tool | Description |
+|------|------------|
+| `get_quota_status` | 5h cycle usage %, plan, weekly hours, burn rate |
+| `get_current_session` | Latest session: cost, tokens, efficiency, loops |
+| `get_session_stats` | Aggregated stats for N days |
+| `get_top_tools` | Top 10 tools by cost/count/duration |
+| `get_weekly_insight` | Weekly summary with actionable tip |
+
+### Register with Claude Code
+
+```bash
+claude mcp add --transport stdio claudestat -- claudestat-mcp
+```
+
+Once registered, ask Claude things like:
+- *"What's my current quota status?"*
+- *"Show me my latest session cost"*
+- *"What are my top 5 tools by cost this week?"*
+
+Zero extra dependencies — stdio JSON-RPC, works without the daemon running.
 
 ---
 
@@ -498,6 +546,16 @@ npm test           # run all tests
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
+
+---
+
+## Contributors
+
+Thanks to everyone who has contributed to claudestat:
+
+[Deiby Gorrin](https://github.com/DeibyGS) — creator and maintainer
+
+Want to appear here? Pick a [good-first-issue](https://github.com/DeibyGS/claudestat/labels/good-first-issue) and open a PR.
 
 ---
 

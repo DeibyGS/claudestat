@@ -122,7 +122,7 @@ All tests use `node:test` (built-in, zero extra deps) with `tsx/cjs` for TypeScr
 npm test
 ```
 
-Expected output: **44 tests passing**. All tests must pass before opening a PR.
+Expected output: **214 tests passing** (as of v1.1.1). All tests must pass before opening a PR.
 
 - `tests/pattern-analyzer.test.ts` — pure unit tests, no DB, no side effects
 - `tests/db.test.ts` — integration tests against an in-memory SQLite DB

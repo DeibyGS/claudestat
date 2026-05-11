@@ -26,6 +26,7 @@ import type { ClaudestatConfig }        from './config'
 import { runDoctor }                    from './doctor'
 import { runShare }                   from './share'
 import { runRoast }                  from './roast'
+import { getWeeklyInsightData, renderWeeklyInsight } from './insights'
 import { getPidFile, whichCmd, isWindows } from './paths'
 
 const program  = new Command()
@@ -62,7 +63,11 @@ async function stopDaemon(): Promise<void> {
 
   try {
     const pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10)
-    process.kill(pid, 'SIGTERM')
+    if (process.platform === 'win32') {
+      process.kill(pid)
+    } else {
+      process.kill(pid, 'SIGTERM')
+    }
     console.log(`✅ claudestat daemon stopped (pid ${pid})`)
     removePidFile()
   } catch (e: any) {
@@ -163,8 +168,9 @@ program
       if (opts.compact) {
         const pctCycle = q.cyclePct
         const cycleEmoji = pctCycle >= 95 ? '🔴' : pctCycle >= 70 ? '🟡' : '🟢'
+        const wEmoji = q.weeklyPctAll >= 95 ? '🔴' : q.weeklyPctAll >= 70 ? '🟡' : '🟢'
         
-        console.log(`Current ${pctCycle}%${cycleEmoji} ${q.detectedPlan}`)
+        console.log(`C:${pctCycle}%${cycleEmoji} W:${q.weeklyPctAll}%${wEmoji} ${q.detectedPlan}`)
         process.exit(0)
       }
 
@@ -179,6 +185,7 @@ program
           weeklyLimitSonnet: q.weeklyLimitSonnet,
           weeklyHoursOpus:   q.weeklyHoursOpus,
           weeklyLimitOpus:   q.weeklyLimitOpus,
+          weeklyPctAll:      q.weeklyPctAll,
           burnRateTokensPerMin: q.burnRateTokensPerMin,
         }))
         process.exit(0)
@@ -195,22 +202,25 @@ program
         ? `${Math.floor(resetMin / 60)}h ${resetMin % 60}m`
         : `${resetMin}m`
 
-      const burnLabel = q.burnRateTokensPerMin > 0
-        ? ` │ 🔥 ${q.burnRateTokensPerMin.toLocaleString()} tok/min`
-        : ''
-
       const burnRow = q.burnRateTokensPerMin > 0
         ? `  Burn rate   ${q.burnRateTokensPerMin.toLocaleString()} tok/min\n`
         : ''
+
+      const weeklyTotalHours = q.weeklyHoursSonnet + q.weeklyHoursOpus
+      const weeklyLimitTotal = q.weeklyLimitSonnet + q.weeklyLimitOpus
+      const weeklyPctColor = q.weeklyPctAll >= 95 ? '\x1b[31m'
+        : q.weeklyPctAll >= 70 ? '\x1b[33m'
+        : '\x1b[32m'
 
       console.log(
         `\n📊 claudestat status\n` +
         `──────────────────────────────────────────\n` +
         `  Quota 5h    ${pctColor}${q.cyclePrompts}/${q.cycleLimit} prompts (${q.cyclePct}%)${R}  │  resets in ${resetLabel}\n` +
         `  Plan        ${q.detectedPlan.toUpperCase()}\n` +
-        `  Sonnet      ${q.weeklyHoursSonnet}h / ${q.weeklyLimitSonnet}h  this week\n` +
+        `  Weekly      ${weeklyTotalHours}h / ${weeklyLimitTotal}h (${weeklyPctColor}${q.weeklyPctAll}%${R})  this week\n` +
         (q.weeklyLimitOpus > 0
-          ? `  Opus        ${q.weeklyHoursOpus}h / ${q.weeklyLimitOpus}h  this week\n`
+          ?  `   ├─ Sonnet  ${q.weeklyHoursSonnet}h / ${q.weeklyLimitSonnet}h\n` +
+             `   └─ Opus    ${q.weeklyHoursOpus}h / ${q.weeklyLimitOpus}h\n`
           : '') +
         `${burnRow}` +
         `──────────────────────────────────────────\n`
@@ -365,6 +375,29 @@ program
     try {
       const months = parseInt(opts.months || '1', 10)
       await runRoast({ stats: !!opts.stats, months })
+      process.exit(0)
+    } catch (err: any) {
+      console.error('\n❌ Error:', err.message)
+      process.exit(1)
+    }
+  })
+
+program
+  .command('weekly')
+  .description('Show weekly usage summary')
+  .option('--json', 'Output as JSON')
+  .action(async (opts) => {
+    try {
+      const data = getWeeklyInsightData()
+      if (data.total_sessions === 0) {
+        console.log('\n📊 No usage data yet — start using Claude Code and claudestat will track it.\n')
+        process.exit(0)
+      }
+      if (opts.json) {
+        console.log(JSON.stringify(data, null, 2))
+        process.exit(0)
+      }
+      console.log(renderWeeklyInsight(data))
       process.exit(0)
     } catch (err: any) {
       console.error('\n❌ Error:', err.message)

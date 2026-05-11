@@ -50,14 +50,15 @@ export interface QuotaData {
   cycleResetAt:    number   // timestamp absoluto del próximo reset (rolling window)
   cycleStartTs:    number   // timestamp (ms) del primer mensaje del ciclo actual
   // Semanal por modelo (horas de actividad en ventanas de 5 min)
-  weeklyHoursSonnet:  number
-  weeklyHoursOpus:    number
-  weeklyHoursHaiku:   number
+  weeklyHoursSonnet: number
+  weeklyHoursOpus:   number
+  weeklyHoursHaiku:  number
   weeklyTokensSonnet: number
   weeklyTokensOpus:   number
   weeklyTokensHaiku:  number
   weeklyLimitSonnet:  number
-  weeklyLimitOpus:   number
+  weeklyLimitOpus:    number
+  weeklyPctAll:       number    // % combinado Sonnet+Opus (coincide con claude.ai "Todos los modelos")
   // Burn rate
   burnRateTokensPerMin: number  // tokens/min en los últimos 30 min (0 si sin actividad)
   // Plan
@@ -339,6 +340,13 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
     ? Math.round(totalRecentTok / 30)
     : 0
 
+  // ─ % semanal combinado (Sonnet + Opus, coincide con "Todos los modelos" de claude.ai) ─
+  const weeklyPctAll = limits.weeklyHoursSonnet + limits.weeklyHoursOpus > 0
+    ? Math.min(100, Math.round(
+        (weeklyHoursSonnet + weeklyHoursOpus) / (limits.weeklyHoursSonnet + limits.weeklyHoursOpus) * 100
+      ))
+    : 0
+
   const data: QuotaData = {
     cyclePrompts:       cycleEntries.filter(e => e.type === 'human').length,
     cycleLimit:        limits.prompts5h,
@@ -356,6 +364,7 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
     weeklyTokensHaiku,
     weeklyLimitSonnet: limits.weeklyHoursSonnet,
     weeklyLimitOpus:   limits.weeklyHoursOpus,
+    weeklyPctAll,
     burnRateTokensPerMin,
     detectedPlan:      plan,
     planSource,

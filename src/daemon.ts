@@ -114,7 +114,7 @@ async function migrateSessionSummaries(limit = 5) {
       const summary     = await summarizeSession(events, s.total_cost_usd ?? 0, projectName)
       if (summary) {
         dbOps.updateSessionSummary(s.id, summary)
-        console.log(`[daemon] Summary generado para sesión ${s.id.slice(0, 8)}: "${summary}"`)
+        console.log(`[daemon] Summary generated for session ${s.id.slice(0, 8)}: "${summary}"`)
       }
     } catch (err) { console.error('[daemon] Error generating summary:', err) }
   }
@@ -143,7 +143,26 @@ const LEVEL_COLOR = {
   red:    '\x1b[31m',
 } as const
 
-let _lastAlertLevel: string | null = null
+let _lastCycleAlertLevel:  string | null = null
+let _lastWeeklyAlertLevel: string | null = null
+let _resetReminderFired = false
+
+function checkAlertLevel(
+  level: 'yellow' | 'orange' | 'red' | null,
+  lastLevel: string | null,
+  logMsg: string,
+  notifTitle: string,
+  notifBody: string
+): string | null {
+  if (!level) return null
+  const prevRank = lastLevel ? LEVEL_RANK[lastLevel as keyof typeof LEVEL_RANK] ?? 0 : 0
+  const currRank = LEVEL_RANK[level]
+  if (currRank > prevRank) {
+    process.stderr.write(`${LEVEL_COLOR[level]}${logMsg}\x1b[0m\n`)
+    sendDesktopNotification(notifTitle, notifBody)
+  }
+  return currRank > prevRank ? level : lastLevel
+}
 
 function startAlertPolling() {
   alertInterval = setInterval(() => {
@@ -151,28 +170,40 @@ function startAlertPolling() {
       const cfg  = readConfig()
       if (!cfg.alertsEnabled) return
       const data = computeQuota(cfg.plan ?? undefined)
-      const level = getWarnLevel(data.cyclePct, cfg.warnThresholds)
+      const resetMins = Math.ceil(data.cycleResetMs / 60_000)
 
-      if (!level) {
-        _lastAlertLevel = null
-        return
-      }
+      // ── Cycle 5h alerts ──────────────────────────────────────────────────────
+      _lastCycleAlertLevel = checkAlertLevel(
+        getWarnLevel(data.cyclePct, cfg.warnThresholds),
+        _lastCycleAlertLevel,
+        `[claudestat] ⚠️  5h cycle at ${data.cyclePct}% (${data.cyclePrompts}/${data.cycleLimit} prompts)`,
+        'claudestat — 5h cycle alert',
+        `${data.cyclePct}% of cycle used · resets in ${resetMins}m`
+      )
 
-      const prevRank = _lastAlertLevel ? LEVEL_RANK[_lastAlertLevel as keyof typeof LEVEL_RANK] ?? 0 : 0
-      const currRank = LEVEL_RANK[level as keyof typeof LEVEL_RANK] ?? 0
+      // ── Weekly alerts ────────────────────────────────────────────────────────
+      _lastWeeklyAlertLevel = checkAlertLevel(
+        getWarnLevel(data.weeklyPctAll, cfg.weeklyWarnThresholds),
+        _lastWeeklyAlertLevel,
+        `[claudestat] ⚠️  Weekly usage at ${data.weeklyPctAll}%`,
+        'claudestat — Weekly usage alert',
+        `${data.weeklyPctAll}% of weekly quota used`
+      )
 
-      if (currRank > prevRank) {
-        const color = LEVEL_COLOR[level]
-        process.stderr.write(`${color}[claudestat] ⚠️  Rate limit alert: ${data.cyclePct}% of quota used (${data.cyclePrompts}/${data.cycleLimit} prompts)\x1b[0m\n`)
-
-        if (data.cyclePct >= cfg.killSwitchThreshold) {
+      // ── Reset reminder ───────────────────────────────────────────────────────
+      const reminderMs = (cfg.resetReminderMins ?? 10) * 60_000
+      if (reminderMs > 0) {
+        if (data.cycleResetMs > reminderMs * 1.5) {
+          _resetReminderFired = false  // cycle reset happened — arm reminder again
+        } else if (data.cycleResetMs <= reminderMs && data.cycleResetMs > 0 && !_resetReminderFired) {
+          const mins = Math.ceil(data.cycleResetMs / 60_000)
+          process.stderr.write(`\x1b[36m[claudestat] ⏰  Quota resets in ${mins}m — good time to wrap up\x1b[0m\n`)
           sendDesktopNotification(
-            'claudestat — Rate limit warning',
-            `${data.cyclePct}% of 5h quota used (${data.cyclePrompts}/${data.cycleLimit} prompts)`
+            'claudestat — Quota reset soon',
+            `Your 5h cycle resets in ${mins} min — good time to start a new task`
           )
+          _resetReminderFired = true
         }
-
-        _lastAlertLevel = level
       }
     } catch {
       // quota read failed — ignore
@@ -260,6 +291,8 @@ export function startDaemon() {
 
     // Polling de alertas de rate limit cada 60s
     startAlertPolling()
+
+    // API quota data is refreshed on-demand by the CLI status command (disk cache shared)
   })
 
   // Manejo de error de puerto ocupado — fuera del callback para capturar EADDRINUSE

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --disable-warning=ExperimentalWarning
 /**
  * mcp-server.ts — MCP (Model Context Protocol) server for claudestat
  *
@@ -14,12 +14,13 @@ process.on('warning', (w) => {
 
 import * as readline from 'readline'
 import { dbOps } from './db'
-import { computeQuota } from './quota-tracker'
-import { getWeeklyInsightData, generateTip } from './insights'
+import { computeQuota, refreshFromApi } from './quota-tracker'
+import { getWeeklyInsightData, generateTip, getUsageInsights } from './insights'
+import { readConfig, getWarnLevel } from './config'
 
 const SERVER_NAME = 'claudestat'
-const SERVER_VERSION = '1.1.1'
-const PROTOCOL_VERSION = '2025-06-18'
+const SERVER_VERSION = '1.2.0'
+const PROTOCOL_VERSION = '2025-03-26'
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 type JsonRpcRequest = { jsonrpc: '2.0'; id?: number | string; method: string; params?: Record<string, unknown> }
@@ -77,6 +78,20 @@ const TOOLS = [
     }
   },
   {
+    name: 'get_usage_insights',
+    description: 'Get unique usage insights not available in /usage: cost per project, cache savings, output/input ratio, efficiency trend, and peak hours',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        days: {
+          type: 'number',
+          description: 'Days to look back (default 7)'
+        }
+      },
+      required: []
+    }
+  },
+  {
     name: 'get_weekly_insight',
     description: 'Get the weekly usage summary with an actionable tip (same as claudestat weekly command)',
     inputSchema: {
@@ -117,7 +132,7 @@ function toolGetQuotaStatus(): string {
   const parts: string[] = [
     `Quota status — ${q.detectedPlan.toUpperCase()} plan`,
     ``,
-    `5h cycle:    ${q.cyclePrompts}/${q.cycleLimit} prompts (${q.cyclePct}%)  ·  resets in ${resetLabel}`,
+    `5h cycle:    ${q.cyclePct}%  ·  ${q.cyclePrompts}/${q.cycleLimit} prompts  ·  resets in ${resetLabel}`,
     `Weekly:      ${weeklyTotalHours}h / ${weeklyLimitTotal}h (${q.weeklyPctAll}%)`,
   ]
   if (q.weeklyLimitOpus > 0) {
@@ -127,6 +142,32 @@ function toolGetQuotaStatus(): string {
   if (q.burnRateTokensPerMin > 0) {
     parts.push(`Burn rate:   ${q.burnRateTokensPerMin.toLocaleString()} tokens/min`)
   }
+
+  // Active alerts — only shown when thresholds are crossed
+  const cfg = readConfig()
+  if (cfg.alertsEnabled) {
+    const alerts: string[] = []
+    const cycleLevel  = getWarnLevel(q.cyclePct,    cfg.warnThresholds)
+    const weeklyLevel = getWarnLevel(q.weeklyPctAll, cfg.weeklyWarnThresholds)
+
+    if (cycleLevel === 'red')    alerts.push(`🔴 5h cycle at ${q.cyclePct}% — critical, limit imminent`)
+    else if (cycleLevel)         alerts.push(`⚠️  5h cycle at ${q.cyclePct}% — approaching limit`)
+
+    if (weeklyLevel === 'red')   alerts.push(`🔴 Weekly at ${q.weeklyPctAll}% — critical`)
+    else if (weeklyLevel)        alerts.push(`⚠️  Weekly at ${q.weeklyPctAll}% — approaching weekly limit`)
+
+    const reminderMins = cfg.resetReminderMins ?? 10
+    if (reminderMins > 0 && resetMin <= reminderMins && resetMin > 0) {
+      alerts.push(`⏰  Cycle resets in ${resetMin}m — good time to wrap up or start fresh`)
+    }
+
+    if (alerts.length > 0) {
+      parts.push(``)
+      parts.push(`─── ACTIVE ALERTS ───────────────────────`)
+      parts.push(...alerts)
+    }
+  }
+
   return parts.join('\n')
 }
 
@@ -202,6 +243,59 @@ function toolGetTopTools(days: number, sortBy: string): string {
   return lines.join('\n')
 }
 
+function toolGetUsageInsights(days: number): string {
+  const d = Math.max(1, Math.min(90, Math.floor(days || 7)))
+  const i = getUsageInsights(d)
+
+  if (i.total_sessions === 0) return `No data for the last ${d} days.`
+
+  const fmtDollar = (n: number) => n < 0.01 ? '< $0.01' : `$${n.toFixed(2)}`
+  const bar = (pct: number, width = 20): string =>
+    '█'.repeat(Math.round(pct / 100 * width)) + '░'.repeat(width - Math.round(pct / 100 * width))
+
+  const lines: string[] = []
+  lines.push(`💡 Usage insights — last ${d} days`)
+  lines.push('━'.repeat(44))
+  lines.push(``)
+  lines.push(`  💰  ${fmtDollar(i.avg_cost_per_session)}/session  ·  ${i.total_sessions} sessions  ·  ${fmtDollar(i.total_cost)} total`)
+
+  if (i.project_costs.length > 0) {
+    lines.push(``)
+    lines.push(`  🗂  Top projects`)
+    const topTotal = i.project_costs.reduce((s, p) => s + p.total_cost, 0)
+    for (const p of i.project_costs.slice(0, 4)) {
+      const pct  = topTotal > 0 ? Math.round(p.total_cost / topTotal * 100) : 0
+      const name = (p.project.split('/').pop() ?? p.project).slice(0, 14).padEnd(14)
+      lines.push(`     ${name}  ${bar(pct)}  ${fmtDollar(p.total_cost)}  ${pct}%`)
+    }
+  }
+
+  lines.push(``)
+  lines.push(`  ⚡  Cache ~${fmtDollar(i.cache_savings_usd)} saved  ·  ${i.cache_hit_pct}% hit rate`)
+  lines.push(``)
+  lines.push(`  📊  ${i.output_input_ratio}× output/input  ·  ${i.ratio_label}`)
+  lines.push(``)
+
+  const effTrend = i.efficiency_delta !== -999
+    ? `  ${i.efficiency_delta > 0 ? `↑ +${i.efficiency_delta}` : i.efficiency_delta < 0 ? `↓ ${i.efficiency_delta}` : '→ same'} vs prev period`
+    : ''
+  lines.push(`  📈  Efficiency  ${i.avg_efficiency}/100${effTrend}  ·  ${i.total_loops} loops`)
+
+  if (i.hour_ranges.length > 0) {
+    lines.push(``)
+    lines.push(`  ⏰  Activity by time of day`)
+    const maxCount = Math.max(...i.hour_ranges.map(r => r.count))
+    for (const r of i.hour_ranges) {
+      const pct = maxCount > 0 ? Math.round(r.count / maxCount * 100) : 0
+      lines.push(`     ${r.emoji}  ${r.from}–${r.to}  ${bar(pct)}  ${r.count} sessions`)
+    }
+  }
+
+  lines.push(``)
+  lines.push('━'.repeat(44))
+  return lines.join('\n')
+}
+
 function toolGetWeeklyInsight(days: number): string {
   const d = Math.max(1, Math.min(90, Math.floor(days || 7)))
   const data = getWeeklyInsightData(d)
@@ -223,27 +317,25 @@ function toolGetWeeklyInsight(days: number): string {
   ].join('\n')
 }
 
-function handleToolCall(name: string, args: Record<string, unknown>): string {
+async function handleToolCall(name: string, args: Record<string, unknown>): Promise<string> {
   const days = typeof args.days === 'number' ? args.days : 7
   const sortBy = typeof args.sort_by === 'string' ? args.sort_by : 'cost'
 
   switch (name) {
-    case 'get_quota_status':     return toolGetQuotaStatus()
-    case 'get_current_session':  return toolGetCurrentSession()
-    case 'get_session_stats':    return toolGetSessionStats(days)
-    case 'get_top_tools':        return toolGetTopTools(days, sortBy)
-    case 'get_weekly_insight':   return toolGetWeeklyInsight(days)
+    case 'get_quota_status':    await refreshFromApi(); return toolGetQuotaStatus()
+    case 'get_current_session': return toolGetCurrentSession()
+    case 'get_session_stats':   return toolGetSessionStats(days)
+    case 'get_top_tools':       return toolGetTopTools(days, sortBy)
+    case 'get_usage_insights':  return toolGetUsageInsights(days)
+    case 'get_weekly_insight':  return toolGetWeeklyInsight(days)
     default: return `Unknown tool: ${name}`
   }
 }
 
-function handleRequest(msg: JsonRpcRequest): JsonRpcResponse | null {
+async function handleRequest(msg: JsonRpcRequest): Promise<JsonRpcResponse | null> {
   const { id, method, params } = msg
 
-  if (id === undefined) {
-    if (method === 'notifications/initialized') return null
-    return null
-  }
+  if (id === undefined) return null
 
   try {
     switch (method) {
@@ -263,7 +355,7 @@ function handleRequest(msg: JsonRpcRequest): JsonRpcResponse | null {
       case 'tools/call': {
         const toolName = (params as any)?.name as string
         const toolArgs = ((params as any)?.arguments ?? {}) as Record<string, unknown>
-        const text = handleToolCall(toolName, toolArgs)
+        const text = await handleToolCall(toolName, toolArgs)
         return {
           jsonrpc: '2.0', id,
           result: { content: [{ type: 'text', text }], isError: false }
@@ -291,10 +383,11 @@ rl.on('line', (line: string) => {
   if (!trimmed) return
   try {
     const msg = JSON.parse(trimmed) as JsonRpcRequest
-    const response = handleRequest(msg)
-    if (response) {
-      process.stdout.write(JSON.stringify(response) + '\n')
-    }
+    handleRequest(msg).then(response => {
+      if (response) process.stdout.write(JSON.stringify(response) + '\n')
+    }).catch((e: any) => {
+      process.stderr.write(`[claudestat-mcp] Handler error: ${e.message}\n`)
+    })
   } catch (e: any) {
     process.stderr.write(`[claudestat-mcp] Parse error: ${e.message}\n`)
   }
@@ -302,5 +395,7 @@ rl.on('line', (line: string) => {
 
 process.on('SIGTERM', () => process.exit(0))
 process.on('SIGINT', () => process.exit(0))
+
+// API quota is refreshed on-demand per get_quota_status call (disk cache throttles to 1 call/5min)
 
 process.stderr.write(`[claudestat-mcp] Server ready (stdio, protocol ${PROTOCOL_VERSION})\n`)

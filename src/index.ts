@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --disable-warning=ExperimentalWarning
 /**
  * index.ts — Entry point del CLI
  *
@@ -26,8 +26,9 @@ import type { ClaudestatConfig }        from './config'
 import { runDoctor }                    from './doctor'
 import { runShare }                   from './share'
 import { runRoast }                  from './roast'
-import { getWeeklyInsightData, renderWeeklyInsight } from './insights'
+import { getWeeklyInsightData, renderWeeklyInsight, getUsageInsights, renderInsights } from './insights'
 import { getPidFile, whichCmd, isWindows } from './paths'
+import { refreshFromApi } from './quota-tracker'
 
 const program  = new Command()
 const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version
@@ -156,6 +157,7 @@ program
   .option('--compact', 'One-line output for tmux')
   .action(async (opts) => {
     try {
+      await refreshFromApi()  // refresh disk cache on demand; daemon reads from disk
       const [quotaRes, healthRes] = await Promise.all([
         fetch('http://localhost:7337/quota'),
         fetch('http://localhost:7337/health'),
@@ -191,40 +193,50 @@ program
         process.exit(0)
       }
 
-      const R = '\x1b[0m'
-      const pctColor = q.cyclePct >= 95 ? '\x1b[31m'
-        : q.cyclePct >= 85 ? '\x1b[33m'
-        : q.cyclePct >= 70 ? '\x1b[33m'
-        : '\x1b[32m'
+      const R  = '\x1b[0m'
+      const B  = '\x1b[1m'
+      const D  = '\x1b[2m'
 
-      const resetMin   = Math.ceil(q.cycleResetMs / 60_000)
-      const resetLabel = resetMin >= 60
-        ? `${Math.floor(resetMin / 60)}h ${resetMin % 60}m`
-        : `${resetMin}m`
+      const pctBar = (pct: number, width = 20): string => {
+        const filled = Math.round(Math.min(pct, 100) / 100 * width)
+        const color  = pct >= 90 ? '\x1b[31m' : pct >= 70 ? '\x1b[33m' : '\x1b[32m'
+        return `${color}${'█'.repeat(filled)}${R}${D}${'░'.repeat(width - filled)}${R}`
+      }
 
-      const burnRow = q.burnRateTokensPerMin > 0
-        ? `  Burn rate   ${q.burnRateTokensPerMin.toLocaleString()} tok/min\n`
-        : ''
+      const resetTime = q.cycleResetAt
+        ? new Date(q.cycleResetAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+        : (() => {
+            const m = Math.ceil(q.cycleResetMs / 60_000)
+            return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`
+          })()
 
-      const weeklyTotalHours = q.weeklyHoursSonnet + q.weeklyHoursOpus
-      const weeklyLimitTotal = q.weeklyLimitSonnet + q.weeklyLimitOpus
-      const weeklyPctColor = q.weeklyPctAll >= 95 ? '\x1b[31m'
-        : q.weeklyPctAll >= 70 ? '\x1b[33m'
-        : '\x1b[32m'
+      const now = new Date()
+      const daysToMonday = ((8 - now.getDay()) % 7) || 7
+      const nextMonday   = new Date(now); nextMonday.setDate(now.getDate() + daysToMonday)
+      const weekReset    = nextMonday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 
-      console.log(
-        `\n📊 claudestat status\n` +
-        `──────────────────────────────────────────\n` +
-        `  Quota 5h    ${pctColor}${q.cyclePrompts}/${q.cycleLimit} prompts (${q.cyclePct}%)${R}  │  resets in ${resetLabel}\n` +
-        `  Plan        ${q.detectedPlan.toUpperCase()}\n` +
-        `  Weekly      ${weeklyTotalHours}h / ${weeklyLimitTotal}h (${weeklyPctColor}${q.weeklyPctAll}%${R})  this week\n` +
-        (q.weeklyLimitOpus > 0
-          ?  `   ├─ Sonnet  ${q.weeklyHoursSonnet}h / ${q.weeklyLimitSonnet}h\n` +
-             `   └─ Opus    ${q.weeklyHoursOpus}h / ${q.weeklyLimitOpus}h\n`
-          : '') +
-        `${burnRow}` +
-        `──────────────────────────────────────────\n`
-      )
+      const lines: string[] = []
+      lines.push(`\n${B}📊 claudestat${R}  ${D}${q.detectedPlan.toUpperCase()} plan${R}`)
+      lines.push('━'.repeat(42))
+      lines.push('')
+      lines.push(`  5h    ${pctBar(q.cyclePct)}  ${B}${q.cyclePct}%${R}   ${D}resets ${resetTime}${R}`)
+      lines.push(`  Week  ${pctBar(q.weeklyPctAll)}  ${B}${q.weeklyPctAll}%${R}   ${D}resets ${weekReset}${R}`)
+
+      if (q.weeklyLimitOpus > 0) {
+        lines.push('')
+        lines.push(`  ${D}  ├─ Sonnet  ${q.weeklyHoursSonnet}h / ${q.weeklyLimitSonnet}h${R}`)
+        lines.push(`  ${D}  └─ Opus    ${q.weeklyHoursOpus}h / ${q.weeklyLimitOpus}h${R}`)
+      }
+
+      if (q.burnRateTokensPerMin > 0) {
+        lines.push('')
+        lines.push(`  🔥 ${B}${q.burnRateTokensPerMin.toLocaleString()}${R} tok/min  ${D}·  ${q.cyclePrompts} prompts used${R}`)
+      }
+
+      lines.push('')
+      lines.push('━'.repeat(42))
+      lines.push('')
+      console.log(lines.join('\n'))
       process.exit(0)
     } catch {
       console.error('\n❌ Daemon is not running. Start it with: claudestat start\n')
@@ -398,6 +410,31 @@ program
         process.exit(0)
       }
       console.log(renderWeeklyInsight(data))
+      process.exit(0)
+    } catch (err: any) {
+      console.error('\n❌ Error:', err.message)
+      process.exit(1)
+    }
+  })
+
+program
+  .command('insights')
+  .description('Show usage insights: cost breakdown, cache savings, efficiency trend, peak hours')
+  .option('--days <number>', 'Look back N days (default 7)')
+  .option('--json', 'Output raw JSON')
+  .action((opts) => {
+    try {
+      const days = Math.max(1, Math.min(90, parseInt(opts.days ?? '7', 10) || 7))
+      const data = getUsageInsights(days)
+      if (data.total_sessions === 0) {
+        console.log(`\n💡 No data for the last ${days} days.\n`)
+        process.exit(0)
+      }
+      if (opts.json) {
+        console.log(JSON.stringify(data, null, 2))
+        process.exit(0)
+      }
+      console.log(renderInsights(data))
       process.exit(0)
     } catch (err: any) {
       console.error('\n❌ Error:', err.message)

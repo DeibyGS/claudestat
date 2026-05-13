@@ -12,6 +12,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import readline from 'readline'
+import { execSync, spawnSync } from 'child_process'
 import { getClaudeDir, getClaudestatDir, isWindows } from './paths'
 import { readConfig, writeConfig } from './config'
 
@@ -102,7 +103,9 @@ export async function runInstall(): Promise<void> {
     await runWizard()
   } else {
     showInstallStatus()
+    installMcp()
   }
+  process.exit(0)
 }
 
 export async function runWizard(): Promise<void> {
@@ -160,6 +163,44 @@ export async function runWizard(): Promise<void> {
 
   // Paso 5: instalar hooks
   installHooks()
+
+  // Paso 6: registrar MCP server en Claude Code
+  installMcp()
+}
+
+function installMcp(): void {
+  const nodeExec  = process.execPath
+  const mcpScript = path.join(__dirname, 'mcp-server.js')
+  const manualCmd = `claude mcp add claudestat -s user -- "${nodeExec}" --disable-warning=ExperimentalWarning "${mcpScript}"`
+
+  try {
+    const result = spawnSync('claude', ['mcp', 'list'], { encoding: 'utf8', timeout: 15000 })
+    const list = (result.stdout ?? '') + (result.stderr ?? '')
+    const mcpLine = list.split('\n').find((l: string) => l.includes('claudestat'))
+    if (mcpLine && !mcpLine.includes('Failed') && !mcpLine.includes('✗')) {
+      console.log('  (already registered): MCP server')
+      return
+    }
+    if (mcpLine) {
+      // Registered but failing — remove from both scopes and re-register
+      spawnSync('claude', ['mcp', 'remove', 'claudestat', '-s', 'user'],  { encoding: 'utf8' })
+      spawnSync('claude', ['mcp', 'remove', 'claudestat', '-s', 'local'], { encoding: 'utf8' })
+    }
+  } catch {
+    console.log('\n⚠  Could not reach "claude" CLI — skipping MCP setup.')
+    console.log('   To register manually:')
+    console.log(`   ${manualCmd}\n`)
+    return
+  }
+
+  try {
+    execSync(manualCmd, { stdio: 'pipe' })
+    console.log('✓ MCP server registered (user scope)\n')
+  } catch (err: any) {
+    console.log('\n⚠  MCP registration failed.')
+    console.log('   To register manually:')
+    console.log(`   ${manualCmd}\n`)
+  }
 }
 
 export function showInstallStatus(): void {

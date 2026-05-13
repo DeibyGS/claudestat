@@ -468,7 +468,7 @@ claudestat includes an MCP (Model Context Protocol) server that lets Claude Code
 ### Register with Claude Code
 
 ```bash
-claude mcp add --transport stdio claudestat -- claudestat-mcp
+claude mcp add claudestat -s user -- claudestat-mcp
 ```
 
 Once registered, ask Claude things like:

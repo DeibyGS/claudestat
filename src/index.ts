@@ -24,7 +24,6 @@ import { runExport } from './export'
 import { readConfig, writeConfig }      from './config'
 import type { ClaudestatConfig }        from './config'
 import { runDoctor }                    from './doctor'
-import { runShare }                   from './share'
 import { runRoast }                  from './roast'
 import { getWeeklyInsightData, renderWeeklyInsight, getUsageInsights, renderInsights } from './insights'
 import { getPidFile, whichCmd, isWindows } from './paths'
@@ -79,27 +78,37 @@ async function stopDaemon(): Promise<void> {
   }
 }
 
-// Warn if the active binary is outside the current npm global prefix (NVM conflict)
-if (process.env.NVM_DIR || process.env.NVM_HOME) {
+async function checkLatestVersion(): Promise<string | null> {
   try {
-    const npmPrefix  = execSync('npm prefix -g', { stdio: 'pipe' }).toString().trim()
-    const runningFrom = process.argv[1]
-    if (runningFrom && !runningFrom.startsWith(npmPrefix)) {
-      const refreshCmd = isWindows ? 'refreshenv' : 'hash -r claudestat'
-      process.stderr.write(
-        `\x1b[33m⚠️  claudestat is running from ${runningFrom}\x1b[0m\n` +
-        `   This binary may not match the active Node version (${process.version}).\n` +
-        `   Fix: \x1b[36mnvm use default && npm install -g @deibygs/claudestat\x1b[0m\n` +
-        `   Then restart your terminal or run: \x1b[36m${refreshCmd}\x1b[0m\n\n`
-      )
-    }
-  } catch {}
+    const res = await fetch('https://registry.npmjs.org/@statforge/claudestat/latest', {
+      signal: AbortSignal.timeout(2000),
+    })
+    if (!res.ok) return null
+    const json = await res.json() as any
+    return json.version as string
+  } catch {
+    return null
+  }
 }
 
 program
   .name('claudestat')
-  .description('Real-time execution trace and cost intelligence for Claude Code')
+  .description('Real-time execution trace and cost intelligence for Claude Code · github.com/DeibyGS/claudestat')
   .version(PKG_VERSION)
+
+program
+  .command('version')
+  .description('Show version and check for updates')
+  .action(async () => {
+    console.log(PKG_VERSION)
+    const latest = await checkLatestVersion()
+    if (latest) {
+      const isLatest = latest === PKG_VERSION
+      const tag = isLatest ? `\x1b[32mlatest ✓\x1b[0m` : `\x1b[33mlatest: ${latest} — run npm update\x1b[0m`
+      console.log(`  ${tag}`)
+    }
+    process.exit(0)
+  })
 
 program
   .command('start')
@@ -154,7 +163,6 @@ program
   .command('status')
   .description('Show current quota, cost and burn rate')
   .option('--json', 'Output raw JSON instead of formatted text')
-  .option('--compact', 'One-line output for tmux')
   .action(async (opts) => {
     try {
       await refreshFromApi()  // refresh disk cache on demand; daemon reads from disk
@@ -166,15 +174,6 @@ program
 
       const q    = await quotaRes.json() as any
       const _h   = await healthRes.json().catch(() => ({})) as any
-
-      if (opts.compact) {
-        const pctCycle = q.cyclePct
-        const cycleEmoji = pctCycle >= 95 ? '🔴' : pctCycle >= 70 ? '🟡' : '🟢'
-        const wEmoji = q.weeklyPctAll >= 95 ? '🔴' : q.weeklyPctAll >= 70 ? '🟡' : '🟢'
-        
-        console.log(`C:${pctCycle}%${cycleEmoji} W:${q.weeklyPctAll}%${wEmoji} ${q.detectedPlan}`)
-        process.exit(0)
-      }
 
       if (opts.json) {
         console.log(JSON.stringify({
@@ -219,8 +218,9 @@ program
       lines.push(`\n${B}📊 claudestat${R}  ${D}${q.detectedPlan.toUpperCase()} plan${R}`)
       lines.push('━'.repeat(42))
       lines.push('')
-      lines.push(`  5h    ${pctBar(q.cyclePct)}  ${B}${q.cyclePct}%${R}   ${D}resets ${resetTime}${R}`)
-      lines.push(`  Week  ${pctBar(q.weeklyPctAll)}  ${B}${q.weeklyPctAll}%${R}   ${D}resets ${weekReset}${R}`)
+      lines.push(`  5h      ${pctBar(q.cyclePct)}  ${B}${q.cyclePct}%${R}   ${D}resets ${resetTime}${R}`)
+      lines.push('')
+      lines.push(`  Week    ${pctBar(q.weeklyPctAll)}  ${B}${q.weeklyPctAll}%${R}   ${D}resets ${weekReset}${R}`)
 
       if (q.weeklyLimitOpus > 0) {
         lines.push('')
@@ -282,13 +282,41 @@ program
       console.log('✅ Config saved to ~/.claudestat/config.json')
     }
 
-    // Always show current config
-    console.log('\n📋 Current config:')
-    console.log(`   killSwitchEnabled:  ${cfg.killSwitchEnabled}`)
-    console.log(`   killSwitchThreshold: ${cfg.killSwitchThreshold}%`)
-    console.log(`   warnThresholds:     ${cfg.warnThresholds.join('%, ')}%`)
-    console.log(`   alertsEnabled:      ${cfg.alertsEnabled}`)
-    console.log(`   plan:               ${cfg.plan ?? 'auto-detect'}\n`)
+    const R = '\x1b[0m'
+    const B = '\x1b[1m'
+    const D = '\x1b[2m'
+    const G = '\x1b[32m'
+    const Y = '\x1b[33m'
+    const C = '\x1b[36m'
+
+    const bar = (pct: number, width = 20): string => {
+      const filled = Math.round(Math.min(pct, 100) / 100 * width)
+      const color = pct >= 95 ? '\x1b[31m' : pct >= 85 ? '\x1b[33m' : '\x1b[32m'
+      return `${color}${'█'.repeat(filled)}${R}${D}${'░'.repeat(width - filled)}${R}`
+    }
+
+    const planColor = cfg.plan === 'pro' ? G : cfg.plan === 'max5' ? C : cfg.plan === 'max20' ? '\x1b[35m' : Y
+    const planLabel = cfg.plan ?? 'auto-detect'
+    const alertsIcon = cfg.alertsEnabled ? `${G}enabled${R}` : `${Y}disabled${R}`
+
+    const lines: string[] = []
+    lines.push(`\n${B}⚙️  claudestat config${R}`)
+    lines.push('━'.repeat(42))
+    lines.push('')
+    lines.push(`  Plan              ${planColor}${planLabel.toUpperCase()}${R}`)
+    lines.push(`  Alerts            ${alertsIcon}`)
+    lines.push('')
+    lines.push(`  Kill switch       ${cfg.killSwitchEnabled ? `${Y}ON${R} at ${cfg.killSwitchThreshold}%` : `${D}OFF${R}`}`)
+    if (cfg.killSwitchEnabled) {
+      lines.push(`                    ${bar(cfg.killSwitchThreshold)}`)
+    }
+    lines.push('')
+    lines.push(`  Cycle thresholds  ${cfg.warnThresholds.join('%, ')}%`)
+    lines.push(`                    ${D}yellow${R} ${bar(cfg.warnThresholds[0], 8)}  ${D}orange${R} ${bar(cfg.warnThresholds[1], 8)}  ${D}red${R} ${bar(cfg.warnThresholds[2], 8)}`)
+    lines.push('')
+    lines.push('━'.repeat(42))
+    lines.push('')
+    console.log(lines.join('\n'))
     process.exit(0)
   })
 
@@ -327,25 +355,57 @@ program
       if (!res.ok) throw new Error('Daemon unavailable')
       const data  = await res.json() as any
 
+      const R = '\x1b[0m'
+      const B = '\x1b[1m'
+      const D = '\x1b[2m'
+
       const label = by === 'count' ? 'calls' : by === 'duration' ? 'duration' : 'est. cost'
-      console.log(`\n🏆 claudestat top — by ${label} (last ${days} days)\n`)
-      console.log('  #  Tool              Calls    Duration   Est. Cost      %')
-      console.log('  ── ───────────────── ──────── ───────────── ───────── ────')
+      const maxVal = Math.max(...data.tools.map((t: any) =>
+        by === 'cost' ? t.estimatedCostUsd : by === 'count' ? t.count : t.totalDurationMs
+      ))
+
+      const bar = (val: number, max: number, width = 20): string => {
+        const pct = max > 0 ? val / max * 100 : 0
+        const filled = Math.round(pct / 100 * width)
+        const rank = data.tools.findIndex((t: any) => {
+          const tv = by === 'cost' ? t.estimatedCostUsd : by === 'count' ? t.count : t.totalDurationMs
+          return tv === val
+        })
+        const color = rank === 0 ? '\x1b[31m' : rank <= 2 ? '\x1b[33m' : '\x1b[32m'
+        return `${color}${'█'.repeat(filled)}${R}${D}${'░'.repeat(width - filled)}${R}`
+      }
+
+      const fmtCost = (n: number) => n < 0.01 ? `< $0.01` : `$${n.toFixed(2)}`
+      const fmtDur = (ms: number) => ms >= 60_000 ? `${(ms / 60_000).toFixed(1)}m` : `${(ms / 1000).toFixed(0)}s`
+      const fmtPct = (n: number) => `${Math.round(n)}%`
+
+      const lines: string[] = []
+      lines.push(`\n${B}🏆 claudestat top${R}  ${D}by ${label} (last ${days} days)${R}`)
+      lines.push('━'.repeat(52))
+      lines.push('')
+
       for (let i = 0; i < data.tools.length; i++) {
         const t = data.tools[i]
         const isOther = t.tool === 'Other'
-        const dur = isOther ? '—'
-          : t.totalDurationMs >= 60_000
-          ? `${(t.totalDurationMs / 60_000).toFixed(1)}m`
-          : `${(t.totalDurationMs / 1000).toFixed(0)}s`
-        const cost = t.estimatedCostUsd < 0.01
-          ? `$${t.estimatedCostUsd.toFixed(4)}`
-          : `$${t.estimatedCostUsd.toFixed(2)}`
-        const pct = by === 'cost' ? `${t.pctCost}%` : isOther ? '' : `${t.pctCount}%`
+        const val = isOther ? 0 : (by === 'cost' ? t.estimatedCostUsd : by === 'count' ? t.count : t.totalDurationMs)
+        const pct = by === 'cost' ? t.pctCost : (isOther ? 0 : t.pctCount)
+        const dur = isOther ? '—' : fmtDur(t.totalDurationMs)
+        const cost = isOther ? fmtCost(t.estimatedCostUsd) : fmtCost(t.estimatedCostUsd)
         const countStr = isOther ? '—' : String(t.count)
-        console.log(`  ${(i + 1).toString().padStart(2)}  ${t.tool.padEnd(18)} ${countStr.padStart(8)} ${dur.padStart(13)} ${cost.padStart(9)} ${pct.padStart(4)}`)
+        const toolName = (t.tool.length > 18 ? t.tool.slice(0, 16) + '…' : t.tool).padEnd(18)
+
+        if (isOther) {
+          lines.push(`  ${D}Other${R}  ${'—'.padStart(20)}  ${cost.padStart(10)}  ${fmtPct(pct)}`)
+        } else {
+          lines.push(`  ${B}${(i + 1).toString().padStart(2)}${R}  ${toolName}  ${bar(val, maxVal)}  ${cost.padStart(10)}  ${fmtPct(pct)}`)
+          lines.push(`     ${D}${countStr} calls · ${dur}${R}`)
+        }
       }
-      console.log()
+
+      lines.push('')
+      lines.push('━'.repeat(52))
+      lines.push('')
+      console.log(lines.join('\n'))
       process.exit(0)
     } catch {
       console.error('\n❌ Daemon is not running. Start it with: claudestat start\n')
@@ -360,23 +420,6 @@ program
     console.error('\n❌ Error:', err.message)
     process.exit(1)
   }))
-
-program
-  .command('share [session-id]')
-  .description('Generate a shareable session card (ASCII or JSON)')
-  .option('--format <type>', 'Output format: ascii, json (default: ascii)')
-  .option('--copy', 'Copy to clipboard (macOS only)')
-  .action(async (sessionId: string | undefined, opts) => {
-    try {
-      const format = (opts.format ?? 'ascii') as 'ascii' | 'json'
-      const copy = !!opts.copy
-      await runShare({ sessionId, format, copy })
-      process.exit(0)
-    } catch (err: any) {
-      console.error('\n❌ Error:', err.message)
-      process.exit(1)
-    }
-  })
 
 program
   .command('roast')

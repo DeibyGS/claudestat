@@ -116,12 +116,25 @@ export function getUsageInsights(days = 7): UsageInsightsData {
     : outputInputRatio > 2  ? 'balanced'
     : 'reading-heavy'
 
+  const CACHE_READ_PRICE: Record<string, number> = {
+    'claude-haiku-4-5-20251001': 0.30 / 1_000_000,
+    'claude-sonnet-4-6':          2.70 / 1_000_000,
+    'claude-opus-4-6':            3.00 / 1_000_000,
+  }
+  const DEFAULT_CACHE_PRICE = 2.70 / 1_000_000
+
+  const cacheByModel = dbOps.getCacheReadByModel(days)
+  const cacheSavings = cacheByModel.reduce((total, row) => {
+    const price = CACHE_READ_PRICE[row.model] ?? DEFAULT_CACHE_PRICE
+    return total + row.cache_read * price
+  }, 0)
+
   return {
     days,
     total_sessions:       agg.total_sessions,
     total_cost:           agg.total_cost,
     avg_cost_per_session: agg.total_sessions > 0 ? agg.total_cost / agg.total_sessions : 0,
-    cache_savings_usd:    agg.cache_read * 2.70 / 1_000_000,
+    cache_savings_usd:    cacheSavings,
     cache_hit_pct:        cacheHitPct,
     output_input_ratio:   outputInputRatio,
     ratio_label:          ratioLabel,
@@ -131,13 +144,15 @@ export function getUsageInsights(days = 7): UsageInsightsData {
     project_costs:        dbOps.getProjectCosts(days),
     hour_ranges:          (() => {
       const hours = dbOps.getHourlyDistribution(days)
-      const night = hours.filter(h => h.hour >= 23 || h.hour <= 1).reduce((s, h) => s + h.session_count, 0)
-      const early = hours.filter(h => h.hour >= 2  && h.hour <= 9).reduce((s, h) => s + h.session_count, 0)
-      const day   = hours.filter(h => h.hour >= 10 && h.hour <= 22).reduce((s, h) => s + h.session_count, 0)
+      const dawn  = hours.filter(h => h.hour >= 0  && h.hour <= 5).reduce((s, h) => s + h.session_count, 0)
+      const morn  = hours.filter(h => h.hour >= 6  && h.hour <= 11).reduce((s, h) => s + h.session_count, 0)
+      const after = hours.filter(h => h.hour >= 12 && h.hour <= 17).reduce((s, h) => s + h.session_count, 0)
+      const night = hours.filter(h => h.hour >= 18 && h.hour <= 23).reduce((s, h) => s + h.session_count, 0)
       return [
-        { emoji: '🌙', from: '23:00', to: '01:59', count: night },
-        { emoji: '🌅', from: '02:00', to: '09:59', count: early },
-        { emoji: '☀️', from: '10:00', to: '22:59', count: day   },
+        { emoji: '🌙', from: '00:00', to: '05:59', count: dawn  },
+        { emoji: '🌅', from: '06:00', to: '11:59', count: morn  },
+        { emoji: '☀️', from: '12:00', to: '17:59', count: after },
+        { emoji: '🌆', from: '18:00', to: '23:59', count: night },
       ].filter(r => r.count > 0)
     })(),
   }
@@ -170,10 +185,12 @@ export function renderInsights(d: UsageInsightsData): string {
     const topTotal = d.project_costs.reduce((s, p) => s + p.total_cost, 0)
     const shown    = d.project_costs.slice(0, 4)
     const otherCost = d.total_cost - shown.reduce((s, p) => s + p.total_cost, 0)
-    for (const p of shown) {
+    for (let i = 0; i < shown.length; i++) {
+      const p = shown[i]
       const pct  = topTotal > 0 ? Math.round(p.total_cost / topTotal * 100) : 0
       const name = path.basename(p.project).slice(0, 14).padEnd(14)
       lines.push(`     ${C}${name}${R}  ${bar(pct)}  ${fmtDollar(p.total_cost)}  ${D}${pct}%${R}`)
+      if (i < shown.length - 1 || (otherCost > 0.01 && d.project_costs.length > 4)) lines.push('')
     }
     if (otherCost > 0.01 && d.project_costs.length > 4) {
       const pct = topTotal > 0 ? Math.round(otherCost / topTotal * 100) : 0
@@ -205,9 +222,26 @@ export function renderInsights(d: UsageInsightsData): string {
   if (d.hour_ranges.length > 0) {
     lines.push(`\n  ⏰  Activity by time of day`)
     const maxCount = Math.max(...d.hour_ranges.map(r => r.count))
-    for (const r of d.hour_ranges) {
+    for (let i = 0; i < d.hour_ranges.length; i++) {
+      const r = d.hour_ranges[i]
       const pct = maxCount > 0 ? Math.round(r.count / maxCount * 100) : 0
       lines.push(`     ${r.emoji}  ${D}${r.from}–${r.to}${R}  ${M}${bar(pct)}${R}  ${D}${r.count} sessions${R}`)
+      if (i < d.hour_ranges.length - 1) lines.push('')
+    }
+  }
+
+  // Model breakdown
+  const models = dbOps.getModelBreakdown(d.days)
+  const modelsWithCost = models.filter(m => m.total_cost > 0)
+  if (modelsWithCost.length >= 2) {
+    lines.push(`\n  🤖  Models`)
+    for (let i = 0; i < modelsWithCost.length; i++) {
+      const m = modelsWithCost[i]
+      const pct = d.total_cost > 0 ? Math.round(m.total_cost / d.total_cost * 100) : 0
+      const rawName = (m.model ?? 'unknown').replace(/^<|>$/g, '')
+      const name = rawName.slice(0, 28).padEnd(28)
+      lines.push(`     ${C}${name}${R}  ${bar(pct)}  ${fmtDollar(m.total_cost)}  ${D}${pct}% · ${m.session_count} sessions${R}`)
+      if (i < modelsWithCost.length - 1) lines.push('')
     }
   }
 
@@ -232,43 +266,41 @@ export function renderWeeklyInsight(d: WeeklyInsightData): string {
     return n.toString()
   }
 
-  const fmtCost = (n: number): string => `$${n.toFixed(2)}`
-  const fmtDate = (ts: number): string => {
-    const d = new Date(ts)
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-  }
-
   const R = '\x1b[0m'
   const B = '\x1b[1m'
   const D = '\x1b[2m'
+  const G = '\x1b[32m'
+  const Y = '\x1b[33m'
   const C = '\x1b[36m'
 
-  const lines: string[] = []
-  lines.push(`\n${B}📊 claudestat weekly insight${R} ${D}(${fmtDate(d.week_start)} – ${fmtDate(d.week_end)})${R}`)
-  lines.push(`${'─'.repeat(60)}`)
-
-  lines.push(
-    `   Sessions: ${d.total_sessions}  ·  Cost: ${fmtCost(d.total_cost)}  ·  Loops: ${d.total_loops}`
-  )
-
-  lines.push(
-    `   Top tool: ${d.top_tool} (${d.top_tool_cost_pct}% of cost)  ·  Efficiency: ${d.avg_efficiency}/100`
-  )
-
-  const cacheLabel = d.total_sessions > 0
-    ? `  ·  Cache hit: ${d.cache_hit_pct}%`
-    : ''
-
-  const tokLabel = d.input_tokens + d.output_tokens > 0
-    ? `  ·  Tokens: ${fmtTok(d.input_tokens)}+${fmtTok(d.output_tokens)}`
-    : ''
-
-  if (cacheLabel || tokLabel) {
-    lines.push(`  ${D}${tokLabel}${cacheLabel}${R}`)
+  const bar = (pct: number, width = 20): string => {
+    const filled = Math.round(Math.min(pct, 100) / 100 * width)
+    const color = pct >= 90 ? '\x1b[31m' : pct >= 70 ? '\x1b[33m' : '\x1b[32m'
+    return `${color}${'█'.repeat(filled)}${R}${D}${'░'.repeat(width - filled)}${R}`
   }
 
-  lines.push(`${'─'.repeat(60)}`)
-  lines.push(`   ${C}⚡${R} Tip: ${generateTip(d)}`)
+  const fmtDate = (ts: number): string => {
+    const dt = new Date(ts)
+    return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  }
+
+  const lines: string[] = []
+  lines.push(`\n${B}📊 claudestat weekly${R}  ${D}${fmtDate(d.week_start)} – ${fmtDate(d.week_end)}${R}`)
+  lines.push('━'.repeat(44))
+  lines.push('')
+  lines.push(`  💰  ${B}$${d.total_cost.toFixed(2)}${R} total  ·  ${B}${d.total_sessions}${R} sessions  ·  ${B}${d.total_loops}${R} loops`)
+  lines.push('')
+  lines.push(`  🔧  Top tool    ${B}${d.top_tool}${R}  ${D}${d.top_tool_cost_pct}% of cost${R}`)
+  lines.push('')
+  lines.push(`  📈  Efficiency    ${bar(d.avg_efficiency)}  ${B}${d.avg_efficiency}/100${R}`)
+  lines.push('')
+  lines.push(`  💾  Cache hit     ${bar(d.cache_hit_pct)}  ${B}${d.cache_hit_pct}%${R}`)
+  lines.push('')
+  lines.push(`  📦  Tokens  ${D}${fmtTok(d.input_tokens)} in + ${fmtTok(d.output_tokens)} out${R}`)
+  lines.push('')
+  lines.push(`  ${C}⚡  Tip:${R} ${generateTip(d)}`)
+  lines.push('')
+  lines.push('━'.repeat(44))
   lines.push('')
 
   return lines.join('\n')

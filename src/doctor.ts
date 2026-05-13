@@ -180,6 +180,7 @@ export async function runDoctor(): Promise<void> {
   const failed = checks.filter(c => !c.ok).length
   if (failed === 0) {
     console.log('  \x1b[32mAll checks passed — claudestat is healthy!\x1b[0m\n')
+    process.exit(0)
   } else {
     console.log(`  \x1b[31m${failed} check(s) failed — see fixes above\x1b[0m\n`)
     process.exit(1)

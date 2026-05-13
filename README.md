@@ -12,7 +12,7 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-brightgreen)]()
-[![Tests](https://img.shields.io/badge/tests-214%2F214-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-243%2F243-brightgreen)]()
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
 [Installation](#installation) • [Quick Start](#quick-start) • [Commands](#commands) • [Dashboard](#dashboard) • [Contributing](#contributing)
@@ -139,13 +139,14 @@ That's it. Start a Claude Code session and watch the events flow in.
 | `claudestat uninstall` | Remove hooks from Claude Code |
 | `claudestat watch` | Live terminal trace view |
 | `claudestat status` | Show quota, cost, and burn rate |
-| `claudestat status --compact` | One-line output for tmux status bar |
 | `claudestat config` | View or edit configuration |
 | `claudestat top` | Rank tools by cost, call count, or duration |
 | `claudestat weekly` | Weekly usage summary with actionable tips |
-| `claudestat export [format]` | Export session data to JSON or CSV |
-| `claudestat share [session-id]` | Generate shareable session card (ASCII/JSON) |
+| `claudestat insights` | Deep usage insights: cost breakdown, cache savings, efficiency, peak hours, model breakdown |
 | `claudestat roast` | Sarcastic usage analysis with roast jokes |
+| `claudestat roast --stats` | Raw stats with visual bars |
+| `claudestat version` | Show version and check for npm updates |
+| `claudestat export [format]` | Export session data to JSON or CSV |
 | `claudestat doctor` | Check installation health and diagnose issues |
 
 ### `claudestat watch`
@@ -173,15 +174,32 @@ Ranks your most-used tools by estimated cost, call count, or duration across all
 ```
 claudestat top
 
-  🏆 claudestat top — by est. cost (last 30 days)
+🏆 claudestat top  by est. cost (last 30 days)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  #  Tool              Calls    Duration   Est. Cost      %
-  ── ───────────────── ──────── ───────────── ───────── ────
-   1  Bash              1,240       18.3m     $1.24    38%
-   2  Read                890        4.1m     $0.87    27%
-   3  Edit                430        2.8m     $0.61    19%
-   4  Agent (haiku)       120        9.2m     $0.38    12%
-   5  Write               210        1.1m     $0.12     4%
+   1  Edit                ████████████████░░░░     $146.47  21%
+     2479 calls · 38.5m
+   2  Bash                ███████████████░░░░░     $140.66  20%
+     2651 calls · 153.6m
+   3  Read                ██████████████░░░░░░     $126.08  18%
+     2315 calls · 34.0m
+   4  Grep                ████░░░░░░░░░░░░░░░░      $39.93  6%
+     699 calls · 9.3m
+   5  ToolSearch          ██░░░░░░░░░░░░░░░░░░      $21.83  3%
+     469 calls · 7.4m
+   6  Glob                ██░░░░░░░░░░░░░░░░░░      $13.96  2%
+     269 calls · 5.7m
+   7  Write               █░░░░░░░░░░░░░░░░░░░      $12.93  2%
+     237 calls · 87.1m
+   8  mcp__plugin_engr…   █░░░░░░░░░░░░░░░░░░░       $8.10  1%
+     149 calls · 2.6m
+   9  Agent               █░░░░░░░░░░░░░░░░░░░       $8.09  1%
+     168 calls · 95.7m
+  10  WebFetch            █░░░░░░░░░░░░░░░░░░░       $5.86  1%
+     106 calls · 9.9m
+  Other                     —     $184.79  26%
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 Options: `--by cost|count|duration` · `--days 7|30|90` · `--limit N`
@@ -193,58 +211,127 @@ Weekly usage summary with an actionable tip. Detects patterns like Bash overuse,
 ```
 claudestat weekly
 
-📊 claudestat weekly insight (May 5 — May 11)
-──────────────────────────────────────────────
-   Sessions: 42  ·  Cost: $146.21  ·  Loops: 93
-   Top tool: Bash (21% of cost)  ·  Efficiency: 93/100
-   ⚡ Tip: Group bash commands to reduce tool calls — each call costs context
+📊 claudestat weekly  May 8 – May 13
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  💰  $198.38 total  ·  40 sessions  ·  114 loops
+
+  🔧  Top tool    Bash  22% of cost
+
+  📈  Efficiency    ██████████████████░░  91/100
+
+  💾  Cache hit     ████████████████████  100%
+
+  📦  Tokens  73K in + 1.2M out
+
+  ⚡  Tip: 114 loops detected — consider using /compact earlier to prevent context thrashing
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 Options: `--json` for machine-readable output.
 
 ### `claudestat status`
 
+Shows your current quota usage with visual progress bars, plan detection, and burn rate.
+
 ```
 claudestat status
 
-  Quota 5h   45/50 prompts (90%)  |  reset in 22m
-  Plan        MAX5
-  Weekly      3.5h / 40h (9%)  this week
-  Burn rate   1,240 tok/min
+📊 claudestat  PRO plan
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  5h      ████████████████████  100%   resets 4:10 AM
+
+  Week    ██████░░░░░░░░░░░░░░  31%   resets May 18
+
+  🔥 490 tok/min  ·  101 prompts used
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-### `claudestat status --compact`
+Options: `--json` for machine-readable output.
 
-One-line output for tmux status bar or scripting. Shows cycle quota and weekly usage with colored emoji.
+### `claudestat insights`
+
+Deep usage insights: cost breakdown by project, cache savings, output/input ratio, efficiency trend, peak activity hours, and model breakdown.
+
+```
+claudestat insights
+
+💡 claudestat insights  last 7 days
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  💰  $4.96/session  ·  40 sessions  ·  $198.38 total
+
+  🗂  Top projects
+     no project      █████████░░░░░░░░░░░  $93.69  47%
+
+     claudestat      ████████░░░░░░░░░░░░  $74.60  38%
+
+     wodrival        ███░░░░░░░░░░░░░░░░░  $24.95  13%
+
+     aprendiendo-in  ░░░░░░░░░░░░░░░░░░░░  $3.32  2%
+
+     other           ░░░░░░░░░░░░░░░░░░░░  $1.81  1%
+
+  ⚡  Cache ~$1029.43 saved  ·  100% hit rate
+
+  📊  16× output/input  ·  cache-heavy workload
+
+  📈  Efficiency  91/100  ↓ -2 vs prev period  ·  114 loops
+
+  ⏰  Activity by time of day
+     🌙  00:00–05:59  ████████████████████  18 sessions
+
+     🌅  06:00–11:59  ███████░░░░░░░░░░░░░   6 sessions
+
+     ☀️  12:00–17:59  ███░░░░░░░░░░░░░░░░░   3 sessions
+
+     🌆  18:00–23:59  ██████████████░░░░░░  13 sessions
+
+  🤖  Models
+     claude-sonnet-4-6             ████████████████████  $197.11  99% · 23 sessions
+
+     claude-haiku-4-5-20251001     ░░░░░░░░░░░░░░░░░░░░  $1.26  1% · 15 sessions
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Options: `--days 7|14|30|90` · `--json` for machine-readable output.
+
+### `claudestat config`
+
+```
+claudestat config
+
+⚙️  claudestat config
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Plan              PRO
+  Alerts            enabled
+
+  Kill switch       OFF
+                    ████████████████████
+
+  Cycle thresholds  70%, 85%, 95%
+                    yellow ████████░░  orange █████████░  red ██████████
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
 
 ```bash
-claudestat status --compact
-C:45%🟡 W:9%🟢 pro
+# Enable kill switch at 90% quota
+claudestat config --kill-switch true --threshold 90
+
+# Force plan detection
+claudestat config --plan max5   # pro | max5 | max20 | auto
+
+# Toggle daemon rate limit alerts
+claudestat config --alerts false
 ```
 
-### `claudestat share`
-
-Generate a shareable session card — perfect for sharing on social media or in bug reports.
-
-```bash
-claudestat share
-╔═══════════════════════════════════╗
-║     Session Report · claudestat   ║
-╠═══════════════════════════════════╣
-║  Project     my-project          ║
-║  Duration   2h 14m               ║
-║  Tools      847 calls            ║
-║  Cost       $0.84                ║
-║  Cache hit  27% saved ($0.31)    ║
-║  Top tool  Bash (38%)            ║
-║  Efficiency 91 / 100             ║
-╚═══════════════════════════════════╝
-  github.com/DeibyGS/claudestat
-```
-
-Options:
-- `--format ascii|json` — output format (default: ascii)
-- `--copy` — copy to clipboard automatically (macOS only)
+Config is stored at `~/.claudestat/config.json` (macOS/Linux) or `%USERPROFILE%\.claudestat\config.json` (Windows).
 
 ### `claudestat roast`
 
@@ -253,27 +340,47 @@ Get a sarcastic analysis of your Claude Code usage — humor with insights.
 ```bash
 claudestat roast
 
-=== Claude Code Stats (last 30 days) ===
-Sessions: 47
-Total cost: $12.40
-Bash calls: 1,240
-Loops: 8
-Efficiency: 72/100
+🔥 Your Claude Code Roast  (30 days)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🔥 Your Claude Code Roast
+  Score  ██████████████████░░  92/100  ★★★★★
 
-  You called Bash 1,240 times last month.
-  That's once every 2.3 minutes.
-  Are you okay?
+  Scorecard
+  ┌─────────────────┬──────────────┬──────────────┐
+  │ Metric          │ Value        │ Rating       │
+  ├─────────────────┼──────────────┼──────────────┤
+  │ Sessions        │ 47           │ normal       │
+  │ Total cost      │ $12.40       │ frugal       │
+  │ Avg/session     │ $0.26/session│ efficient    │
+  │ Bash calls      │ 1240         │ 🔨 overload  │
+  │ Loops           │ 8            │ clean        │
+  │ Efficiency      │ 92/100       │ 🏆 elite     │
+  │ Tokens          │ 4.2M         │ —            │
+  │ Top tool        │ Bash 38%     │ —            │
+  └─────────────────┴──────────────┴──────────────┘
 
-  You hit 90%+ context in 12 sessions.
-  Claude was writing with amnesia half the time.
+  Roast Cards
 
-  You spent $4.20 on loops you never noticed.
-  That's 14 coffees. Just saying.
+  ┌──────────────────────────────────────────────────┐
+  │ 🖥️  BASH OVERLOAD                                │
+  │ 1240 calls in 30d — once every 2.3 min           │
+  │ Are you okay?                                    │
+  └──────────────────────────────────────────────────┘
 
-  Efficiency: 72/100 — room for growth, champ.
+  ┌──────────────────────────────────────────────────┐
+  │ 🔄  LOOP MONEY PIT                               │
+  │ $4.20 wasted on loops — that's 14 coffees        │
+  │ Just saying.                                     │
+  └──────────────────────────────────────────────────┘
+
+  Verdict
+  You're a machine. Or maybe you're just not using Claude enough.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  github.com/DeibyGS/claudestat
 ```
+
+Options: `--stats` for raw stats with visual bars · `--months N` to look back N months.
 
 ### `claudestat doctor`
 
@@ -291,6 +398,9 @@ claudestat doctor
   ✓  Hook script deployed (~/.claudestat/hooks/event.js)
   ✓  Daemon running (localhost:7337)
   ✓  Global CLI symlink valid
+  ✓  No duplicate claudestat binaries in PATH
+  ✓  Version match (installed: v1.2.2)
+  ✓  NVM prefix matches active binary
 ──────────────────────────────────────────────
   All checks passed — claudestat is healthy!
 ```
@@ -298,6 +408,19 @@ claudestat doctor
 If a check fails, `doctor` prints the exact fix command to run.
 
 ---
+
+### `claudestat version`
+
+Shows the current version and checks npm for updates.
+
+```bash
+claudestat version
+
+1.2.2
+  latest ✓
+```
+
+If a newer version is available, it shows: `latest: 1.3.0 — run npm update`.
 
 ### `claudestat export`
 
@@ -326,23 +449,6 @@ Each row includes: `id`, `started_at`, `cwd`, `project_path`, `total_cost_usd`, 
 
 ---
 
-### `claudestat config`
-
-```bash
-# Enable kill switch — block new sessions when quota exceeds 95%
-claudestat config --kill-switch true --threshold 95
-
-# Force plan detection instead of auto
-claudestat config --plan max5   # pro | max5 | max20 | auto
-
-# Disable daemon rate limit alerts
-claudestat config --alerts false
-```
-
-Config is stored at `~/.claudestat/config.json` (macOS/Linux) or `%USERPROFILE%\.claudestat\config.json` (Windows).
-
----
-
 ## MCP Server
 
 claudestat includes an MCP (Model Context Protocol) server that lets Claude Code query its own usage stats — Claude can tell you its quota, session cost, and top tools in real time.
@@ -351,10 +457,12 @@ claudestat includes an MCP (Model Context Protocol) server that lets Claude Code
 
 | Tool | Description |
 |------|------------|
-| `get_quota_status` | 5h cycle usage %, plan, weekly hours, burn rate |
+| `get_quota_status` | 5h cycle usage %, plan, weekly hours, burn rate (with on-demand API refresh + disk cache) |
 | `get_current_session` | Latest session: cost, tokens, efficiency, loops |
 | `get_session_stats` | Aggregated stats for N days |
-| `get_top_tools` | Top 10 tools by cost/count/duration |
+| `get_top_tools` | Top 10 tools by cost/count/duration (default 30 days) |
+| `get_usage_insights` | Deep insights: cost per project, cache savings, efficiency trend, peak hours, model breakdown |
+| `get_model_breakdown` | Cost and session count broken down by Claude model (Sonnet, Haiku, Opus) |
 | `get_weekly_insight` | Weekly summary with actionable tip |
 
 ### Register with Claude Code
@@ -367,8 +475,10 @@ Once registered, ask Claude things like:
 - *"What's my current quota status?"*
 - *"Show me my latest session cost"*
 - *"What are my top 5 tools by cost this week?"*
+- *"Give me usage insights for the last 14 days"*
+- *"Break down my usage by model"*
 
-Zero extra dependencies — stdio JSON-RPC, works without the daemon running.
+Zero extra dependencies — stdio JSON-RPC, works without the daemon running. Uses on-demand API refresh with shared disk cache for accurate quota data.
 
 ---
 
@@ -525,7 +635,7 @@ Whether you want to fix a bug, improve a dashboard view, add a new pattern to th
 1. Fork the repository
 2. Create a branch: `git checkout -b feat/your-feature`
 3. Make your changes
-4. Run the test suite: `npm test` (208 tests)
+4. Run the test suite: `node --require tsx/cjs tests/index.ts` (243 tests)
 5. Open a PR with a clear description of what you changed and why
 
 ### Good first areas
@@ -542,7 +652,7 @@ git clone https://github.com/YOUR_USERNAME/claudestat
 cd claudestat
 npm install
 npm run dev:full   # starts daemon + dashboard hot-reload together
-npm test           # run all tests
+node --require tsx/cjs tests/index.ts   # run all tests
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.

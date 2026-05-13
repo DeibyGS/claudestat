@@ -725,4 +725,28 @@ export const dbOps = {
     const since = Date.now() - days * 86_400_000
     return stmts.getHourlyDistribution.all(since) as { hour: number; session_count: number }[]
   },
+
+  getCacheReadByModel(days: number) {
+    const since = Date.now() - days * 86_400_000
+    return db.prepare(`
+      SELECT COALESCE(dominant_model, 'unknown') as model, SUM(total_cache_read) as cache_read
+      FROM sessions
+      WHERE started_at >= ?
+      GROUP BY dominant_model
+    `).all(since) as { model: string; cache_read: number }[]
+  },
+
+  getModelBreakdown(days: number) {
+    const since = Date.now() - days * 86_400_000
+    return db.prepare(`
+      SELECT
+        COALESCE(dominant_model, 'unknown') as model,
+        SUM(total_cost_usd) as total_cost,
+        COUNT(*) as session_count
+      FROM sessions
+      WHERE started_at >= ?
+      GROUP BY dominant_model
+      ORDER BY total_cost DESC
+    `).all(since) as { model: string; total_cost: number; session_count: number }[]
+  },
 }

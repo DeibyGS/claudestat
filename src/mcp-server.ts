@@ -19,7 +19,7 @@ import { getWeeklyInsightData, generateTip, getUsageInsights } from './insights'
 import { readConfig, getWarnLevel } from './config'
 
 const SERVER_NAME = 'claudestat'
-const SERVER_VERSION = '1.2.0'
+const SERVER_VERSION = '1.2.2'
 const PROTOCOL_VERSION = '2025-03-26'
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
@@ -92,6 +92,20 @@ const TOOLS = [
     }
   },
   {
+    name: 'get_model_breakdown',
+    description: 'Get cost and session count broken down by Claude model (Sonnet, Haiku, Opus) for the last N days',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        days: {
+          type: 'number',
+          description: 'Days to look back (default 7)'
+        }
+      },
+      required: []
+    }
+  },
+  {
     name: 'get_weekly_insight',
     description: 'Get the weekly usage summary with an actionable tip (same as claudestat weekly command)',
     inputSchema: {
@@ -129,10 +143,14 @@ function toolGetQuotaStatus(): string {
   const weeklyTotalHours = q.weeklyHoursSonnet + q.weeklyHoursOpus
   const weeklyLimitTotal = q.weeklyLimitSonnet + q.weeklyLimitOpus
 
+  const planLabel = q.planSource === 'inferred'
+    ? `${q.detectedPlan.toUpperCase()} plan (unverified — checking API...)`
+    : `${q.detectedPlan.toUpperCase()} plan`
+
   const parts: string[] = [
-    `Quota status — ${q.detectedPlan.toUpperCase()} plan`,
+    `Quota status — ${planLabel}`,
     ``,
-    `5h cycle:    ${q.cyclePct}%  ·  ${q.cyclePrompts}/${q.cycleLimit} prompts  ·  resets in ${resetLabel}`,
+    `5h cycle:    ${q.cyclePct}%  ·  ${q.cyclePrompts > q.cycleLimit ? `${q.cyclePrompts}/${q.cycleLimit} prompts (OVER LIMIT)` : `${q.cyclePrompts}/${q.cycleLimit} prompts`}  ·  resets in ${resetLabel}`,
     `Weekly:      ${weeklyTotalHours}h / ${weeklyLimitTotal}h (${q.weeklyPctAll}%)`,
   ]
   if (q.weeklyLimitOpus > 0) {
@@ -155,6 +173,10 @@ function toolGetQuotaStatus(): string {
 
     if (weeklyLevel === 'red')   alerts.push(`🔴 Weekly at ${q.weeklyPctAll}% — critical`)
     else if (weeklyLevel)        alerts.push(`⚠️  Weekly at ${q.weeklyPctAll}% — approaching weekly limit`)
+
+    if (q.cyclePrompts > q.cycleLimit) {
+      alerts.push(`⚠️  Prompt count (${q.cyclePrompts}) exceeds plan limit (${q.cycleLimit}) — plan may be mis-detected`)
+    }
 
     const reminderMins = cfg.resetReminderMins ?? 10
     if (reminderMins > 0 && resetMin <= reminderMins && resetMin > 0) {
@@ -249,7 +271,6 @@ function toolGetUsageInsights(days: number): string {
 
   if (i.total_sessions === 0) return `No data for the last ${d} days.`
 
-  const fmtDollar = (n: number) => n < 0.01 ? '< $0.01' : `$${n.toFixed(2)}`
   const bar = (pct: number, width = 20): string =>
     '█'.repeat(Math.round(pct / 100 * width)) + '░'.repeat(width - Math.round(pct / 100 * width))
 
@@ -285,14 +306,39 @@ function toolGetUsageInsights(days: number): string {
     lines.push(``)
     lines.push(`  ⏰  Activity by time of day`)
     const maxCount = Math.max(...i.hour_ranges.map(r => r.count))
-    for (const r of i.hour_ranges) {
+    for (let j = 0; j < i.hour_ranges.length; j++) {
+      const r = i.hour_ranges[j]
       const pct = maxCount > 0 ? Math.round(r.count / maxCount * 100) : 0
       lines.push(`     ${r.emoji}  ${r.from}–${r.to}  ${bar(pct)}  ${r.count} sessions`)
+      if (j < i.hour_ranges.length - 1) lines.push('')
     }
   }
 
   lines.push(``)
   lines.push('━'.repeat(44))
+  return lines.join('\n')
+}
+
+function toolGetModelBreakdown(days: number): string {
+  const d = Math.max(1, Math.min(90, Math.floor(days || 7)))
+  const models = dbOps.getModelBreakdown(d)
+
+  if (models.length === 0) return `No model data in the last ${d} days.`
+
+  const totalCost = models.reduce((s, m) => s + m.total_cost, 0)
+  const lines: string[] = [
+    `Model breakdown — last ${d} days`,
+    '',
+  ]
+
+  for (const m of models) {
+    const pct = totalCost > 0 ? Math.round(m.total_cost / totalCost * 100) : 0
+    const rawName = (m.model ?? 'unknown').replace(/^<|>$/g, '')
+    const name = rawName.padEnd(30)
+    const cost = fmtDollar(m.total_cost).padEnd(10)
+    lines.push(`  ${name}${cost}${pct}%   ${m.session_count} sessions`)
+  }
+
   return lines.join('\n')
 }
 
@@ -318,16 +364,27 @@ function toolGetWeeklyInsight(days: number): string {
 }
 
 async function handleToolCall(name: string, args: Record<string, unknown>): Promise<string> {
-  const days = typeof args.days === 'number' ? args.days : 7
   const sortBy = typeof args.sort_by === 'string' ? args.sort_by : 'cost'
 
   switch (name) {
     case 'get_quota_status':    await refreshFromApi(); return toolGetQuotaStatus()
     case 'get_current_session': return toolGetCurrentSession()
-    case 'get_session_stats':   return toolGetSessionStats(days)
-    case 'get_top_tools':       return toolGetTopTools(days, sortBy)
-    case 'get_usage_insights':  return toolGetUsageInsights(days)
-    case 'get_weekly_insight':  return toolGetWeeklyInsight(days)
+    case 'get_session_stats':   return toolGetSessionStats(
+      typeof args.days === 'number' ? args.days : 7
+    )
+    case 'get_top_tools':       return toolGetTopTools(
+      typeof args.days === 'number' ? args.days : 30,
+      sortBy
+    )
+    case 'get_usage_insights':  return toolGetUsageInsights(
+      typeof args.days === 'number' ? args.days : 7
+    )
+    case 'get_model_breakdown': return toolGetModelBreakdown(
+      typeof args.days === 'number' ? args.days : 7
+    )
+    case 'get_weekly_insight':  return toolGetWeeklyInsight(
+      typeof args.days === 'number' ? args.days : 7
+    )
     default: return `Unknown tool: ${name}`
   }
 }

@@ -18,8 +18,8 @@
 import fs   from 'fs'
 import path from 'path'
 import os   from 'os'
-import { readClaudeAuth, subscriptionTypeToPlan } from './claude-auth'
-import { getClaudeDir } from './paths'
+import { readClaudeAuth, subscriptionTypeToPlan, getOAuthAccessToken } from './claude-auth'
+import { getClaudeDir, getClaudestatDir } from './paths'
 
 // ─── Planes y límites ─────────────────────────────────────────────────────────
 
@@ -73,35 +73,6 @@ const CYCLE_MS    = 5 * 60 * 60 * 1000   // 5 horas en ms
 const WEEK_MS     = 7 * 24 * 60 * 60 * 1000
 const WINDOW_5MIN = 5 * 60 * 1000        // ventana de 5 min para agrupar actividad por modelo
 
-/**
- * Calcula el timestamp de reset usando ventana rolling real.
- *
- * Claude Code NO usa floor(now/5h) desde epoch UTC — usa una ventana rolling
- * que empieza desde el primer mensaje del ciclo actual.
- *
- * Enfoque: buscar el primer mensaje humano en los últimos 5h de actividad.
- * resetAt = primerMensaje.ts + 5h
- *
- * Si no hay mensajes en las últimas 5h → el ciclo ya reseteó, el próximo
- * reset es en 5h desde el primer mensaje futuro (mostramos ~5h).
- */
-function computeResetAt(entries: ParsedEntry[], now: number): number {
-  const fiveHoursAgo = now - CYCLE_MS
-  const recentHuman  = entries
-    .filter(e => e.type === 'human' && e.ts >= fiveHoursAgo)
-    .sort((a, b) => a.ts - b.ts)
-
-  if (recentHuman.length > 0) {
-    // Usamos el PRIMER mensaje humano (más antiguo) + 5h
-    // = momento en que el primer prompt de la ventana actual expira → cuota empieza a liberarse
-    // Los mensajes tool_result de sub-agentes ya están filtrados en el caller
-    return recentHuman[0].ts + CYCLE_MS
-  }
-
-  // Sin actividad en las últimas 5h → cuota ya libre, no hay reset pendiente
-  // Retornar `now` hace que cycleResetMs = 0, la UI puede mostrar "Disponible"
-  return now
-}
 
 function getWeekStart(now: number): number {
   // Lunes 00:00 hora local
@@ -250,6 +221,73 @@ function readAllEntries(sinceTs: number): ParsedEntry[] {
   return all
 }
 
+// ─── API de uso de Anthropic (datos exactos = claude.ai/settings/usage) ──────
+
+const USAGE_API_URL  = 'https://api.anthropic.com/api/oauth/usage'
+const USAGE_API_BETA = 'oauth-2025-04-20'
+const API_CACHE_TTL  = 5 * 60_000  // 5 minutes
+
+const API_DISK_CACHE = path.join(getClaudestatDir(), 'api-cache.json')
+
+interface UsageWindow { utilization: number; resets_at: string | null }
+interface UsageAPIResponse {
+  five_hour:        UsageWindow | null
+  seven_day:        UsageWindow | null
+  seven_day_sonnet: UsageWindow | null
+  seven_day_opus:   UsageWindow | null
+}
+
+let apiCache: { cyclePct: number; weeklyPctAll: number; cycleResetAt: number; ts: number } | null = null
+
+/**
+ * Llama a la API de Anthropic para obtener los % de quota exactos que muestra claude.ai.
+ * Actualiza apiCache si la llamada tiene éxito; de lo contrario, no hace nada (silent fallback).
+ * Debe llamarse periódicamente desde el daemon y al inicio del MCP server.
+ */
+export async function refreshFromApi(): Promise<void> {
+  // Shared disk cache: all processes (daemon + MCP) read/write the same file.
+  // This ensures at most 1 API call per API_CACHE_TTL across all processes.
+  try {
+    const raw  = fs.readFileSync(API_DISK_CACHE, 'utf8')
+    const disk = JSON.parse(raw) as typeof apiCache
+    if (disk && Date.now() - disk.ts < API_CACHE_TTL) {
+      apiCache = disk
+      invalidateQuotaCache()
+      return
+    }
+  } catch { /* no disk cache yet — proceed to API */ }
+
+  const token = getOAuthAccessToken()
+  if (!token) return
+
+  try {
+    const ctrl  = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), 3000)
+    const res   = await fetch(USAGE_API_URL, {
+      headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': USAGE_API_BETA },
+      signal: ctrl.signal,
+    })
+    clearTimeout(timer)
+    if (!res.ok) {
+      process.stderr.write(`[claudestat] API quota fetch failed: HTTP ${res.status}\n`)
+      return
+    }
+
+    const data = await res.json() as UsageAPIResponse
+    const fh   = data.five_hour
+    if (fh == null) return
+
+    apiCache = {
+      cyclePct:     Math.round(fh.utilization),
+      weeklyPctAll: data.seven_day != null ? Math.round(data.seven_day.utilization) : 0,
+      cycleResetAt: fh.resets_at ? new Date(fh.resets_at).getTime() : 0,
+      ts:           Date.now(),
+    }
+    try { fs.writeFileSync(API_DISK_CACHE, JSON.stringify(apiCache), 'utf8') } catch { }
+    invalidateQuotaCache()
+  } catch { /* no network or keychain — silent fallback to JSONL */ }
+}
+
 // ─── Caché de 30 segundos ─────────────────────────────────────────────────────
 
 let cache: { data: QuotaData; ts: number } | null = null
@@ -268,6 +306,15 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
   // Devolver caché si está fresco y no se fuerza plan
   if (!forcePlan && cache && now - cache.ts < CACHE_TTL) {
     return cache.data
+  }
+
+  // Load API data from disk cache if in-memory is stale (shared across processes)
+  if (!apiCache || now - apiCache.ts >= API_CACHE_TTL) {
+    try {
+      const raw  = fs.readFileSync(API_DISK_CACHE, 'utf8')
+      const disk = JSON.parse(raw) as typeof apiCache
+      if (disk && now - disk.ts < API_CACHE_TTL) apiCache = disk
+    } catch { }
   }
 
   const weekStart   = getWeekStart(now)
@@ -298,7 +345,7 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
 
   // ─ Ciclo 5h: ventana deslizante [now-5h, now] ─
   const fiveHAgo     = now - CYCLE_MS
-  const cycleResetAt = computeResetAt(entries, now)
+  const cycleResetAt = (Math.floor(now / CYCLE_MS) + 1) * CYCLE_MS  // epoch-aligned, matches claude.ai
   const cycleStart   = fiveHAgo   // inicio real de la ventana de conteo
 
   // Basado en tokens (como claude.ai/settings/usage)
@@ -347,14 +394,21 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
       ))
     : 0
 
+  // Override with API data if fresh — matches claude.ai exactly
+  const apiFresh = apiCache != null && Date.now() - apiCache.ts < API_CACHE_TTL
+  const resolvedCyclePct     = apiFresh ? apiCache!.cyclePct                                       : cyclePct
+  const resolvedWeeklyPctAll = apiFresh ? apiCache!.weeklyPctAll                                   : weeklyPctAll
+  const resolvedCycleResetAt = (apiFresh && apiCache!.cycleResetAt > 0) ? apiCache!.cycleResetAt  : cycleResetAt
+  const resolvedCycleResetMs = Math.max(0, resolvedCycleResetAt - now)
+
   const data: QuotaData = {
     cyclePrompts:       cycleEntries.filter(e => e.type === 'human').length,
     cycleLimit:        limits.prompts5h,
-    cyclePct,
+    cyclePct:          resolvedCyclePct,
     cycleTokens,
     cycleLimitTokens: limits.tokens5h,
-    cycleResetMs,
-    cycleResetAt,
+    cycleResetMs:     resolvedCycleResetMs,
+    cycleResetAt:     resolvedCycleResetAt,
     cycleStartTs:      cycleStart,
     weeklyHoursSonnet,
     weeklyHoursOpus,
@@ -364,7 +418,7 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
     weeklyTokensHaiku,
     weeklyLimitSonnet: limits.weeklyHoursSonnet,
     weeklyLimitOpus:   limits.weeklyHoursOpus,
-    weeklyPctAll,
+    weeklyPctAll:      resolvedWeeklyPctAll,
     burnRateTokensPerMin,
     detectedPlan:      plan,
     planSource,

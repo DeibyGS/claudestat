@@ -474,6 +474,28 @@ const stmts = {
     WHERE started_at >= ?
   `),
 
+  getProjectCosts: db.prepare(`
+    SELECT
+      COALESCE(project_path, 'no project') AS project,
+      COUNT(*)                              AS session_count,
+      COALESCE(SUM(total_cost_usd), 0)     AS total_cost
+    FROM sessions
+    WHERE started_at >= ? AND total_cost_usd > 0
+    GROUP BY project_path
+    ORDER BY total_cost DESC
+    LIMIT 5
+  `),
+
+  getHourlyDistribution: db.prepare(`
+    SELECT
+      CAST(strftime('%H', datetime(started_at/1000, 'unixepoch', 'localtime')) AS INTEGER) AS hour,
+      COUNT(*) AS session_count
+    FROM sessions
+    WHERE started_at >= ?
+    GROUP BY hour
+    ORDER BY hour ASC
+  `),
+
   getUnattributedCost: db.prepare(`
     WITH period_cost AS (
       SELECT COALESCE(SUM(total_cost_usd), 0) AS total_cost
@@ -692,5 +714,39 @@ export const dbOps = {
     return stmts.getCostProjection.get(since) as {
       total_cost_usd: number; earliest: number; latest: number
     }
+  },
+
+  getProjectCosts(days = 7) {
+    const since = Date.now() - days * 86_400_000
+    return stmts.getProjectCosts.all(since) as { project: string; session_count: number; total_cost: number }[]
+  },
+
+  getHourlyDistribution(days = 7) {
+    const since = Date.now() - days * 86_400_000
+    return stmts.getHourlyDistribution.all(since) as { hour: number; session_count: number }[]
+  },
+
+  getCacheReadByModel(days: number) {
+    const since = Date.now() - days * 86_400_000
+    return db.prepare(`
+      SELECT COALESCE(dominant_model, 'unknown') as model, SUM(total_cache_read) as cache_read
+      FROM sessions
+      WHERE started_at >= ?
+      GROUP BY dominant_model
+    `).all(since) as { model: string; cache_read: number }[]
+  },
+
+  getModelBreakdown(days: number) {
+    const since = Date.now() - days * 86_400_000
+    return db.prepare(`
+      SELECT
+        COALESCE(dominant_model, 'unknown') as model,
+        SUM(total_cost_usd) as total_cost,
+        COUNT(*) as session_count
+      FROM sessions
+      WHERE started_at >= ?
+      GROUP BY dominant_model
+      ORDER BY total_cost DESC
+    `).all(since) as { model: string; total_cost: number; session_count: number }[]
   },
 }

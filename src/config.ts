@@ -27,29 +27,33 @@ import { getClaudestatDir } from './paths'
 export type ReportFrequency = 'weekly' | 'biweekly' | 'monthly'
 
 export interface ClaudestatConfig {
-  killSwitchEnabled:  boolean
-  killSwitchThreshold: number          // porcentaje (0–100)
-  warnThresholds:     number[]         // [amarillo, naranja, rojo] — ej. [70, 85, 95]
-  plan:               ClaudePlan | null // null = auto-detect
-  reportsEnabled:     boolean
-  reportFrequency:    ReportFrequency
-  reportDay:          number           // 0=Dom, 1=Lun … 6=Sáb
-  reportTime:         string           // HH:MM
-  alertsEnabled:      boolean          // daemon polling + desktop notifications
+  killSwitchEnabled:    boolean
+  killSwitchThreshold:  number          // porcentaje (0–100)
+  warnThresholds:       number[]        // cycle 5h alert levels — ej. [70, 85, 95]
+  weeklyWarnThresholds: number[]        // weekly alert levels   — ej. [50, 75, 90]
+  resetReminderMins:    number          // minutes before cycle reset (0 = disabled)
+  plan:                 ClaudePlan | null
+  reportsEnabled:       boolean
+  reportFrequency:      ReportFrequency
+  reportDay:            number          // 0=Sun … 6=Sat
+  reportTime:           string          // HH:MM
+  alertsEnabled:        boolean         // master switch: cycle + weekly + reset + MCP alerts
 }
 
 const CONFIG_PATH = path.join(getClaudestatDir(), 'config.json')
 
 const DEFAULTS: ClaudestatConfig = {
-  killSwitchEnabled:   false,
-  killSwitchThreshold: 95,
-  warnThresholds:      [70, 85, 95],
-  plan:                null,
-  reportsEnabled:      false,
-  reportFrequency:     'weekly',
-  reportDay:           1,
-  reportTime:          '09:00',
-  alertsEnabled:       true,
+  killSwitchEnabled:    false,
+  killSwitchThreshold:  95,
+  warnThresholds:       [70, 85, 95],
+  weeklyWarnThresholds: [50, 75, 90],
+  resetReminderMins:    10,
+  plan:                 null,
+  reportsEnabled:       false,
+  reportFrequency:      'weekly',
+  reportDay:            1,
+  reportTime:           '09:00',
+  alertsEnabled:        true,
 }
 
 /** Lee la config del disco. Valores ausentes se rellenan con defaults. */
@@ -96,6 +100,18 @@ export function validateConfig(raw: unknown): string | null {
 
   if ('plan' in cfg && !VALID_PLANS.has(cfg.plan as string | null))
     return `plan debe ser uno de: free, pro, max5, max20 o null`
+
+  if ('weeklyWarnThresholds' in cfg) {
+    const v = cfg.weeklyWarnThresholds
+    if (!Array.isArray(v) || v.length !== 3 || v.some(n => typeof n !== 'number' || isNaN(n) || n < 1 || n > 100))
+      return 'weeklyWarnThresholds must be an array of 3 numbers between 1 and 100'
+  }
+
+  if ('resetReminderMins' in cfg) {
+    const v = cfg.resetReminderMins
+    if (typeof v !== 'number' || isNaN(v) || v < 0 || v > 60)
+      return 'resetReminderMins must be a number between 0 and 60'
+  }
 
   if ('alertsEnabled' in cfg && typeof cfg.alertsEnabled !== 'boolean')
     return 'alertsEnabled debe ser boolean'

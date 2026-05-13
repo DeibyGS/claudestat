@@ -285,7 +285,7 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost) => {
 
 export const onCompactDetected: CompactDetectedCallback = (sessionId) => {
   broadcast({ type: 'compact_detected', payload: { session_id: sessionId, ts: Date.now() } })
-  console.log(`[daemon] Auto-compact detectado para sesión ${sessionId.slice(0, 8)}`)
+  console.log(`[daemon] Auto-compact detected for session ${sessionId.slice(0, 8)}`)
 }
 
 // Exponer callback para que stream.ts pueda inyectarlo en processLatestForSession

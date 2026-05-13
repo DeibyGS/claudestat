@@ -24,6 +24,7 @@ export interface ClaudeAuthInfo {
   expiresAt:        number       // timestamp ms de expiración del token
   tokenValid:       boolean      // true si el token no ha expirado
   source:           'keychain' | 'file' | 'unknown'
+  accessToken?:     string       // raw OAuth bearer token para llamadas a la API
 }
 
 const KEYCHAIN_SERVICE = 'Claude Code-credentials'
@@ -60,6 +61,7 @@ function readFromKeychain(): ClaudeAuthInfo | null {
       expiresAt:        oa.expiresAt ?? 0,
       tokenValid:       Date.now() < (oa.expiresAt ?? 0),
       source:           'keychain',
+      accessToken:      oa.accessToken,
     }
   } catch {
     return null
@@ -94,12 +96,24 @@ function readFromFile(): ClaudeAuthInfo | null {
         expiresAt:        oa.expiresAt ?? 0,
         tokenValid:       Date.now() < (oa.expiresAt ?? 0),
         source:           'file',
+        accessToken:      oa.accessToken,
       }
     } catch {
       continue
     }
   }
   return null
+}
+
+// ─── Token OAuth para llamadas a la API ───────────────────────────────────────
+
+/**
+ * Devuelve el accessToken OAuth para autenticar llamadas a la API de Anthropic.
+ * Usa el mismo caché de 5 minutos que readClaudeAuth().
+ * Retorna null si no hay credenciales disponibles (Linux sin configurar, token expirado).
+ */
+export function getOAuthAccessToken(): string | null {
+  return readClaudeAuth().accessToken ?? null
 }
 
 // ─── API pública ──────────────────────────────────────────────────────────────

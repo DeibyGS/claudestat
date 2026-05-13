@@ -26,12 +26,50 @@ import type { ClaudestatConfig }        from './config'
 import { runDoctor }                    from './doctor'
 import { runRoast }                  from './roast'
 import { getWeeklyInsightData, renderWeeklyInsight, getUsageInsights, renderInsights } from './insights'
-import { getPidFile, whichCmd, isWindows } from './paths'
+import { getPidFile, whichCmd, isWindows, getClaudestatDir } from './paths'
 import { refreshFromApi } from './quota-tracker'
 
 const program  = new Command()
 const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version
 const PID_FILE = getPidFile()
+
+// ── Update notifier ────────────────────────────────────────────
+const SKIP_UPDATE_NOTICE = new Set(['start', 'stop', 'restart', 'watch'])
+const subcommand = process.argv[2]
+
+if (!SKIP_UPDATE_NOTICE.has(subcommand)) {
+  const UPDATE_CACHE = path.join(getClaudestatDir(), 'update-cache.json')
+  let cachedLatest: string | null = null
+
+  const fetchLatestVersion = () => {
+    fetch('https://registry.npmjs.org/@statforge/claudestat/latest', { signal: AbortSignal.timeout(3000) })
+      .then(r => r.json() as Promise<any>)
+      .then(j => {
+        if (j?.version) {
+          cachedLatest = j.version
+          fs.writeFileSync(UPDATE_CACHE, JSON.stringify({ version: j.version, ts: Date.now() }))
+        }
+      })
+      .catch(() => {})
+  }
+
+  try {
+    const cache = JSON.parse(fs.readFileSync(UPDATE_CACHE, 'utf8'))
+    cachedLatest = cache.version
+    if (Date.now() - cache.ts >= 24 * 60 * 60 * 1000) fetchLatestVersion()
+  } catch {
+    fetchLatestVersion()
+  }
+
+  const _exit = process.exit.bind(process)
+  process.exit = ((code?: number) => {
+    if ((code ?? 0) === 0 && cachedLatest && cachedLatest !== PKG_VERSION) {
+      console.log(`\n  ✦ Update available: ${PKG_VERSION} → ${cachedLatest}`)
+      console.log(`    Run: npm install -g @statforge/claudestat\n`)
+    }
+    _exit(code)
+  }) as typeof process.exit
+}
 
 function spawnDaemon() {
   const child = spawn(process.execPath, [process.argv[1], 'start'], {

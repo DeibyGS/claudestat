@@ -1,7 +1,7 @@
 import fs            from 'fs'
 import path          from 'path'
 import os            from 'os'
-import { execSync }  from 'child_process'
+import { execSync, spawnSync }  from 'child_process'
 import { getClaudeDir, getClaudestatDir, whichCmd, whichAllCmd, isWindows } from './paths'
 
 interface Check {
@@ -21,11 +21,9 @@ export async function runDoctor(): Promise<void> {
   const nodeMajor = parseInt(process.versions.node.split('.')[0], 10)
   checks.push({
     label: `Node.js version (${process.versions.node})`,
-    ok:    nodeMajor >= 18,
-    note:  nodeMajor >= 22 ? 'node:sqlite supported ✓'
-         : nodeMajor >= 18 ? 'Works — Node 22+ recommended for native node:sqlite'
-         : undefined,
-    fix:   nodeMajor < 18 ? 'Install Node.js 18 or later: https://nodejs.org' : undefined,
+    ok:    nodeMajor >= 22,
+    note:  nodeMajor >= 22 ? 'node:sqlite supported ✓' : undefined,
+    fix:   nodeMajor < 22 ? 'Install Node.js 22 or later: https://nodejs.org' : undefined,
   })
 
   // 2. Claude Code installed
@@ -99,7 +97,7 @@ export async function runDoctor(): Promise<void> {
     label: 'Global CLI symlink valid',
     ok:    symlinkOk,
     note:  symlinkNote,
-    fix:   symlinkOk ? undefined : 'npm install -g @deibygs/claudestat',
+    fix:   symlinkOk ? undefined : 'npm install -g @statforge/claudestat',
   })
 
   // 8. No duplicate claudestat binaries in PATH
@@ -118,7 +116,7 @@ export async function runDoctor(): Promise<void> {
     ok:    duplicatesOk,
     note:  duplicatesNote,
     fix:   duplicatesOk ? undefined :
-      `npm uninstall -g @deibygs/claudestat && npm install -g @deibygs/claudestat\n       Then restart your terminal or run: ${isWindows ? 'refreshenv' : 'hash -r claudestat'}`,
+      `npm uninstall -g @statforge/claudestat && npm install -g @statforge/claudestat\n       Then restart your terminal or run: ${isWindows ? 'refreshenv' : 'hash -r claudestat'}`,
   })
 
   // 9. Active binary version matches installed package
@@ -143,7 +141,7 @@ export async function runDoctor(): Promise<void> {
     ok:    versionOk,
     note:  versionNote,
     fix:   versionOk ? undefined :
-      `${isWindows ? 'refreshenv' : 'hash -r claudestat'}  (or restart terminal)\n       If persists: npm uninstall -g @deibygs/claudestat && npm install -g @deibygs/claudestat`,
+      `${isWindows ? 'refreshenv' : 'hash -r claudestat'}  (or restart terminal)\n       If persists: npm uninstall -g @statforge/claudestat && npm install -g @statforge/claudestat`,
   })
 
   // 10. NVM prefix sanity (only when NVM is active)
@@ -162,9 +160,28 @@ export async function runDoctor(): Promise<void> {
       ok:    nvmOk,
       note:  nvmNote,
       fix:   nvmOk ? undefined :
-        `nvm use default && npm install -g @deibygs/claudestat\n       Then restart terminal`,
+        `nvm use default && npm install -g @statforge/claudestat\n       Then restart terminal`,
     })
   }
+
+  // 11. MCP server registered in Claude Code
+  let mcpOk = false
+  let mcpNote: string | undefined
+  const mcpResult = spawnSync('claude', ['mcp', 'list'], { encoding: 'utf8', timeout: 15000 })
+  if (mcpResult.error) {
+    mcpNote = '"claude" CLI not found — install Claude Code first'
+  } else {
+    const mcpList = (mcpResult.stdout ?? '') + (mcpResult.stderr ?? '')
+    const mcpLine = mcpList.split('\n').find(l => l.includes('claudestat'))
+    mcpOk = !!mcpLine && !mcpLine.includes('Failed') && !mcpLine.includes('✗')
+    if (!mcpOk) mcpNote = 'Run "claudestat install" to register it automatically'
+  }
+  checks.push({
+    label: 'MCP server registered in Claude Code',
+    ok:    mcpOk,
+    note:  mcpNote,
+    fix:   mcpOk ? undefined : 'claudestat install',
+  })
 
   // ── Print results ───────────────────────────────────────────
   console.log('\n🩺 claudestat doctor\n' + '─'.repeat(46))

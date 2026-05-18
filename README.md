@@ -2,9 +2,11 @@
 
 # claudestat
 
-**Real-time execution trace and cost intelligence for Claude Code**
+**Live Claude Code monitor — real-time trace, quota guard, and MCP server**
 
-Hook into every tool call, token, and dollar — as it happens.
+Most tools read your logs after a session ends. claudestat hooks into every event as it fires.
+See what Claude is spending right now, get alerted before you hit your quota, and ask Claude about its own usage — from inside the terminal.
+
 Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js. Runs on macOS, Linux, and Windows.
 
 [![npm version](https://img.shields.io/npm/v/@statforge/claudestat?color=blue)](https://www.npmjs.com/package/@statforge/claudestat)
@@ -31,23 +33,54 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 
 ---
 
-## Why?
+## Why claudestat?
 
-You're burning tokens right now and you have no idea how many, on what, or whether Claude is stuck in a loop.
+Tools like ccusage are great for reviewing history. claudestat is for while you're coding.
 
-Claude Code is powerful — but it's a black box while it runs. You can't see what it's spending, how deep the context is, whether it's looping, or if you're about to hit your quota limit.
+It taps into Claude Code's hook system to capture every event the moment it fires, stores everything locally in SQLite, and gives you a live dashboard, quota alerts, and an MCP server — not just a report.
 
-**claudestat fixes that.** It taps into Claude Code's hook system to capture every event, stores it locally in SQLite, and shows you everything in a live dashboard or terminal trace.
+| | claudestat | ccusage |
+|---|:---:|:---:|
+| Real-time event stream | ✅ | ❌ |
+| Live terminal trace (`watch`) | ✅ | ❌ |
+| Web dashboard | ✅ | ❌ |
+| Quota alerts + kill switch | ✅ | ❌ |
+| Loop detector | ✅ | ❌ |
+| MCP server (ask Claude about itself) | ✅ | ❌ |
+| Historical usage analysis | ✅ | ✅ |
 
-- Live tool trace with duration and token cost per call
-- Quota guard with configurable kill switch (block new sessions at X%)
-- Pattern analyzer: detects loops, Bash overuse, low cache reuse, and more
-- Per-session cost breakdown + cache savings + burn rate
-- Weekly usage insights with actionable tips
-- AI-generated weekly usage reports
-- MCP server: query quota, sessions, and tools from within Claude Code
+**What you get:**
+
+- Live tool trace — every call with duration and token cost as it runs
+- Quota guard — alerts at 70%, 85%, 95%; optional kill switch blocks new sessions at X%
+- Loop detector — flags context thrashing with estimated waste cost
+- Top tools — know which tools eat most of your budget
+- Web dashboard — session history, analytics, model breakdown, charts
+- MCP server — 7 tools so Claude can answer questions about its own usage
+- Weekly insights — pattern analysis with actionable tips
 
 > If claudestat is useful, give it a ⭐ — it helps other developers find it.
+
+---
+
+## Ask Claude about itself
+
+claudestat ships an MCP server. Once registered, you can ask Claude Code questions about its own usage — without leaving the terminal.
+
+```bash
+claude mcp add claudestat -s user -- claudestat-mcp
+```
+
+Then just ask:
+
+```
+> What's my current quota status?
+> How much did I spend this week?
+> What are my top 5 tools by cost?
+> Break down my usage by model
+```
+
+Claude reads your local SQLite data through the MCP server and answers in real time. No cloud, no API key, no extra setup. [Full MCP reference →](#mcp-server)
 
 ---
 
@@ -673,9 +706,8 @@ Want to appear here? Pick a [good-first-issue](https://github.com/DeibyGS/claude
 
 ## FAQ
 
-**What is claudestat?**
-claudestat is a real-time token monitoring and cost analytics tool for Claude Code.
-It captures every tool call, token usage, and API cost as it happens — locally, with zero cloud dependencies.
+**What is claudestat? How is it different from ccusage?**
+claudestat is a real-time monitor for Claude Code — not a log reader. It hooks into every tool call as it fires, tracks token usage and cost live, guards your quota with configurable alerts, and exposes an MCP server so Claude can answer questions about its own usage. ccusage reads JSONL history after sessions end; claudestat runs while you code.
 
 **How do I monitor Claude Code token usage?**
 Install with `npm install -g @statforge/claudestat`, run `claudestat start`, and open `http://localhost:7337` for the live dashboard.

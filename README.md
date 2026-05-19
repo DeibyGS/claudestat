@@ -19,7 +19,7 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 
 [Installation](#installation) • [Quick Start](#quick-start) • [Commands](#commands) • [Dashboard](#dashboard) • [Contributing](#contributing)
 
-![ClaudeStat dashboard](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225605/My%20portfolio%7D/ClaudeStat_vnfmup.png)
+![ClaudeStat banner](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/banner.png)
 
 ---
 
@@ -510,6 +510,8 @@ Once registered, ask Claude things like:
 - *"What are my top 5 tools by cost this week?"*
 - *"Give me usage insights for the last 14 days"*
 - *"Break down my usage by model"*
+
+![claudestat MCP demo](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/mcp-demo.gif)
 
 Zero extra dependencies — stdio JSON-RPC, works without the daemon running. Uses on-demand API refresh with shared disk cache for accurate quota data.
 

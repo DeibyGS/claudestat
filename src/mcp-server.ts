@@ -13,10 +13,28 @@ process.on('warning', (w) => {
 })
 
 import * as readline from 'readline'
+import fs from 'fs'
 import { dbOps } from './db'
 import { computeQuota, refreshFromApi } from './quota-tracker'
 import { getWeeklyInsightData, generateTip, getUsageInsights } from './insights'
 import { readConfig, getWarnLevel } from './config'
+import { getPidFile } from './paths'
+
+function isDaemonRunning(): boolean {
+  try {
+    const pid = parseInt(fs.readFileSync(getPidFile(), 'utf8').trim(), 10)
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const DAEMON_WARNING = `⚠️ claudestat daemon is not running — real-time monitoring is disabled.
+Start it with: claudestat start
+
+Data shown below is from the last recorded session.
+---`
 
 const SERVER_NAME = 'claudestat'
 const SERVER_VERSION = '1.2.2'
@@ -364,25 +382,26 @@ function toolGetWeeklyInsight(days: number): string {
 }
 
 async function handleToolCall(name: string, args: Record<string, unknown>): Promise<string> {
+  const warning = isDaemonRunning() ? '' : DAEMON_WARNING + '\n'
   const sortBy = typeof args.sort_by === 'string' ? args.sort_by : 'cost'
 
   switch (name) {
-    case 'get_quota_status':    await refreshFromApi(); return toolGetQuotaStatus()
-    case 'get_current_session': return toolGetCurrentSession()
-    case 'get_session_stats':   return toolGetSessionStats(
+    case 'get_quota_status':    await refreshFromApi(); return warning + toolGetQuotaStatus()
+    case 'get_current_session': return warning + toolGetCurrentSession()
+    case 'get_session_stats':   return warning + toolGetSessionStats(
       typeof args.days === 'number' ? args.days : 7
     )
-    case 'get_top_tools':       return toolGetTopTools(
+    case 'get_top_tools':       return warning + toolGetTopTools(
       typeof args.days === 'number' ? args.days : 30,
       sortBy
     )
-    case 'get_usage_insights':  return toolGetUsageInsights(
+    case 'get_usage_insights':  return warning + toolGetUsageInsights(
       typeof args.days === 'number' ? args.days : 7
     )
-    case 'get_model_breakdown': return toolGetModelBreakdown(
+    case 'get_model_breakdown': return warning + toolGetModelBreakdown(
       typeof args.days === 'number' ? args.days : 7
     )
-    case 'get_weekly_insight':  return toolGetWeeklyInsight(
+    case 'get_weekly_insight':  return warning + toolGetWeeklyInsight(
       typeof args.days === 'number' ? args.days : 7
     )
     default: return `Unknown tool: ${name}`

@@ -19,7 +19,8 @@ import { execSync, spawn }      from 'child_process'
 import { startDaemon }                  from './daemon'
 import { startWatchdog }                from './watchdog'
 import { startWatch }                   from './watch'
-import { runInstall, uninstallHooks } from './install'
+import { runInstall, uninstallHooks, installHooks } from './install'
+import { installService, uninstallService } from './service'
 import { runExport } from './export'
 import { readConfig, writeConfig }      from './config'
 import type { ClaudestatConfig }        from './config'
@@ -188,14 +189,35 @@ program
   }))
 
 program
+  .command('setup')
+  .description('One-command setup: install hooks + register daemon as system service (auto-starts on login)')
+  .option('--uninstall', 'Remove hooks and system service')
+  .action(async (opts) => {
+    if (opts.uninstall) {
+      console.log('Uninstalling claudestat...')
+      uninstallService()
+      uninstallHooks()
+      await stopDaemon().catch(() => {})
+      console.log('✅ claudestat fully removed')
+      process.exit(0)
+    }
+    console.log('Setting up claudestat...')
+    installHooks()
+    installService()
+    console.log('✅ claudestat is running and will start automatically on login')
+    console.log('   Dashboard → http://localhost:7337')
+    process.exit(0)
+  })
+
+program
   .command('install')
   .description('Install hooks into Claude Code settings')
-  .action(runInstall)
+  .action(async () => { await runInstall(); process.exit(0) })
 
 program
   .command('uninstall')
   .description('Remove hooks from Claude Code')
-  .action(uninstallHooks)
+  .action(() => { uninstallHooks(); process.exit(0) })
 
 program
   .command('export [format]')

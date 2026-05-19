@@ -118,40 +118,43 @@ Claude Code event
 ## Installation
 
 ```bash
-npm install -g @statforge/claudestat
+npm install -g @statforge/claudestat && claudestat setup
 ```
+
+`claudestat setup` installs the Claude Code hooks and registers the daemon as a system service (launchd on macOS, systemd on Linux) — no sudo required. The daemon starts automatically whenever you log in.
 
 > **Using NVM?** Make sure you're on your default Node version before installing to avoid stale binary conflicts:
 > ```bash
 > nvm use default && npm install -g @statforge/claudestat
+> claudestat setup
 > ```
 > Works with [nvm](https://github.com/nvm-sh/nvm) (macOS/Linux) and [nvm-windows](https://github.com/coreybutler/nvm-windows).
 
-Then wire up the hooks into Claude Code:
+> Restart Claude Code after setup so the hooks take effect.
+
+### Manual setup (alternative)
+
+If you prefer to manage the daemon yourself:
 
 ```bash
-claudestat install
+npm install -g @statforge/claudestat
+claudestat install   # installs hooks into Claude Code
+claudestat start     # start the daemon manually
 ```
-
-This modifies `~/.claude/settings.json` to add `SessionStart`, `PreToolUse`, `PostToolUse`, and `Stop` hooks. A backup is created before any change.
-
-> Restart Claude Code after installing so the hooks take effect.
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Start the background daemon
-claudestat start
+# 1. Install and set up everything in one command
+npm install -g @statforge/claudestat && claudestat setup
 
 # 2. Open the dashboard in your browser
 #    macOS:
 open http://localhost:7337
-#    Windows:
-start http://localhost:7337
-#    Linux:
-xdg-open http://localhost:7337
+#    Windows / Linux:
+claudestat start   # start daemon manually, then open http://localhost:7337
 
 # 3. Or watch a live terminal trace
 claudestat watch
@@ -165,7 +168,9 @@ That's it. Start a Claude Code session and watch the events flow in.
 
 | Command | Description |
 |---|---|
-| `claudestat start` | Start the background daemon |
+| `claudestat setup` | One-command setup: install hooks + register daemon as system service |
+| `claudestat setup --uninstall` | Remove hooks and system service |
+| `claudestat start` | Start the background daemon manually |
 | `claudestat stop` | Stop the daemon |
 | `claudestat restart` | Restart the daemon |
 | `claudestat install` | Install hooks into Claude Code |
@@ -432,8 +437,9 @@ claudestat doctor
   ✓  Daemon running (localhost:7337)
   ✓  Global CLI symlink valid
   ✓  No duplicate claudestat binaries in PATH
-  ✓  Version match (installed: v1.2.2)
+  ✓  Version match (installed: v1.3.0)
   ✓  NVM prefix matches active binary
+  ✓  MCP server registered in Claude Code
 ──────────────────────────────────────────────
   All checks passed — claudestat is healthy!
 ```
@@ -449,11 +455,11 @@ Shows the current version and checks npm for updates.
 ```bash
 claudestat version
 
-1.2.2
+1.3.0
   latest ✓
 ```
 
-If a newer version is available, it shows: `latest: 1.3.0 — run npm update`.
+If a newer version is available, it shows: `latest: 1.4.0 — run npm update`.
 
 ### `claudestat export`
 
@@ -513,7 +519,7 @@ Once registered, ask Claude things like:
 
 ![claudestat MCP demo](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/mcp-demo.gif)
 
-Zero extra dependencies — stdio JSON-RPC, works without the daemon running. Uses on-demand API refresh with shared disk cache for accurate quota data.
+Zero extra dependencies — stdio JSON-RPC. Works without the daemon running (reads SQLite directly), but will warn you to start it if it's not active: `claudestat start`. Uses on-demand API refresh with shared disk cache for accurate quota data.
 
 ---
 
@@ -648,14 +654,18 @@ Have an idea? [Open an issue](https://github.com/DeibyGS/claudestat/issues) or s
 ## Uninstall
 
 ```bash
-claudestat uninstall        # removes hooks from Claude Code settings
+# Full uninstall (hooks + system service + daemon):
+claudestat setup --uninstall
 
+# Then remove the data directory:
 # macOS / Linux:
-rm -rf ~/.claudestat        # removes DB, config, and PID file
+rm -rf ~/.claudestat
 
 # Windows (PowerShell):
 Remove-Item -Recurse -Force "$env:USERPROFILE\.claudestat"
 ```
+
+> If you installed manually (without `setup`), use `claudestat uninstall` to remove only the hooks.
 
 ---
 
@@ -712,7 +722,7 @@ Want to appear here? Pick a [good-first-issue](https://github.com/DeibyGS/claude
 claudestat is a real-time monitor for Claude Code — not a log reader. It hooks into every tool call as it fires, tracks token usage and cost live, guards your quota with configurable alerts, and exposes an MCP server so Claude can answer questions about its own usage. ccusage reads JSONL history after sessions end; claudestat runs while you code.
 
 **How do I monitor Claude Code token usage?**
-Install with `npm install -g @statforge/claudestat`, run `claudestat start`, and open `http://localhost:7337` for the live dashboard.
+Install with `npm install -g @statforge/claudestat && claudestat setup`, then open `http://localhost:7337` for the live dashboard. The daemon starts automatically on login after setup.
 
 **How do I track Claude Code costs?**
 claudestat records every session's token usage and estimates API cost per tool call.

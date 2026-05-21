@@ -1,6 +1,6 @@
 {
   "name": "@statforge/claudestat",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Observability layer for Claude Code — live token tracking, cost analytics, quota guard, loop detection, and usage dashboard. The htop for Claude Code.",
   "keywords": [
     "claude-code",

@@ -32,6 +32,7 @@ export interface ClaudestatConfig {
   warnThresholds:       number[]        // cycle 5h alert levels — ej. [70, 85, 95]
   weeklyWarnThresholds: number[]        // weekly alert levels   — ej. [50, 75, 90]
   resetReminderMins:    number          // minutes before cycle reset (0 = disabled)
+  sessionCostLimitUsd:  number          // alerta cuando sesión supera este costo en USD (0 = desactivado)
   plan:                 ClaudePlan | null
   reportsEnabled:       boolean
   reportFrequency:      ReportFrequency
@@ -48,6 +49,7 @@ const DEFAULTS: ClaudestatConfig = {
   warnThresholds:       [70, 85, 95],
   weeklyWarnThresholds: [50, 75, 90],
   resetReminderMins:    10,
+  sessionCostLimitUsd:  0,
   plan:                 null,
   reportsEnabled:       false,
   reportFrequency:      'weekly',
@@ -111,6 +113,12 @@ export function validateConfig(raw: unknown): string | null {
     const v = cfg.resetReminderMins
     if (typeof v !== 'number' || isNaN(v) || v < 0 || v > 60)
       return 'resetReminderMins must be a number between 0 and 60'
+  }
+
+  if ('sessionCostLimitUsd' in cfg) {
+    const v = cfg.sessionCostLimitUsd
+    if (typeof v !== 'number' || isNaN(v) || v < 0)
+      return 'sessionCostLimitUsd debe ser un número >= 0 (0 = desactivado)'
   }
 
   if ('alertsEnabled' in cfg && typeof cfg.alertsEnabled !== 'boolean')

@@ -19,7 +19,7 @@ import { execSync, spawn }      from 'child_process'
 import { startDaemon }                  from './daemon'
 import { startWatchdog }                from './watchdog'
 import { startWatch }                   from './watch'
-import { runInstall, uninstallHooks, installHooks } from './install'
+import { runInstall, runWizard, uninstallHooks, installHooks } from './install'
 import { installService, uninstallService } from './service'
 import { runExport } from './export'
 import { readConfig, writeConfig }      from './config'
@@ -201,11 +201,23 @@ program
       console.log('✅ claudestat fully removed')
       process.exit(0)
     }
-    console.log('Setting up claudestat...')
-    installHooks()
-    installService()
-    console.log('✅ claudestat is running and will start automatically on login')
-    console.log('   Dashboard → http://localhost:7337')
+
+    // 1. Wizard: Node check + plan + config + hooks + MCP
+    await runWizard()
+
+    // 2. Start daemon now
+    const daemonRunning = await fetch('http://localhost:7337/health', {
+      signal: AbortSignal.timeout(2000),
+    }).then(r => r.ok).catch(() => false)
+
+    if (!daemonRunning) {
+      spawnDaemon()
+    } else {
+      console.log('✅ Daemon already running')
+      console.log('   Dashboard → http://localhost:7337')
+    }
+
+    console.log('\n   Run \x1b[36mclaudestat watch\x1b[0m to see live activity')
     process.exit(0)
   })
 
@@ -324,10 +336,11 @@ program
 program
   .command('config')
   .description('View or edit configuration (~/.claudestat/config.json)')
-  .option('--kill-switch <bool>',  'Enable/disable kill switch: true|false')
-  .option('--threshold <number>',  'Quota percentage to trigger the kill switch (default: 95)')
-  .option('--plan <plan>',         'Force plan detection: pro|max5|max20|auto')
-  .option('--alerts <bool>',       'Enable/disable daemon rate limit alerts: true|false')
+  .option('--kill-switch <bool>',   'Enable/disable kill switch: true|false')
+  .option('--threshold <number>',   'Quota percentage to trigger the kill switch (default: 95)')
+  .option('--plan <plan>',          'Force plan detection: pro|max5|max20|auto')
+  .option('--alerts <bool>',        'Enable/disable daemon rate limit alerts: true|false')
+  .option('--session-limit <usd>',  'Alert when a session exceeds this cost in USD (0 = disabled)')
   .action((opts) => {
     const cfg = readConfig()
     let changed = false
@@ -352,6 +365,11 @@ program
     if (opts.alerts !== undefined) {
       cfg.alertsEnabled = opts.alerts === 'true'
       changed = true
+    }
+    if (opts.sessionLimit !== undefined) {
+      const v = parseFloat(opts.sessionLimit)
+      if (!isNaN(v) && v >= 0) { cfg.sessionCostLimitUsd = v; changed = true }
+      else console.warn('  ⚠️  session-limit must be a number >= 0 (e.g. 5 for $5)')
     }
 
     if (changed) {
@@ -387,6 +405,7 @@ program
     if (cfg.killSwitchEnabled) {
       lines.push(`                    ${bar(cfg.killSwitchThreshold)}`)
     }
+    lines.push(`  Session limit     ${cfg.sessionCostLimitUsd > 0 ? `${Y}$${cfg.sessionCostLimitUsd.toFixed(2)}${R}` : `${D}OFF${R}`}`)
     lines.push('')
     lines.push(`  Cycle thresholds  ${cfg.warnThresholds.join('%, ')}%`)
     lines.push(`                    ${D}yellow${R} ${bar(cfg.warnThresholds[0], 8)}  ${D}orange${R} ${bar(cfg.warnThresholds[1], 8)}  ${D}red${R} ${bar(cfg.warnThresholds[2], 8)}`)

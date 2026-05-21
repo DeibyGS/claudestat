@@ -46,18 +46,13 @@ process.stdin.on('end', () => {
         signal: AbortSignal.timeout(1500),
       })
         .then(r => r.json())
-        .catch(() => {
-          // Si el daemon no responde, loggeamos en stderr (visible en logs de Claude)
-          // pero NO bloqueamos — un fallo del daemon no debe interrumpir el trabajo
-          process.stderr.write(`[claudetrace] daemon no disponible — kill-switch desactivado\n`)
-          return { blocked: false }
-        }),
+        .catch(() => ({ blocked: false })),  // daemon no disponible → fail-open
     ])
     .then(([_, ks]) => {
       if (ks && ks.blocked) {
-        // Claude Code muestra este stderr al usuario antes de cancelar la acción
-        process.stderr.write(`\n🚫 claudetrace kill switch activado\n`)
-        process.stderr.write(`   ${ks.reason ?? 'Cuota de uso superada.'}\n\n`)
+        process.stderr.write(`\n🚫 claudestat — kill switch active\n`)
+        process.stderr.write(`   ${ks.reason ?? 'Usage quota exceeded.'}\n`)
+        process.stderr.write(`   To disable: claudestat config --kill-switch false\n\n`)
         process.exit(2)
       } else {
         process.exit(0)

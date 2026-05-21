@@ -11,12 +11,20 @@ import { computeQuota, invalidateQuotaCache }  from '../quota-tracker'
 import { readConfig, getWarnLevel }            from '../config'
 import { isRateLimited }                       from '../middleware/rate-limiter'
 import { broadcast, sessionLastEvent }         from './stream'
+import { sendDesktopNotification }             from '../notifier'
 import {
   processLatestForSession,
   cleanupSession,
   type CostUpdateCallback,
   type CompactDetectedCallback,
 } from '../enricher'
+
+// ─── Loop alert cooldown (toolName:sessionId → last alert ts) ─────────────────
+const loopAlertCooldown = new Map<string, number>()
+const LOOP_ALERT_COOLDOWN_MS = 120_000  // coincide con LOOP_COOLDOWN_MS en intelligence.ts
+
+// ─── Session cost alert: sesiones que ya recibieron notificación ───────────────
+const sessionCostAlertFired = new Set<string>()
 
 export const eventsRouter = Router()
 
@@ -264,6 +272,32 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost) => {
       projected_hourly_usd:  projectedHourlyUsd,
     }
   })
+
+  // ─── Session cost alert: notificar si la sesión supera el límite configurado ──
+  const cfg = readConfig()
+  if (cfg.alertsEnabled && cfg.sessionCostLimitUsd > 0 && cost.cost_usd >= cfg.sessionCostLimitUsd && !sessionCostAlertFired.has(sessionId)) {
+    sessionCostAlertFired.add(sessionId)
+    sendDesktopNotification(
+      'claudestat — Session cost limit reached',
+      `Session cost: $${cost.cost_usd.toFixed(2)} — limit $${cfg.sessionCostLimitUsd.toFixed(2)} reached`
+    )
+  }
+
+  // ─── Loop alert: notificación de escritorio si hay loops activos ─────────────
+  if (cfg.alertsEnabled && report.loops.length > 0) {
+    const now = Date.now()
+    for (const loop of report.loops) {
+      const key      = `${loop.toolName}:${sessionId}`
+      const lastSent = loopAlertCooldown.get(key) ?? 0
+      if (now - lastSent >= LOOP_ALERT_COOLDOWN_MS) {
+        loopAlertCooldown.set(key, now)
+        sendDesktopNotification(
+          'claudestat — Loop detected',
+          `${loop.toolName} called ${loop.count}× in 2min — session may be stuck`
+        )
+      }
+    }
+  }
 
   // Emitir desglose de costo del último bloque (input vs output) para el TracePanel
   if (cost.lastEntry) {

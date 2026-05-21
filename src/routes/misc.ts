@@ -94,7 +94,7 @@ miscRouter.get('/kill-switch', (_req: Request, res: Response) => {
 
     const blocked = cfg.killSwitchEnabled && data.cyclePct >= cfg.killSwitchThreshold
     const reason  = blocked
-      ? `5h quota at ${data.cyclePct}% (limit: ${cfg.killSwitchThreshold}%). Resets in ${formatMs(data.cycleResetMs)}.`
+      ? `Quota at ${data.cyclePct}% — kill switch threshold is ${cfg.killSwitchThreshold}%. Resets in ${formatMs(data.cycleResetMs)}.`
       : undefined
 
     res.json({ blocked, reason, cyclePct: data.cyclePct })

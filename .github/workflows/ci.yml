@@ -56,9 +56,34 @@ jobs:
       - name: Test
         run: npm test
 
+  publish-check:
+    name: Publish dry-run
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Install dashboard dependencies
+        run: npm ci
+        working-directory: dashboard
+      - name: Validate NPM_TOKEN secret
+        run: |
+          if [ -z "${{ secrets.NPM_TOKEN }}" ]; then
+            echo "❌ NPM_TOKEN is not set in repo secrets"
+            exit 1
+          fi
+          echo "✅ NPM_TOKEN is set"
+      - name: Dry-run publish (packaging check)
+        run: npm publish --dry-run
+
   badge:
     name: Tests badge
-    needs: [test]
+    needs: [publish-check]
     if: github.ref == 'refs/heads/main' && success()
     runs-on: ubuntu-latest
     steps:

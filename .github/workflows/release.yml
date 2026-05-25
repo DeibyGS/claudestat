@@ -87,6 +87,7 @@ jobs:
         shell: bash
 
       - name: Verify binary exists
+        shell: bash
         run: |
           binary_path="./bin/claudestat-${{ matrix.target.name }}"
           if [ "${{ matrix.target.os }}" = "windows-latest" ]; then
@@ -96,7 +97,7 @@ jobs:
             echo "❌ Binary not found: $binary_path"
             exit 1
           fi
-          file_size=$(stat -f%z "$binary_path" 2>/dev/null || stat --format=%s "$binary_path" 2>/dev/null)
+          file_size=$(wc -c < "$binary_path")
           echo "✅ Binary size: $file_size bytes"
 
       - name: Upload binary artifact

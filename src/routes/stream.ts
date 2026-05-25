@@ -2,6 +2,7 @@
 
 import { Router, type Request, type Response } from 'express'
 import { dbOps } from '../db'
+import type { BlockCostEntry } from '../db'
 import { processLatestForSession, getAllBlockCostsForSession } from '../enricher'
 import { deriveSessionState } from '../session-state'
 
@@ -35,8 +36,8 @@ export function getSseClientsSize(): number {
   return sseClients.size
 }
 
-let _onCostUpdateRef: ((sessionId: string, cost: any) => void) | null = null
-export function setOnCostUpdateRef(cb: (sessionId: string, cost: any) => void) {
+let _onCostUpdateRef: ((sessionId: string, cost: any, source?: string) => void) | null = null
+export function setOnCostUpdateRef(cb: (sessionId: string, cost: any, source?: string) => void) {
   _onCostUpdateRef = cb
 }
 
@@ -58,16 +59,16 @@ streamRouter.get('/stream', (req: Request, res: Response) => {
     const lastEvt     = sessionLastEvent.get(latestSession.id)
     const state       = deriveSessionState(lastEvt?.type, lastEvt?.ts ?? latestSession.last_event_at ?? latestSession.started_at)
 
-    getAllBlockCostsForSession(latestSession.id).then(blockCosts => {
+    getAllBlockCostsForSession(latestSession.id).then((blockCosts: BlockCostEntry[]) => {
       const subAgentSessions = dbOps.getChildSessions(latestSession.id)
       res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events, blockCosts, subAgentSessions })}\n\n`)
 
       if (_onCostUpdateRef) {
-        processLatestForSession(latestSession.id, _onCostUpdateRef).catch(err =>
+        processLatestForSession(latestSession.id, _onCostUpdateRef).catch((err: Error) =>
           console.error('[stream] Error processing latest session:', err)
         )
       }
-    }).catch(err => {
+    }).catch((err: Error) => {
       console.error('[stream] Error loading block costs:', err)
       const subAgentSessions = dbOps.getChildSessions(latestSession.id)
       res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events, blockCosts: [], subAgentSessions })}\n\n`)

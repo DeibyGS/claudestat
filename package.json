@@ -54,12 +54,16 @@
   "scripts": {
     "build": "tsc && npm run build:dashboard",
     "build:dashboard": "cd dashboard && npm install && npm run build",
+    "build:bun": "bun run scripts/build-binary.ts",
+    "build:bun:all": "bun run scripts/build-binary.ts --all",
     "prepublishOnly": "npm run build",
     "prepack": "npm run build",
     "dev": "tsx src/index.ts",
     "dev:full": "tsx src/index.ts start & sleep 1 && cd dashboard && npm run dev",
     "start": "node dist/index.js",
-    "test": "node --require tsx/cjs tests/index.ts"
+    "test": "node --require tsx/cjs tests/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit --strict"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",

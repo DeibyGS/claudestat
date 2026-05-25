@@ -10,7 +10,6 @@
 
 import fs from 'fs'
 import path from 'path'
-import os from 'os'
 import readline from 'readline'
 import { execSync, spawnSync } from 'child_process'
 import { getClaudeDir, getClaudestatDir, isWindows } from './paths'

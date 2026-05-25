@@ -3,7 +3,6 @@
 
 import path from 'path'
 import fs   from 'fs'
-import os   from 'os'
 import { Router, type Request, type Response } from 'express'
 import { dbOps }                               from '../db'
 import { readConfig, type ClaudestatConfig }   from '../config'

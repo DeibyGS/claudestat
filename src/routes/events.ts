@@ -83,7 +83,7 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
     return
   }
 
-  const { type, session_id, tool_name, tool_input, tool_response, ts, cwd, transcript_path } = req.body
+  const { type, session_id, tool_name, tool_input, tool_response, ts, cwd, transcript_path, source } = req.body
 
   if (!session_id || !type) {
     res.status(400).json({ error: 'Missing session_id or type' })
@@ -93,7 +93,7 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
   const resolvedCwd = cwd
     ?? (transcript_path ? path.dirname(transcript_path) || undefined : undefined)
 
-  dbOps.upsertSession({ id: session_id, cwd: resolvedCwd, started_at: ts, last_event_at: ts })
+  dbOps.upsertSession({ id: session_id, cwd: resolvedCwd, started_at: ts, last_event_at: ts, source })
 
   // Skill grouping: get current parent BEFORE processing this event
   // (the Skill Done event itself is NOT tagged — only its subsequent sub-calls are)
@@ -126,7 +126,7 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
       session_id, type,
       tool_name: tool_name ?? undefined,
       tool_input: tool_input ? JSON.stringify(tool_input) : undefined,
-      ts, cwd: resolvedCwd, skill_parent: skillParent
+      ts, cwd: resolvedCwd, skill_parent: skillParent, source
     })
     broadcast({ type: 'event', payload: { ...req.body, skill_parent: skillParent } })
 
@@ -221,12 +221,12 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
  * 2. Guarda el coste + score en DB
  * 3. Hace broadcast vía SSE para que el watch muestre el coste actualizado
  */
-export const onCostUpdate: CostUpdateCallback = (sessionId, cost) => {
+export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
   // Ensure session row exists — sub-agent JSONLs arrive from the enricher without a
   // prior hook event (Claude Code does not fire hooks for sub-agent sessions).
   let sessionRow = dbOps.getSession(sessionId)
   if (!sessionRow) {
-    dbOps.upsertSession({ id: sessionId, cwd: undefined, started_at: cost.firstTs ?? Date.now(), last_event_at: cost.firstTs ?? Date.now() })
+    dbOps.upsertSession({ id: sessionId, cwd: undefined, started_at: cost.firstTs ?? Date.now(), last_event_at: cost.firstTs ?? Date.now(), source })
     sessionRow = dbOps.getSession(sessionId)
   }
 

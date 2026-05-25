@@ -4,7 +4,6 @@
 
 import path from 'path'
 import fs   from 'fs'
-import os   from 'os'
 import { Router, type Request, type Response } from 'express'
 import { dbOps }                from '../db'
 import { analyzeSession }       from '../intelligence'
@@ -18,6 +17,7 @@ import { inferProjectCwd }      from './projects'
 import { deriveSessionState }   from '../session-state'
 import { sessionLastEvent }     from './stream'
 import { getClaudeDir, getClaudestatDir, getHomeSlug } from '../paths'
+import { computeProjection }    from '../cost-projector'
 
 export const miscRouter = Router()
 
@@ -149,7 +149,6 @@ miscRouter.get('/system-config', (_req: Request, res: Response) => {
     return
   }
   try {
-    const home = os.homedir()
     const claudeDir = getClaudeDir()
 
     // 1. Hooks desde Claude Code settings.json
@@ -269,29 +268,9 @@ miscRouter.put('/config', (req: Request, res: Response) => {
   }
 })
 
-// ─── GET /cost-projection — weekly/monthly cost projection ──────────────────
+// ─── GET /cost-projection — linear regression cost projection ───────────────
 
 miscRouter.get('/cost-projection', (_req: Request, res: Response) => {
-  const week = dbOps.getCostProjection(7)
-  const month = dbOps.getCostProjection(30)
-
-  const weekSpan = week.latest && week.earliest ? (week.latest - week.earliest) / 86_400_000 : 0
-  const monthSpan = month.latest && month.earliest ? (month.latest - month.earliest) / 86_400_000 : 0
-
-  const weeklyProjected = weekSpan > 0.5 ? (week.total_cost_usd ?? 0) / weekSpan * 7 : 0
-  const monthlyProjected = monthSpan > 1 ? (month.total_cost_usd ?? 0) / monthSpan * 30 : 0
-
-  res.json({
-    weekly: {
-      daysWithData: Math.round(weekSpan * 10) / 10,
-      costSoFar: week.total_cost_usd ?? 0,
-      projected: Math.round(weeklyProjected * 100) / 100,
-    },
-    monthly: {
-      daysWithData: Math.round(monthSpan * 10) / 10,
-      costSoFar: month.total_cost_usd ?? 0,
-      projected: Math.round(monthlyProjected * 100) / 100,
-    },
-  })
+  res.json(computeProjection(90))
 })
 

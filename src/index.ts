@@ -19,15 +19,16 @@ import { execSync, spawn }      from 'child_process'
 import { startDaemon }                  from './daemon'
 import { startWatchdog }                from './watchdog'
 import { startWatch }                   from './watch'
-import { runInstall, runWizard, uninstallHooks, installHooks } from './install'
-import { installService, uninstallService } from './service'
+import { runInstall, runWizard, uninstallHooks } from './install'
+import { uninstallService } from './service'
 import { runExport } from './export'
 import { readConfig, writeConfig }      from './config'
 import type { ClaudestatConfig }        from './config'
 import { runDoctor }                    from './doctor'
 import { runRoast }                  from './roast'
+import { computeProjection, formatProjection } from './cost-projector'
 import { getWeeklyInsightData, renderWeeklyInsight, getUsageInsights, renderInsights } from './insights'
-import { getPidFile, whichCmd, isWindows, getClaudestatDir } from './paths'
+import { getPidFile, isWindows, getClaudestatDir } from './paths'
 import { refreshFromApi } from './quota-tracker'
 
 const program  = new Command()
@@ -255,14 +256,13 @@ program
   .action(async (opts) => {
     try {
       await refreshFromApi()  // refresh disk cache on demand; daemon reads from disk
-      const [quotaRes, healthRes] = await Promise.all([
+      const [quotaRes] = await Promise.all([
         fetch('http://localhost:7337/quota'),
         fetch('http://localhost:7337/health'),
       ])
       if (!quotaRes.ok) throw new Error('Daemon unavailable')
 
-      const q    = await quotaRes.json() as any
-      const _h   = await healthRes.json().catch(() => ({})) as any
+      const q = await quotaRes.json() as any
 
       if (opts.json) {
         console.log(JSON.stringify({
@@ -574,6 +574,27 @@ program
         process.exit(0)
       }
       console.log(renderInsights(data))
+      process.exit(0)
+    } catch (err: any) {
+      console.error('\n❌ Error:', err.message)
+      process.exit(1)
+    }
+  })
+
+program
+  .command('project')
+  .description('Show cost projection with linear regression')
+  .option('--days <number>', 'Look back N days for data (default 90)')
+  .option('--json', 'Output raw JSON')
+  .action((opts) => {
+    try {
+      const days = Math.max(7, Math.min(365, parseInt(opts.days ?? '90', 10) || 90))
+      const p = computeProjection(days)
+      if (opts.json) {
+        console.log(JSON.stringify(p, null, 2))
+        process.exit(0)
+      }
+      console.log(formatProjection(p))
       process.exit(0)
     } catch (err: any) {
       console.error('\n❌ Error:', err.message)

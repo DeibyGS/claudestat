@@ -9,7 +9,7 @@ import fs   from 'fs'
 import path from 'path'
 import os   from 'os'
 import { getClaudeDir, encodeClaudePath } from './paths'
-import { calcCost, PRICING, DEFAULT_PRICING } from './pricing'
+import { calcCost } from './pricing'
 
 export interface HandoffProgress {
   done:     number

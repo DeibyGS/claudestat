@@ -17,7 +17,6 @@
 
 import fs   from 'fs'
 import path from 'path'
-import os   from 'os'
 import { readClaudeAuth, subscriptionTypeToPlan, getOAuthAccessToken } from './claude-auth'
 import { getClaudeDir, getClaudestatDir } from './paths'
 
@@ -353,8 +352,7 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
   const cycleTokens = cycleEntries.reduce(
     (sum, e) => sum + (e.inputTokens ?? 0) + (e.outputTokens ?? 0), 0
   )
-  const cyclePct     = Math.min(100, Math.round(cycleTokens / limits.tokens5h * 100))
-  const cycleResetMs = Math.max(0, cycleResetAt - now)
+  const cyclePct = Math.min(100, Math.round(cycleTokens / limits.tokens5h * 100))
 
   // ─ Semanal por modelo: ventanas de 5 min con actividad ─
   // Contamos ventanas de 5 min distintas con al menos 1 respuesta por modelo

@@ -1,6 +1,5 @@
 import fs            from 'fs'
-import path          from 'path'
-import os            from 'os'
+import path from 'path'
 import { execSync, spawnSync }  from 'child_process'
 import { getClaudeDir, getClaudestatDir, whichCmd, whichAllCmd, isWindows } from './paths'
 

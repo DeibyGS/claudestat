@@ -78,8 +78,6 @@ export async function startWatch() {
   }
   fetchQuota().then(pct => { state.cyclePct = pct })
   setInterval(async () => { state.cyclePct = await fetchQuota() }, 30_000)
-
-  // Refrescar stats semanales cada 5 minutos
   setInterval(() => { state.weekly = readWeeklyStats() }, 5 * 60 * 1000)
 
   function draw() {

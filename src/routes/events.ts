@@ -1,7 +1,6 @@
 // ─── POST /event — recibe eventos de los hooks de Claude Code ─────────────────
 
 import path from 'path'
-import fs   from 'fs'
 import { Router, type Request, type Response } from 'express'
 import { dbOps }                               from '../db'
 import { analyzeSession }                      from '../intelligence'
@@ -12,6 +11,7 @@ import { readConfig, getWarnLevel }            from '../config'
 import { isRateLimited }                       from '../middleware/rate-limiter'
 import { broadcast, sessionLastEvent }         from './stream'
 import { sendDesktopNotification }             from '../notifier'
+import { findProjectCwdForFile }               from './helpers'
 import {
   processLatestForSession,
   cleanupSession,
@@ -62,18 +62,6 @@ function shouldFireAlert(level: 'yellow' | 'orange' | 'red', pct: number): boole
 
   alertCooldown.set(level, Date.now())
   return true
-}
-
-/** Sube el árbol desde un file_path hasta encontrar HANDOFF.md → directorio del proyecto */
-export function findProjectCwdForFile(filePath: string): string | undefined {
-  let dir = path.dirname(filePath)
-  for (let i = 0; i < 6; i++) {
-    if (fs.existsSync(path.join(dir, 'HANDOFF.md'))) return dir
-    const parent = path.dirname(dir)
-    if (parent === dir) break
-    dir = parent
-  }
-  return undefined
 }
 
 eventsRouter.post('/event', (req: Request, res: Response) => {

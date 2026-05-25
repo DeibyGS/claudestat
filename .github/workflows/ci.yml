@@ -27,6 +27,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     needs: [lint]
+    timeout-minutes: 15
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -61,4 +62,19 @@ jobs:
     if: github.ref == 'refs/heads/main' && success()
     runs-on: ubuntu-latest
     steps:
-      - run: echo "::notice title=Tests passed::All tests passed on main"
+      - name: Generate badge JSON artifact
+        run: |
+          mkdir -p badges
+          cat > badges/tests.json << 'EOF'
+          {
+            "schemaVersion": 1,
+            "label": "tests",
+            "message": "passing",
+            "color": "brightgreen"
+          }
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tests-badge
+          path: badges/

@@ -14,7 +14,7 @@ import { calcCost, PRICING, DEFAULT_PRICING } from '../pricing'
 import type { CostUpdate } from '../db'
 import type { BlockCostEntry } from '../db'
 
-const PROJECTS_DIR = path.join(getClaudeDir(), 'projects')
+function projectsDir(): string { return path.join(getClaudeDir(), 'projects') }
 
 interface UsageEntry {
   input_tokens: number
@@ -130,14 +130,14 @@ export const claudeCodeAdapter: WatcherAdapter = {
 
   detect(): boolean {
     try {
-      return fsSync.existsSync(PROJECTS_DIR)
+      return fsSync.existsSync(projectsDir())
     } catch {
       return false
     }
   },
 
   getWatchPaths(): string[] {
-    return [`${PROJECTS_DIR}/**/*.jsonl`]
+    return [`${projectsDir()}/**/*.jsonl`]
   },
 
   parseEvent(raw: string, _filePath: string): ParsedEvent | null {
@@ -177,10 +177,10 @@ export async function getAllBlockCostsForSession(sessionId: string): Promise<Blo
   if (costCacheLocks.get(sessionId)) return cached?.data ?? []
   costCacheLocks.set(sessionId, true)
   try {
-    if (!fsSync.existsSync(PROJECTS_DIR)) return []
-    const dirs = await fs.readdir(PROJECTS_DIR)
+    if (!fsSync.existsSync(projectsDir())) return []
+    const dirs = await fs.readdir(projectsDir())
     for (const dir of dirs) {
-      const dirPath = path.join(PROJECTS_DIR, dir)
+      const dirPath = path.join(projectsDir(), dir)
       try { const stat = await fs.stat(dirPath); if (!stat.isDirectory()) continue } catch { continue }
       const filePath = path.join(dirPath, `${sessionId}.jsonl`)
       try { await fs.access(filePath) } catch { continue }
@@ -233,10 +233,10 @@ export interface SessionPrompt {
 
 export async function getSessionPrompts(sessionId: string): Promise<SessionPrompt[]> {
   try {
-    if (!fsSync.existsSync(PROJECTS_DIR)) return []
-    const dirs = await fs.readdir(PROJECTS_DIR)
+    if (!fsSync.existsSync(projectsDir())) return []
+    const dirs = await fs.readdir(projectsDir())
     for (const dir of dirs) {
-      const dirPath = path.join(PROJECTS_DIR, dir)
+      const dirPath = path.join(projectsDir(), dir)
       try { const stat = await fs.stat(dirPath); if (!stat.isDirectory()) continue } catch { continue }
       const filePath = path.join(dirPath, `${sessionId}.jsonl`)
       try { await fs.access(filePath) } catch { continue }

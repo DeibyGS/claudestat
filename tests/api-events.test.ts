@@ -14,7 +14,7 @@ app.use(express.json({ limit: '10mb' }))
 app.use(eventsRouter)
 
 const server = http.createServer(app)
-const PORT = 17337
+let PORT = 0
 
 let sidCounter = 0
 const newSid = () => `api-test-${++sidCounter}`
@@ -40,7 +40,7 @@ function postEvent(body: any): Promise<{ status: number; body: any }> {
 }
 
 describe('POST /event — API integration tests', () => {
-  before((_, done) => { server.listen(PORT, () => done()) })
+  before((_, done) => { server.listen(0, () => { PORT = (server.address() as any).port; done() }) })
   after((_, done) => { server.close(() => done()) })
 
   test('missing session_id returns 400', async () => {

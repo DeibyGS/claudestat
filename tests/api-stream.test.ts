@@ -12,7 +12,7 @@ const app = express()
 app.use(streamRouter)
 
 const server = http.createServer(app)
-const PORT = 17338
+let PORT = 0
 
 function connectSSE(): Promise<{ data: string[]; close: () => void }> {
   return new Promise((resolve, reject) => {
@@ -40,7 +40,7 @@ function connectSSE(): Promise<{ data: string[]; close: () => void }> {
 }
 
 describe('GET /stream — SSE integration tests', () => {
-  before((_, done) => { server.listen(PORT, () => done()) })
+  before((_, done) => { server.listen(0, () => { PORT = (server.address() as any).port; done() }) })
   after((_, done) => { server.close(() => done()) })
 
   test('SSE connection receives init event', async () => {

@@ -11,6 +11,7 @@ permissions:
 jobs:
   npm:
     name: Publish to npm
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +38,7 @@ jobs:
 
   binary:
     name: Build binary (${{ matrix.target.name }})
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -83,6 +85,19 @@ jobs:
             --outfile ./bin/claudestat-${{ matrix.target.name }} \
             ./dist/index.js
         shell: bash
+
+      - name: Verify binary exists
+        run: |
+          binary_path="./bin/claudestat-${{ matrix.target.name }}"
+          if [ "${{ matrix.target.os }}" = "windows-latest" ]; then
+            binary_path="${binary_path}.exe"
+          fi
+          if [ ! -f "$binary_path" ]; then
+            echo "❌ Binary not found: $binary_path"
+            exit 1
+          fi
+          file_size=$(stat -f%z "$binary_path" 2>/dev/null || stat --format=%s "$binary_path" 2>/dev/null)
+          echo "✅ Binary size: $file_size bytes"
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4

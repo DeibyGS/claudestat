@@ -162,7 +162,7 @@ export const claudeCodeAdapter: WatcherAdapter = {
   },
 }
 
-setInterval(cleanupStaleOffsets, 5 * 60_000)
+setInterval(cleanupStaleOffsets, 5 * 60_000).unref()
 registerAdapter(claudeCodeAdapter)
 
 // ─── Session-level utilities (used by routes/stream and routes/misc) ───────────

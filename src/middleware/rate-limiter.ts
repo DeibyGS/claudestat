@@ -21,7 +21,7 @@ export function isRateLimited(ip: string): boolean {
 const rateLimitCleanupInterval = setInterval(() => {
   const now = Date.now()
   rateLimitMap.forEach((v, k) => { if (now - v.windowStart > RATE_LIMIT_WINDOW_MS) rateLimitMap.delete(k) })
-}, 5 * 60_000)
+}, 5 * 60_000).unref()
 
 export function stopRateLimiter() {
   clearInterval(rateLimitCleanupInterval)

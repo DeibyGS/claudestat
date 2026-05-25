@@ -13,7 +13,7 @@ import { miscRouter } from '../src/routes/misc'
 const app = express()
 app.use(miscRouter)
 const server = http.createServer(app)
-const PORT = 17341
+let PORT = 0
 
 const configPath = path.join(process.env.CLAUDESTAT_DATA_DIR!, 'config.json')
 
@@ -28,7 +28,7 @@ function getKillSwitch(): Promise<{ blocked: boolean; reason?: string; cyclePct?
 }
 
 describe('GET /kill-switch', () => {
-  before((_, done) => { server.listen(PORT, () => done()) })
+  before((_, done) => { server.listen(0, () => { PORT = (server.address() as any).port; done() }) })
   after((_, done) => {
     try { fs.unlinkSync(configPath) } catch {}
     server.close(() => done())

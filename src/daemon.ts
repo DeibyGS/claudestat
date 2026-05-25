@@ -132,7 +132,7 @@ function shutdown(server: import('http').Server) {
   if (reportInterval) { clearInterval(reportInterval); reportInterval = null }
   if (alertInterval)  { clearInterval(alertInterval);  alertInterval  = null }
   cleanPid()
-  server.close()
+  server.close(() => {})
 }
 
 const LEVEL_RANK = { yellow: 1, orange: 2, red: 3 } as const

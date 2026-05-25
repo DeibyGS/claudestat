@@ -86,14 +86,22 @@ describe('stopEnricher', () => {
 })
 
 describe('getSessionPrompts', () => {
-  const claudeProjectsDir = path.join(os.homedir(), '.claude', 'projects', 'test-claudestat-prompts')
+  const claudeDir = process.env.CLAUDE_DIR
+  const claudeProjectsDir = path.join(tmpDir, 'projects', 'test-claudestat-prompts')
   const sessionId = `test-prompts-${Date.now()}`
   const jsonlPath = path.join(claudeProjectsDir, `${sessionId}.jsonl`)
 
   function line(obj: object) { return JSON.stringify(obj) }
 
-  before(() => { fs.mkdirSync(claudeProjectsDir, { recursive: true }) })
-  after(() => { try { fs.rmSync(claudeProjectsDir, { recursive: true }) } catch {} })
+  before(() => {
+    process.env.CLAUDE_DIR = tmpDir
+    fs.mkdirSync(claudeProjectsDir, { recursive: true })
+  })
+  after(() => {
+    if (claudeDir) process.env.CLAUDE_DIR = claudeDir
+    else delete process.env.CLAUDE_DIR
+    try { fs.rmSync(claudeProjectsDir, { recursive: true }) } catch {}
+  })
 
   test('returns empty array when session file does not exist', async () => {
     const result = await getSessionPrompts('nonexistent-session-00000')
@@ -152,6 +160,6 @@ describe('getSessionPrompts', () => {
   })
 })
 
-test('cleanup tmpDir', () => {
+after(() => {
   try { fs.rmSync(tmpDir, { recursive: true }) } catch {}
 })

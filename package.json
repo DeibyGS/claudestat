@@ -1,6 +1,6 @@
 {
   "name": "@statforge/claudestat",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "private": false,
   "publishConfig": {
     "access": "public"
@@ -51,6 +51,8 @@
     "hooks/",
     "dashboard/dist/"
   ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
     "claudestat": "dist/index.js",
     "claudestat-mcp": "dist/mcp-server.js"
@@ -61,7 +63,6 @@
     "build:bun": "bun run scripts/build-binary.ts",
     "build:bun:all": "bun run scripts/build-binary.ts --all",
     "prepublishOnly": "npm run build",
-    "prepack": "npm run build",
     "dev": "tsx src/index.ts",
     "dev:full": "tsx src/index.ts start & sleep 1 && cd dashboard && npm run dev",
     "start": "node dist/index.js",

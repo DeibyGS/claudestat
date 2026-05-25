@@ -1,25 +1,13 @@
 // ─── GET /projects — listado de proyectos con stats ──────────────────────────
 
 import path from 'path'
-import fs   from 'fs'
 import { Router, type Request, type Response } from 'express'
 import { dbOps, type EventRow }  from '../db'
 import { getProjectsCached }     from '../cache/projects-cache'
 import { analyzePatterns }       from '../pattern-analyzer'
+import { findProjectCwdForFile } from './helpers'
 
 export const projectsRouter = Router()
-
-/** Sube el árbol desde un file_path hasta encontrar HANDOFF.md → directorio del proyecto */
-export function findProjectCwdForFile(filePath: string): string | undefined {
-  let dir = path.dirname(filePath)
-  for (let i = 0; i < 6; i++) {
-    if (fs.existsSync(path.join(dir, 'HANDOFF.md'))) return dir
-    const parent = path.dirname(dir)
-    if (parent === dir) break
-    dir = parent
-  }
-  return undefined
-}
 
 /** Infiere el proyecto activo mirando los eventos de archivo de una sesión */
 export function inferProjectCwd(events: EventRow[]): string | undefined {

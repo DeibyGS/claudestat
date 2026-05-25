@@ -36,9 +36,8 @@ describe('watchdog utilities', () => {
     fs.rmSync(tmpDir, { recursive: true })
   })
 
-  test('startWatchdog does not throw', () => {
+  test('startWatchdog does not throw and sets interval', () => {
     const { startWatchdog } = require('../src/watchdog')
-    assert.doesNotThrow(() => {
-    })
+    assert.doesNotThrow(() => { startWatchdog() })
   })
 })

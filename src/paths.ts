@@ -67,7 +67,7 @@ export function getDashboardDir(): string {
  * Empirically verified: Claude Code CLI stores settings at ~/.claude on macOS, Linux, and Windows.
  */
 export function getClaudeDir(): string {
-  return path.join(os.homedir(), '.claude')
+  return process.env.CLAUDE_DIR ?? path.join(os.homedir(), '.claude')
 }
 
 // ─── ClaudeStat data directory ─────────────────────────────────────────────────

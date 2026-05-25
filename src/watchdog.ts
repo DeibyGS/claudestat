@@ -1,6 +1,11 @@
 /**
  * watchdog.ts — Daemon auto-restart mechanism
  *
+ * NOTE: The watchdog currently runs in the same process as the daemon.
+ * This means it cannot restart the daemon if the process crashes.
+ * For true resilience, the watchdog should be spawned as a separate
+ * process via `child_process.spawn()` with `detached: true`.
+ *
  * If the daemon process crashes or is killed unexpectedly, the watchdog
  * detects the stale PID file and relaunches the daemon automatically.
  *
@@ -68,7 +73,7 @@ export function startWatchdog() {
       try { fs.unlinkSync(PID_FILE) } catch {}
       restartDaemon()
     }
-  }, CHECK_INTERVAL_MS)
+  }, CHECK_INTERVAL_MS).unref()
 
   process.on('SIGTERM', () => { clearInterval(interval); process.exit(0) })
   process.on('SIGINT',  () => { clearInterval(interval); process.exit(0) })

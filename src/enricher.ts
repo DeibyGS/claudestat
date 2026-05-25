@@ -132,7 +132,7 @@ export function startEnricher(
         // cleanup per-adapter state if needed
       }
     }
-  }, 5 * 60_000)
+  }, 5 * 60_000).unref()
 }
 
 export function stopEnricher() {

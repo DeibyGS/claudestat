@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  npm:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Install dashboard dependencies
+        run: npm ci
+        working-directory: dashboard
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  binary:
+    name: Build binary (${{ matrix.target.name }})
+    needs: [npm]
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { name: macos-arm64, os: macos-latest, bun-target: bun-darwin-arm64 }
+          - { name: macos-x64,   os: macos-latest, bun-target: bun-darwin-x64 }
+          - { name: linux-x64,   os: ubuntu-latest, bun-target: bun-linux-x64 }
+          - { name: linux-arm64, os: ubuntu-latest, bun-target: bun-linux-arm64 }
+          - { name: win-x64,     os: windows-latest, bun-target: bun-windows-x64 }
+
+    runs-on: ${{ matrix.target.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Install dashboard dependencies
+        run: npm ci
+        working-directory: dashboard
+
+      - name: Build TypeScript + dashboard
+        run: npm run build
+
+      - name: Copy dashboard dist
+        run: |
+          mkdir -p dist/dashboard
+          cp -r dashboard/dist/* dist/dashboard/
+        shell: bash
+
+      - name: Build binary with Bun
+        run: |
+          mkdir -p bin
+          bun build --compile \
+            --target ${{ matrix.target.bun-target }} \
+            --outfile ./bin/claudestat-${{ matrix.target.name }} \
+            ./dist/index.js
+        shell: bash
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: claudestat-${{ matrix.target.name }}
+          path: ./bin/claudestat-${{ matrix.target.name }}*
+
+  release:
+    name: Create GitHub Release
+    needs: [binary]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./artifacts/**/*
+          generate_release_notes: true

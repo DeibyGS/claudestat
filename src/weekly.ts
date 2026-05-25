@@ -3,9 +3,8 @@
  * No necesita daemon ni API — lee el archivo directamente.
  */
 
-import fs from 'fs'
+import fs   from 'fs'
 import path from 'path'
-import os from 'os'
 import { getClaudeDir } from './paths'
 
 const STATS_PATH = path.join(getClaudeDir(), 'stats-cache.json')

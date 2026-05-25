@@ -13,8 +13,52 @@
 
 import os   from 'os'
 import path from 'path'
+import fs   from 'fs'
 
 const isWin = process.platform === 'win32'
+
+// ─── Binary detection ──────────────────────────────────────────────────────────
+
+/**
+ * Detecta si claudestat está corriendo como binario standalone (Bun compile)
+ * vs desde npm (node dist/index.js).
+ */
+export function isBinary(): boolean {
+  const arg1 = process.argv[1] ?? ''
+  return !arg1.includes('node_modules') && !arg1.includes('dist/index.js')
+    && !arg1.includes('tsx') && arg1.includes('claudestat')
+}
+
+/**
+ * Retorna el directorio base del binario o del proyecto.
+ * En binario: directorio donde está el ejecutable.
+ * En npm: root del proyecto (unimos dist/..).
+ */
+export function getBinaryDir(): string {
+  if (isBinary()) {
+    return path.dirname(process.argv[1])
+  }
+  return path.join(__dirname, '..')
+}
+
+/**
+ * Retorna el directorio del dashboard build (dashboard/dist/).
+ * En binario: busca relativo al binario o en CLAUDESTAT_DATA_DIR.
+ * En npm: usa __dirname para encontrar dist/.
+ */
+export function getDashboardDir(): string {
+  if (isBinary()) {
+    const candidates = [
+      path.join(getBinaryDir(), 'dashboard'),
+      path.join(getClaudestatDir(), 'dashboard'),
+      path.join(getBinaryDir(), '..', 'dashboard', 'dist'),
+    ]
+    for (const c of candidates) {
+      if (fs.existsSync(path.join(c, 'index.html'))) return c
+    }
+  }
+  return path.join(__dirname, '..', 'dashboard', 'dist')
+}
 
 // ─── Claude Code data directory ────────────────────────────────────────────────
 

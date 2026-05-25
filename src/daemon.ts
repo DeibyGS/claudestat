@@ -17,7 +17,7 @@ import express, { type Request, type Response } from 'express'
 import path   from 'path'
 import fs     from 'fs'
 import { dbOps }                                                    from './db'
-import { startEnricher, stopEnricher, cleanupSession }                        from './enricher'
+import { startEnricher, stopEnricher }                                        from './enricher'
 import { readConfig, getWarnLevel }                                 from './config'
 import { computeQuota }                                              from './quota-tracker'
 import { sendDesktopNotification }                                   from './notifier'
@@ -30,9 +30,8 @@ import { reportsRouter, getReportDateLabel, generateReport }        from './rout
 import { topRouter }                                                  from './routes/top'
 import { getProjectsCached, invalidateProjectsCache }               from './cache/projects-cache'
 import { stopRateLimiter }                                            from './middleware/rate-limiter'
-import { startWatchdog }                                              from './watchdog'
 import { summarizeSession }                                         from './summarizer'
-import { getPidFile, getClaudestatDir, portCheckCmd }              from './paths'
+import { getPidFile, getClaudestatDir, getDashboardDir, portCheckCmd }            from './paths'
 
 const PORT = 7337
 const app  = express()
@@ -66,7 +65,7 @@ app.get('/health', (_req: Request, res: Response) => {
 
 // ─── Dashboard React (servir estáticos del build de Vite) ────────────────────
 
-const DASHBOARD_DIST = path.join(__dirname, '..', 'dashboard', 'dist')
+const DASHBOARD_DIST = getDashboardDir()
 app.use(express.static(DASHBOARD_DIST, {
   setHeaders(res, filePath) {
     if (filePath.endsWith('.html')) {

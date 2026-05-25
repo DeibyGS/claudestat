@@ -108,8 +108,6 @@ export async function runRoast(opts: { stats: boolean; months: number }) {
   const D = '\x1b[2m'
   const G = '\x1b[32m'
   const Y = '\x1b[33m'
-  const C = '\x1b[36m'
-  const M = '\x1b[35m'
 
   const bar = (pct: number, width = 20): string => {
     const filled = Math.round(Math.min(pct, 100) / 100 * width)

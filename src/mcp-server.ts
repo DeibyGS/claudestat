@@ -40,7 +40,6 @@ const SERVER_NAME = 'claudestat'
 const SERVER_VERSION = '1.2.2'
 const PROTOCOL_VERSION = '2025-03-26'
 
-type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 type JsonRpcRequest = { jsonrpc: '2.0'; id?: number | string; method: string; params?: Record<string, unknown> }
 type JsonRpcResponse = { jsonrpc: '2.0'; id?: number | string; result?: unknown; error?: { code: number; message: string } }
 

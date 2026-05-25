@@ -80,6 +80,8 @@ try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_project  ON sessions(proj
 try { db.exec(`ALTER TABLE sessions ADD COLUMN dominant_model TEXT`) } catch {}
 try { db.exec(`ALTER TABLE events ADD COLUMN skill_parent TEXT`) } catch {}
 try { db.exec(`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT`) } catch {}
+try { db.exec(`ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'claude-code'`) } catch {}
+try { db.exec(`ALTER TABLE events ADD COLUMN source TEXT DEFAULT 'claude-code'`) } catch {}
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -97,6 +99,9 @@ export interface SessionRow {
   efficiency_score?: number
   loops_detected?: number
   ai_summary?: string
+  dominant_model?: string
+  parent_session_id?: string
+  source?: string
 }
 
 export interface EventRow {
@@ -110,6 +115,7 @@ export interface EventRow {
   cwd?: string
   duration_ms?: number
   skill_parent?: string
+  source?: string
 }
 
 export interface BlockCostEntry {
@@ -137,8 +143,8 @@ export interface CostUpdate {
 
 const stmts = {
   upsertSession: db.prepare(`
-    INSERT INTO sessions (id, cwd, started_at, last_event_at)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO sessions (id, cwd, started_at, last_event_at, source)
+    VALUES (?, ?, ?, ?, COALESCE(?, 'claude-code'))
     ON CONFLICT(id) DO UPDATE SET last_event_at = excluded.last_event_at
   `),
 
@@ -156,8 +162,8 @@ const stmts = {
   `),
 
   insertEvent: db.prepare(`
-    INSERT INTO events (session_id, type, tool_name, tool_input, ts, cwd, skill_parent)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO events (session_id, type, tool_name, tool_input, ts, cwd, skill_parent, source)
+    VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, 'claude-code'))
   `),
 
   pairPost: db.prepare(`
@@ -532,13 +538,13 @@ const stmts = {
 
 export const dbOps = {
   upsertSession(s: SessionRow) {
-    stmts.upsertSession.run(s.id, s.cwd ?? null, s.started_at, s.last_event_at ?? s.started_at)
+    stmts.upsertSession.run(s.id, s.cwd ?? null, s.started_at, s.last_event_at ?? s.started_at, s.source ?? null)
   },
 
   insertEvent(e: EventRow): number {
     const res = stmts.insertEvent.run(
       e.session_id, e.type, e.tool_name ?? null,
-      e.tool_input ?? null, e.ts, e.cwd ?? null, e.skill_parent ?? null
+      e.tool_input ?? null, e.ts, e.cwd ?? null, e.skill_parent ?? null, e.source ?? null
     )
     return Number(res.lastInsertRowid)
   },

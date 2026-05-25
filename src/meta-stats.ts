@@ -99,7 +99,7 @@ function fmtTok(n: number): string {
  *   - {project}/.claude/CLAUDE.md — alternative project-level location
  */
 function resolveContextCandidates(
-  homeDir: string,
+  _homeDir: string,
   projectCwd?: string,
 ): { label: string; filePath: string }[] {
   const claudeDir = getClaudeDir()

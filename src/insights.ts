@@ -269,8 +269,6 @@ export function renderWeeklyInsight(d: WeeklyInsightData): string {
   const R = '\x1b[0m'
   const B = '\x1b[1m'
   const D = '\x1b[2m'
-  const G = '\x1b[32m'
-  const Y = '\x1b[33m'
   const C = '\x1b[36m'
 
   const bar = (pct: number, width = 20): string => {

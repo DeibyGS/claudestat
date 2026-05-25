@@ -11,9 +11,17 @@ const PLIST_PATH  = path.join(
 const SYSTEMD_DIR  = path.join(process.env.HOME ?? '~', '.config', 'systemd', 'user')
 const SYSTEMD_PATH = path.join(SYSTEMD_DIR, 'claudestat.service')
 
+function isBinary(): boolean {
+  return process.argv[1]?.includes('claudestat') && !process.argv[1]?.includes('node_modules')
+    && !process.argv[1]?.includes('dist/index.js')
+}
+
+function serviceCommand(): string {
+  if (isBinary()) return process.argv[1]
+  return `${process.execPath} ${process.argv[1]}`
+}
+
 function makePlist(): string {
-  const node = process.execPath
-  const script = process.argv[1]
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -22,8 +30,7 @@ function makePlist(): string {
   <string>${PLIST_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${node}</string>
-    <string>${script}</string>
+    <string>${serviceCommand()}</string>
     <string>start</string>
   </array>
   <key>EnvironmentVariables</key>
@@ -40,15 +47,13 @@ function makePlist(): string {
 }
 
 function makeUnit(): string {
-  const node = process.execPath
-  const script = process.argv[1]
   return `[Unit]
 Description=ClaudeStat daemon — real-time Claude Code monitor
 After=default.target
 
 [Service]
 Type=simple
-ExecStart=${node} ${script} start
+ExecStart=${serviceCommand()} start
 Restart=on-failure
 RestartSec=5
 Environment=CLAUDESTAT_DAEMON=1

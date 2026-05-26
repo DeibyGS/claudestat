@@ -50,7 +50,7 @@ streamRouter.get('/stream', (req: Request, res: Response) => {
   const clientId = Math.random().toString(36).slice(2)
   sseClients.set(clientId, res)
 
-  const latestSession = dbOps.getLatestClaudeSession()
+  const latestSession = dbOps.getLatestSession()
   if (latestSession) {
     const allEvents   = dbOps.getSessionEvents(latestSession.id)
     const events      = allEvents.length > SSE_INIT_EVENT_LIMIT

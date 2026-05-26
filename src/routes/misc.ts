@@ -158,7 +158,7 @@ miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
   for (const s of sessions) {
     const lastSeen = s.last_event_at ?? s.started_at
     if (lastSeen < cutoff) continue
-    const src = s.source ?? 'claude-code'
+    const src = s.source ?? 'unknown'
     const existing = bySource.get(src)
     if (!existing || lastSeen > existing.last_seen_ms) {
       bySource.set(src, {

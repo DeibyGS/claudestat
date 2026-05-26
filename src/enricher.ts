@@ -170,6 +170,8 @@ export async function processLatestForSession(
     : getActiveAdapters()
 
   for (const adapter of adapters) {
+    if (isPollable(adapter)) continue
+
     for (const watchPath of adapter.getWatchPaths()) {
       const baseDir = watchPath.split('/**')[0]
       if (!baseDir) continue

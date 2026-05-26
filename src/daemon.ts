@@ -238,7 +238,7 @@ export function startDaemon() {
     process.on('SIGINT',  () => { if (_server) shutdown(_server); process.exit(0) })
 
     console.log(`\n● claudestat daemon  →  http://localhost:${PORT}`)
-    console.log(`  Waiting for Claude Code events...\n`)
+    console.log(`  Watching for events...\n`)
     console.log(`  In another terminal: \x1b[36mclaudestat watch\x1b[0m\n`)
 
     // Weekly insight — se muestra una vez por semana al iniciar el daemon

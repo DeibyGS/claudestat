@@ -5,14 +5,11 @@
  * GET /api/opencode/session/:id → { events: TraceEvent[], totalParts: number }
  */
 
-import os   from 'os'
-import path from 'path'
 import fs   from 'fs'
 import { Router, type Request, type Response } from 'express'
+import { getOpencodeDb } from '../paths'
 
 export const opencodeReaderRouter = Router()
-
-const OPENCODE_DB = path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db')
 
 // OpenCode tool names → claudestat canonical names
 const TOOL_NAME_MAP: Record<string, string> = {
@@ -54,11 +51,11 @@ function mapToolName(raw: string): string {
 
 function openDb() {
   const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
-  return new DatabaseSync(OPENCODE_DB, { open: true })
+  return new DatabaseSync(getOpencodeDb(), { open: true })
 }
 
 opencodeReaderRouter.get('/api/opencode/session/:id', (req: Request, res: Response) => {
-  if (!fs.existsSync(OPENCODE_DB)) {
+  if (!fs.existsSync(getOpencodeDb())) {
     res.status(404).json({ error: 'OpenCode DB not found' }); return
   }
 

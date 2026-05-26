@@ -143,6 +143,16 @@ export function getHomeSlug(): string {
   return encodeClaudePath(os.homedir())
 }
 
+// ─── OpenCode data directory ───────────────────────────────────────────────────
+
+/**
+ * Returns the OpenCode SQLite database path.
+ * Can be overridden via OPENCODE_DB env var.
+ */
+export function getOpencodeDb(): string {
+  return process.env.OPENCODE_DB ?? path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db')
+}
+
 // ─── Platform utilities ────────────────────────────────────────────────────────
 
 /**

@@ -6,17 +6,14 @@
  * Uses PollableAdapter — no JSONL files, no chokidar.
  */
 
-import path from 'path'
-import os from 'os'
 import fs from 'fs'
 import { type PollableAdapter, type PollSession, type ParsedEvent, registerAdapter } from './adapter'
+import { getOpencodeDb } from '../paths'
 import type { CostUpdate } from '../db'
-
-const OPENCODE_DB = path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db')
 
 function openDb() {
   const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
-  return new DatabaseSync(OPENCODE_DB, { open: true })
+  return new DatabaseSync(getOpencodeDb(), { open: true })
 }
 
 function parseModel(raw: string | null): string {
@@ -36,7 +33,7 @@ export const opencodeAdapter: PollableAdapter = {
 
   detect(): boolean {
     try {
-      return fs.existsSync(OPENCODE_DB)
+      return fs.existsSync(getOpencodeDb())
     } catch {
       return false
     }
@@ -55,15 +52,15 @@ export const opencodeAdapter: PollableAdapter = {
   },
 
   async pollSessions(since: number): Promise<PollSession[]> {
+    let db: ReturnType<typeof openDb> | null = null
     try {
-      const db = openDb()
-      const stmt = db.prepare(
+      db = openDb()
+      const rows = db.prepare(
         `SELECT id, model, cost, tokens_input, tokens_output, tokens_cache_read, tokens_cache_write, time_updated
          FROM session
          WHERE time_updated >= ?
          AND time_archived IS NULL`
-      )
-      const rows = stmt.all(since) as Array<{
+      ).all(since) as Array<{
         id: string
         model: string | null
         cost: number
@@ -73,7 +70,6 @@ export const opencodeAdapter: PollableAdapter = {
         tokens_cache_write: number
         time_updated: number
       }>
-      db.close()
 
       return rows.map(row => ({
         sessionId: row.id,
@@ -90,6 +86,8 @@ export const opencodeAdapter: PollableAdapter = {
       }))
     } catch {
       return []
+    } finally {
+      db?.close()
     }
   },
 }

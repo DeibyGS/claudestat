@@ -85,17 +85,18 @@ function getBlockColors(isSelected: boolean, inProgress: boolean, heatRole?: 'ma
 // ─── BlockListItem ────────────────────────────────────────────────────────────
 
 export function BlockListItem({
-  block, blockCost, isLast, isSelected, heatRole, onClick,
+  block, blockCost, isLast, isSelected, heatRole, onClick, defaultActorLabel = 'Claude',
 }: {
-  block:      Block
-  blockCost?: BlockCost
-  isLast:     boolean
-  isSelected: boolean
-  heatRole?:  'max' | 'min'
-  onClick:    () => void
+  block:              Block
+  blockCost?:         BlockCost
+  isLast:             boolean
+  isSelected:         boolean
+  heatRole?:          'max' | 'min'
+  onClick:            () => void
+  defaultActorLabel?: string
 }) {
   const inProgress = !block.hasStop && isLast
-  const actors     = extractActors(block.tools)
+  const actors     = extractActors(block.tools, defaultActorLabel)
   const stats      = calcStats(block.tools)
   const intent     = getIntent(stats)
   const dur        = blockDuration(block)

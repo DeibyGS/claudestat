@@ -2,12 +2,12 @@
 
 # claudestat
 
-**Live Claude Code monitor — real-time trace, quota guard, and MCP server**
+**Live AI coding monitor — real-time trace, quota guard, and MCP server**
 
 Most tools read your logs after a session ends. claudestat hooks into every event as it fires.
-See what Claude is spending right now, get alerted before you hit your quota, and ask Claude about its own usage — from inside the terminal.
+See what your AI is spending right now, get alerted before you hit your quota, and ask Claude about its own usage — from inside the terminal.
 
-Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js. Runs on macOS, Linux, and Windows.
+Works with **Claude Code** and **OpenCode**. Zero cloud dependencies. Pure Node.js. Runs on macOS, Linux, and Windows.
 
 [![npm version](https://img.shields.io/npm/v/@statforge/claudestat?color=blue)](https://www.npmjs.com/package/@statforge/claudestat)
 [![npm downloads](https://img.shields.io/npm/dw/@statforge/claudestat?color=blue)](https://www.npmjs.com/package/@statforge/claudestat)
@@ -47,6 +47,7 @@ Works with Claude Pro, Max 5, and Max 20. Zero cloud dependencies. Pure Node.js.
 - [Installation](#installation)
 - [Commands](#commands)
 - [Dashboard](#dashboard)
+- [OpenCode Support](#opencode-support)
 - [MCP Server](#mcp-server)
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
@@ -102,6 +103,7 @@ Then just ask:
 ## Features
 
 - **Live tool trace** — every call with duration and token cost as it runs
+- **OpenCode support** — same live dashboard for OpenCode sessions (tool calls, prompts, model, intent)
 - **Quota guard** — alerts at 70%, 85%, 95%; optional kill switch blocks new sessions at X%
 - **Loop detector** — flags context thrashing with estimated waste cost
 - **Top tools** — know which tools eat most of your budget
@@ -109,7 +111,7 @@ Then just ask:
 - **Web dashboard** — 6 tabs: Live, History, Projects, Analytics, Top, System
 - **MCP server** — 7 tools so Claude can answer questions about its own usage
 - **Weekly insights** — pattern analysis with actionable tips
-- **Multi-CLI support** — works with Claude Code, Codex, OpenCode, and more
+- **Multi-source** — switch between Claude Code and OpenCode sessions in one click
 
 ---
 
@@ -199,6 +201,27 @@ The dashboard lives at `http://localhost:7337` and has six tabs: **Live** (real-
 ![System tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225606/My%20portfolio%7D/system_ixurjb.png)
 
 [Dashboard details →](docs/DASHBOARD.md)
+
+---
+
+## OpenCode Support
+
+When you run **OpenCode** alongside Claude Code, claudestat automatically detects both sessions and shows a source switcher in the Live tab.
+
+Click between **Claude Code** and **OpenCode** to see each session's real-time view — tool calls, prompts, model name, intent badges, and timing — without leaving the dashboard.
+
+| Feature | Claude Code | OpenCode |
+|---|:---:|:---:|
+| Tool calls (Read, Write, Bash, Edit…) | ✅ | ✅ |
+| Prompts per block | ✅ | ✅ |
+| Model name | ✅ | ✅ |
+| Intent detection (Exploring / Implementing…) | ✅ | ✅ |
+| Session cost | ✅ | ✅ |
+| Weekly usage chart | ✅ | ✅ |
+| Per-block cost breakdown | ✅ | — |
+| Quota / context window | ✅ | — |
+
+OpenCode data is read directly from its local SQLite database — no configuration required.
 
 ---
 

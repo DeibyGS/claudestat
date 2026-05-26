@@ -122,7 +122,7 @@ export function groupBlocks(events: TraceEvent[]): Block[] {
   return blocks
 }
 
-export function extractActors(tools: TraceEvent[]): Actor[] {
+export function extractActors(tools: TraceEvent[], defaultLabel = 'Claude'): Actor[] {
   const agents: string[] = []
   const skills: string[] = []
   let hasDirect = false
@@ -144,9 +144,9 @@ export function extractActors(tools: TraceEvent[]): Actor[] {
     }
   }
   if (agents.length === 0 && skills.length === 0)
-    return [{ label: 'Claude', color: '#e06c39', type: 'claude' }]
+    return [{ label: defaultLabel, color: '#e06c39', type: 'claude' }]
   const result: Actor[] = []
-  if (hasDirect) result.push({ label: 'Claude', color: '#e06c39', type: 'claude' })
+  if (hasDirect) result.push({ label: defaultLabel, color: '#e06c39', type: 'claude' })
   for (const a of agents) result.push({ label: a, color: '#bc8cff', type: 'agent' })
   for (const s of skills) result.push({ label: `/${s}`, color: '#58a6ff', type: 'skill' })
   return result
@@ -269,7 +269,8 @@ export function fmtModelBlock(model: string): { name: string; color: string } {
   if (model.includes('opus'))   return { name: 'Opus 4.6',   color: '#d29922' }
   if (model.includes('haiku'))  return { name: 'Haiku 4.5',  color: '#3fb950' }
   if (model.includes('sonnet')) return { name: 'Sonnet 4.6', color: '#58a6ff' }
-  return { name: model.replace('claude-', '').split('-').slice(0, 2).join(' '), color: '#8b949e' }
+  const raw = model.replace('claude-', '').split('-').slice(0, 2).join(' ')
+  return { name: raw.charAt(0).toUpperCase() + raw.slice(1), color: '#8b949e' }
 }
 
 export function getSkillName(ev: TraceEvent): string {

@@ -28,6 +28,7 @@ import { historyRouter }                                            from './rout
 import { miscRouter }                                               from './routes/misc'
 import { reportsRouter, getReportDateLabel, generateReport }        from './routes/reports'
 import { topRouter }                                                  from './routes/top'
+import { opencodeReaderRouter }                                       from './routes/opencode-reader'
 import { getProjectsCached, invalidateProjectsCache }               from './cache/projects-cache'
 import { stopRateLimiter }                                            from './middleware/rate-limiter'
 import { summarizeSession }                                         from './summarizer'
@@ -56,6 +57,7 @@ app.use(historyRouter)
 app.use(miscRouter)
 app.use(reportsRouter)
 app.use(topRouter)
+app.use(opencodeReaderRouter)
 
 // ─── GET /health — necesita acceso al tamaño del pool SSE ─────────────────────
 

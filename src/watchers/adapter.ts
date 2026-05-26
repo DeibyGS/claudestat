@@ -40,6 +40,21 @@ export interface WatcherAdapter {
   get shortName(): string
 }
 
+export interface PollSession {
+  sessionId: string
+  cost: CostUpdate
+}
+
+/** Adapters que no usan archivos JSONL sino una DB o API propia */
+export interface PollableAdapter extends WatcherAdapter {
+  /** Devuelve sesiones actualizadas desde `since` (epoch ms) */
+  pollSessions(since: number): Promise<PollSession[]>
+}
+
+export function isPollable(adapter: WatcherAdapter): adapter is PollableAdapter {
+  return 'pollSessions' in adapter && typeof adapter.pollSessions === 'function'
+}
+
 // ─── Factory ───────────────────────────────────────────────────────────────────
 
 const registry = new Map<string, WatcherAdapter>()

@@ -14,7 +14,7 @@
 import chokidar from 'chokidar'
 import path from 'path'
 import fsSync from 'fs'
-import { getActiveAdapters, getAdapter, type WatcherAdapter } from './watchers/adapter'
+import { getActiveAdapters, getAdapter, isPollable, type WatcherAdapter } from './watchers/adapter'
 import './watchers/claude-code'
 import './watchers/codex'
 import './watchers/opencode'
@@ -33,6 +33,7 @@ const prevContextBySession = new Map<string, number>()
 let watcher: chokidar.FSWatcher | null = null
 const pendingFiles = new Map<string, ReturnType<typeof setTimeout>>()
 const fileLocks = new Map<string, Promise<void>>()
+const pollIntervals: ReturnType<typeof setInterval>[] = []
 
 // ─── Adapter lookup por filePath ───────────────────────────────────────────────
 
@@ -68,8 +69,6 @@ async function processFile(filePath: string): Promise<{ sessionId: string; cost:
 }
 
 // ─── Start / Stop ──────────────────────────────────────────────────────────────
-
-let offsetCleanupInterval: ReturnType<typeof setInterval> | null = null
 
 export function startEnricher(
   onUpdate: CostUpdateCallback,
@@ -126,20 +125,30 @@ export function startEnricher(
   watcher.on('change', handleFile)
   watcher.on('add', handleFile)
 
-  offsetCleanupInterval = setInterval(() => {
-    for (const [, adapter] of adapterByDir) {
-      if (typeof (adapter as any).constructor?.name === 'undefined') {
-        // cleanup per-adapter state if needed
+  // ─── Poll-based adapters (e.g. OpenCode SQLite) ─────────────────────────────
+  const POLL_INTERVAL_MS = 10_000
+  for (const adapter of adapters) {
+    if (!isPollable(adapter)) continue
+    let lastPoll = Date.now()
+    const interval = setInterval(async () => {
+      const since = lastPoll
+      lastPoll = Date.now()
+      const sessions = await adapter.pollSessions(since)
+      for (const { sessionId, cost } of sessions) {
+        onUpdate(sessionId, cost, adapter.name)
       }
-    }
-  }, 5 * 60_000).unref()
+    }, POLL_INTERVAL_MS)
+    interval.unref()
+    pollIntervals.push(interval)
+  }
 }
 
 export function stopEnricher() {
   if (watcher) { watcher.close(); watcher = null }
-  if (offsetCleanupInterval) { clearInterval(offsetCleanupInterval); offsetCleanupInterval = null }
   for (const [, timer] of pendingFiles) clearTimeout(timer)
   pendingFiles.clear()
+  for (const interval of pollIntervals) clearInterval(interval)
+  pollIntervals.length = 0
   prevContextBySession.clear()
   adapterByDir.clear()
   console.log('[enricher] Stopped')

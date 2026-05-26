@@ -117,6 +117,14 @@ miscRouter.get('/sessions', (_req: Request, res: Response) => {
   res.json(enriched)
 })
 
+// ─── GET /api/session-events — todos los eventos de una sesión (sin límite) ──
+
+miscRouter.get('/api/session-events', (req: Request, res: Response) => {
+  const sessionId = req.query.session_id as string | undefined
+  if (!sessionId) return res.status(400).json({ error: 'session_id required' })
+  res.json({ events: dbOps.getSessionEvents(sessionId) })
+})
+
 // ─── GET /prompts — mensajes del usuario para una sesión ─────────────────────
 
 miscRouter.get('/prompts', async (req: Request, res: Response) => {
@@ -135,6 +143,39 @@ miscRouter.get('/hidden-cost', (_req: Request, res: Response) => {
 
 miscRouter.get('/claude-stats', (_req: Request, res: Response) => {
   res.json(readClaudeStats())
+})
+
+// ─── GET /api/active-sessions — fuentes activas en los últimos 5 min ──────────
+
+miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
+  const cutoff   = Date.now() - 5 * 60 * 1000
+  const sessions = dbOps.getAllSessions()
+
+  const bySource = new Map<string, {
+    sessionId: string; model: string; cost_usd: number; last_seen_ms: number
+    input_tokens: number; output_tokens: number; cache_read: number; cache_creation: number
+  }>()
+  for (const s of sessions) {
+    const lastSeen = s.last_event_at ?? s.started_at
+    if (lastSeen < cutoff) continue
+    const src = s.source ?? 'claude-code'
+    const existing = bySource.get(src)
+    if (!existing || lastSeen > existing.last_seen_ms) {
+      bySource.set(src, {
+        sessionId:     s.id,
+        model:         s.dominant_model ?? 'unknown',
+        cost_usd:      s.total_cost_usd ?? 0,
+        last_seen_ms:  lastSeen,
+        input_tokens:  s.total_input_tokens ?? 0,
+        output_tokens: s.total_output_tokens ?? 0,
+        cache_read:    s.total_cache_read ?? 0,
+        cache_creation: s.total_cache_creation ?? 0,
+      })
+    }
+  }
+
+  const result = Array.from(bySource.entries()).map(([source, v]) => ({ source, ...v }))
+  res.json(result)
 })
 
 // ─── GET /system-config — mapa completo del setup de Claude ──────────────────

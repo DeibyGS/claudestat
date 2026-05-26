@@ -182,6 +182,11 @@ const stmts = {
   getLatestSession: db.prepare(`
     SELECT * FROM sessions ORDER BY last_event_at DESC LIMIT 1
   `),
+  getLatestClaudeSession: db.prepare(`
+    SELECT * FROM sessions
+    WHERE source IS NULL OR source = 'claude-code'
+    ORDER BY last_event_at DESC LIMIT 1
+  `),
 
   getAllSessions: db.prepare(`
     SELECT * FROM sessions ORDER BY started_at DESC LIMIT 500
@@ -593,6 +598,10 @@ export const dbOps = {
 
   getLatestSession(): SessionRow | undefined {
     return stmts.getLatestSession.get() as SessionRow | undefined
+  },
+
+  getLatestClaudeSession(): SessionRow | undefined {
+    return stmts.getLatestClaudeSession.get() as SessionRow | undefined
   },
 
   getAllSessions(limit = 500): SessionRow[] {

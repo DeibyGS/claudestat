@@ -64,6 +64,18 @@ export interface AppState {
   subAgentSessions: SubAgentSession[] // sub-sesiones lanzadas por Agent en esta sesión
 }
 
+export interface ActiveSource {
+  source:        string
+  sessionId:     string
+  model:         string
+  cost_usd:      number
+  last_seen_ms:  number
+  input_tokens:  number
+  output_tokens: number
+  cache_read:    number
+  cache_creation: number
+}
+
 // ─── Historial y proyectos ────────────────────────────────────────────────────
 
 export type SessionMode = 'directo' | 'agentes' | 'skills' | 'agentes+skills'

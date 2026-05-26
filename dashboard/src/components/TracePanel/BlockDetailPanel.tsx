@@ -160,13 +160,14 @@ function PromptScoreCard({ prompt }: { prompt: string }) {
 // ─── BlockDetailPanel ─────────────────────────────────────────────────────────
 
 export function BlockDetailPanel({
-  block, startedAt, blockCost, sessionModel, prompt,
+  block, startedAt, blockCost, sessionModel, prompt, defaultActorLabel = 'Claude',
 }: {
-  block:         Block
-  startedAt:     number
-  blockCost?:    BlockCost
-  sessionModel?: string
-  prompt?:       string
+  block:               Block
+  startedAt:           number
+  blockCost?:          BlockCost
+  sessionModel?:       string
+  prompt?:             string
+  defaultActorLabel?:  string
 }) {
   const [filter,      setFilter]      = useState<FilterType>('all')
   const [selected,    setSelected]    = useState<TraceEvent | null>(null)
@@ -175,7 +176,7 @@ export function BlockDetailPanel({
   const [filesOpen,   setFilesOpen]   = useState(true)
   const [bashOpen,    setBashOpen]    = useState(true)
 
-  const actors    = extractActors(block.tools)
+  const actors    = extractActors(block.tools, defaultActorLabel)
   const stats     = calcStats(block.tools)
   const intent    = getIntent(stats)
   const dur       = blockDuration(block)

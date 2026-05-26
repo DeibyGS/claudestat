@@ -3,12 +3,14 @@ import { AlertTriangle, WifiOff, Zap, TrendingUp } from 'lucide-react'
 import type {
   AppState, TraceEvent, CostInfo, BlockCost,
   MetaStats, MetaSnapshot, DaySessions, ProjectSummary,
-  QuotaData, SessionState, ClaudeStatsData, QuotaStats, SubAgentSession
+  QuotaData, SessionState, ClaudeStatsData, QuotaStats, SubAgentSession,
+  ActiveSource
 } from './types'
 import type { SystemConfig } from './components/SystemView'
 import { type Tab, Header }    from './components/Header'
 import { ConfigPanel }        from './components/ConfigPanel'
 import { TracePanel }          from './components/TracePanel'
+import { LiveSourceBar, SOURCE_LABELS } from './components/LiveSourceBar'
 
 const HistoryView  = lazy(() => import('./components/HistoryView').then(m => ({ default: m.HistoryView })))
 const ProjectsView = lazy(() => import('./components/ProjectsView').then(m => ({ default: m.ProjectsView })))
@@ -17,6 +19,7 @@ const TopView      = lazy(() => import('./components/TopView').then(m => ({ defa
 const SystemView   = lazy(() => import('./components/SystemView').then(m => ({ default: m.SystemView })))
 
 const HEAVY_BLOCK_THRESHOLD = 500_000
+const MAX_EVENTS = 10_000
 
 function fmtTok(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
@@ -52,6 +55,10 @@ export default function App() {
   const [systemConfig,      setSystemConfig]      = useState<SystemConfig | undefined>()
   const [systemConfigError, setSystemConfigError] = useState(false)
   const [quotaStats,   setQuotaStats]  = useState<QuotaStats | undefined>()
+  const [activeSources,    setActiveSources]    = useState<ActiveSource[]>([])
+  const [activeLiveSource, setActiveLiveSource] = useState<string>('claude-code')
+  const [opencodeEvents,   setOpencodeEvents]   = useState<TraceEvent[]>([])
+  const [opencodePrompts,  setOpencodePrompts]  = useState<Array<{ index: number; ts: number; text: string }>>([])
   const stateRef = useRef(state)
   stateRef.current = state
 
@@ -147,6 +154,21 @@ export default function App() {
     return () => { es?.close(); clearTimeout(retryTimer) }
   }, [])
 
+  // ── Todos los eventos históricos: cargar cuando cambia la sesión ─────────────
+  useEffect(() => {
+    if (!state.sessionId) return
+    fetch(`/api/session-events?session_id=${state.sessionId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d?.events?.length) return
+        setState(prev => prev.sessionId === state.sessionId
+          ? { ...prev, events: d.events }
+          : prev
+        )
+      })
+      .catch(() => {})
+  }, [state.sessionId])
+
   // ── Prompts: cargar cuando cambia la sesión ────────────────────────────────
   useEffect(() => {
     if (!state.sessionId) return
@@ -185,6 +207,47 @@ export default function App() {
     const t = setInterval(fetchFastData, 15_000)
     return () => clearInterval(t)
   }, [])
+
+  // ── Active sources polling (10s) ────────────────────────────────────────────
+  useEffect(() => {
+    function fetchSources() {
+      fetch('/api/active-sessions')
+        .then(r => r.ok ? r.json() : null)
+        .then((d: ActiveSource[] | null) => {
+          if (!d) return
+          setActiveSources(d)
+          // Use functional updater to avoid stale closure on activeLiveSource
+          setActiveLiveSource(prev => {
+            if (d.find(s => s.source === prev)) return prev   // current source still active
+            if (d.find(s => s.source === 'claude-code')) return 'claude-code'  // prefer claude-code
+            return d[0]?.source ?? 'claude-code'              // fallback to first
+          })
+        })
+        .catch(() => {})
+    }
+    fetchSources()
+    const t = setInterval(fetchSources, 10_000)
+    return () => clearInterval(t)
+  }, [])
+
+  // ── OpenCode events polling (10s when active) ───────────────────────────────
+  useEffect(() => {
+    const src = activeSources.find(s => s.source === activeLiveSource)
+    if (!src || activeLiveSource === 'claude-code') return
+    let cancelled = false
+    function fetchEvents() {
+      fetch(`/api/opencode/session/${src!.sessionId}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          if (!cancelled && d?.events) setOpencodeEvents(d.events)
+          if (!cancelled && d?.prompts) setOpencodePrompts(d.prompts)
+        })
+        .catch(() => {})
+    }
+    fetchEvents()
+    const t = setInterval(fetchEvents, 10_000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [activeLiveSource, activeSources])
 
   // ── Quota re-fetch on session state change ──────────────────────────────────
   useEffect(() => {
@@ -245,18 +308,42 @@ export default function App() {
         <>
           {compacting && <CompactBanner />}
           {heavyBlockTokens !== null && <HeavyContextBanner tokens={heavyBlockTokens} />}
+          <LiveSourceBar
+            sources={activeSources}
+            active={activeLiveSource}
+            onSelect={setActiveLiveSource}
+          />
           <div style={liveLayout}>
-            <TracePanel
-              events={state.events} startedAt={state.startedAt}
-              cost={state.cost} blockCosts={state.blockCosts}
-              meta={metaStats} quota={quota}
-              sessionState={state.sessionState}
-              weeklyData={state.weeklyData}
-              hiddenCost={hiddenCost}
-              prompts={prompts}
-              quotaStats={quotaStats}
-              subAgentSessions={state.subAgentSessions}
-            />
+            {(() => {
+              const isClaudeCode = activeLiveSource === 'claude-code' || activeSources.length <= 1
+              const activeSource = activeSources.find(s => s.source === activeLiveSource)
+              const sourceCost: CostInfo | undefined = activeSource ? {
+                cost_usd:         activeSource.cost_usd,
+                input_tokens:     activeSource.input_tokens,
+                output_tokens:    activeSource.output_tokens,
+                cache_read:       activeSource.cache_read,
+                cache_creation:   activeSource.cache_creation,
+                efficiency_score: 100,
+                model:            activeSource.model,
+              } : undefined
+              return (
+                <TracePanel
+                  events={isClaudeCode ? state.events : opencodeEvents}
+                  startedAt={isClaudeCode ? state.startedAt : activeSource?.last_seen_ms ?? Date.now()}
+                  cost={isClaudeCode ? (state.cost ?? sourceCost) : sourceCost}
+                  blockCosts={isClaudeCode ? state.blockCosts : []}
+                  meta={isClaudeCode ? metaStats : undefined}
+                  quota={isClaudeCode ? quota : undefined}
+                  sessionState={isClaudeCode ? state.sessionState : 'idle'}
+                  weeklyData={state.weeklyData}
+                  hiddenCost={isClaudeCode ? hiddenCost : undefined}
+                  prompts={isClaudeCode ? prompts : opencodePrompts}
+                  quotaStats={isClaudeCode ? quotaStats : undefined}
+                  subAgentSessions={isClaudeCode ? state.subAgentSessions : []}
+                  cliLabel={isClaudeCode ? 'Claude Code' : (activeSource ? (SOURCE_LABELS[activeSource.source] ?? activeSource.source) : 'Claude Code')}
+                />
+              )
+            })()}
           </div>
         </>
       )}
@@ -333,7 +420,6 @@ function handleMessage(prev: AppState, msg: any): AppState {
     if (evt.session_id && evt.session_id !== prev.sessionId && prev.sessionId !== '') {
       return { ...prev, sessionId: evt.session_id, cwd: evt.cwd || '', startedAt: evt.ts, events: [], blockCosts: [], pendingBlockCost: null }
     }
-    const MAX_EVENTS = 500
     let events = [...prev.events]
     if (evt.type === 'Done' && evt.tool_name) {
       const idx = [...events].reverse().findIndex(e => e.type === 'PreToolUse' && e.tool_name === evt.tool_name)

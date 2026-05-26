@@ -25,11 +25,19 @@ interface Props {
   hiddenCost?:        HiddenCostStats
   quotaStats?:        QuotaStats
   subAgentSessions?:  SubAgentSession[]
+  cliLabel?:          string
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quota, sessionState = 'idle', weeklyData = [], hiddenCost, prompts = [], quotaStats, subAgentSessions = [] }: Props) {
+function toActorLabel(model?: string): string {
+  if (!model) return 'Claude'
+  const seg = model.split(/[-/]/)[0].toLowerCase()
+  return seg === 'claude' ? 'Claude' : seg.charAt(0).toUpperCase() + seg.slice(1)
+}
+
+export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quota, sessionState = 'idle', weeklyData = [], hiddenCost, prompts = [], quotaStats, subAgentSessions = [], cliLabel = 'Claude Code' }: Props) {
+  const actorLabel = toActorLabel(cost?.model)
   const listRef        = useRef<HTMLDivElement>(null)
   // null = auto-follow last block
   const [pinned, setPinned] = useState<number | null>(null)
@@ -68,15 +76,24 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
   const selectedBlock = blocks.find(b => b.index === selectedIdx) ?? blocks[blocks.length - 1]
 
   if (blocks.length === 0) {
-    return (
+    const emptyPane = (
       <div style={{ background: '#0d1117', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center', color: '#484f58' }}>
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12, opacity: 0.25 }}>
             <Terminal size={36} />
           </div>
           <div style={{ fontSize: 13, fontWeight: 500, color: '#6e7681', marginBottom: 4 }}>Esperando actividad…</div>
-          <div style={{ fontSize: 11 }}>Abre Claude Code y empieza a trabajar</div>
+          <div style={{ fontSize: 11 }}>Abre {cliLabel} y empieza a trabajar</div>
         </div>
+      </div>
+    )
+    if (!cost) return emptyPane
+    return (
+      <div style={{ display: 'flex', height: '100%', flex: 1, background: '#0d1117', overflow: 'hidden' }}>
+        <div style={{ width: 360, flexShrink: 0, borderRight: '1px solid #21262d', display: 'flex', flexDirection: 'column', background: '#090d12', overflow: 'hidden' }}>
+          <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} quotaStats={quotaStats} startedAt={startedAt} promptCount={0} />
+        </div>
+        {emptyPane}
       </div>
     )
   }
@@ -114,6 +131,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
               isSelected={block.index === selectedIdx}
               heatRole={block.index === maxCostIdx ? 'max' : block.index === minCostIdx ? 'min' : undefined}
               onClick={() => handleSelect(block.index)}
+              defaultActorLabel={actorLabel}
             />
           ))}
 
@@ -134,6 +152,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
               blockCost={blockCosts[selectedBlock.index - 1]}
               sessionModel={cost?.model}
               prompt={prompts.find(p => p.index === selectedBlock.index)?.text}
+              defaultActorLabel={actorLabel}
             />
           )
           : (

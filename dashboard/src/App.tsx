@@ -325,6 +325,7 @@ export default function App() {
                 cache_creation:   activeSource.cache_creation,
                 efficiency_score: 100,
                 model:            activeSource.model,
+                loops:            [],
               } : undefined
               return (
                 <TracePanel

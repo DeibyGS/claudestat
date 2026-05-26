@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-05-26
+
+### Added
+
+- **OpenCode support** — Live dashboard now works with OpenCode sessions: tool calls, prompts, model name, intent detection, and session cost
+- **LiveSourceBar** — Source switcher in the Live tab to toggle between Claude Code and OpenCode sessions in real time
+- **`/api/opencode/session/:id`** — REST endpoint that reads OpenCode's SQLite DB and maps tool calls to the TraceEvent format
+- **`/api/session-events`** — REST endpoint returning full event history for a session (bypasses the SSE 200-event init limit)
+- **`getLatestClaudeSession()`** — DB query that filters out OpenCode sessions from the Claude Code SSE stream
+- **Dynamic actor label** — Block list and detail panel now show the actual model name (e.g. "Deepseek") instead of hardcoded "Claude" for non-Claude models
+
+### Changed
+
+- **Block grouping for OpenCode** — Consecutive assistant messages are accumulated into a single block (matching Claude Code's turn structure)
+- **`extractActors`** — Accepts a `defaultLabel` parameter so agent/skill detection works for any source
+- **SSE init limit** — Kept at 200 events; full history loaded via HTTP to avoid large payload issues
+
 ## [1.1.0] - 2026-05-11
 
 ### Added

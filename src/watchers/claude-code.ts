@@ -33,7 +33,13 @@ export function getContextWindow(model: string): number {
   return KNOWN_CONTEXT_WINDOWS[model] ?? 200_000
 }
 
-const fileOffsets = new Map<string, { offset: number; lastAccess: number }>()
+interface FileState {
+  offset:     number
+  lastAccess: number
+  totals:     CostUpdate
+}
+
+const fileOffsets = new Map<string, FileState>()
 const FILE_OFFSET_TTL = 30 * 60_000
 
 function cleanupStaleOffsets() {
@@ -44,83 +50,106 @@ function cleanupStaleOffsets() {
 }
 
 async function processJSONL(filePath: string): Promise<CostUpdate | null> {
-  let fileContent: string
+  let fd: Awaited<ReturnType<typeof fs.open>> | undefined
   try {
-    fileContent = await fs.readFile(filePath, 'utf8')
+    fd = await fs.open(filePath, 'r')
+    const currentSize = (await fd.stat()).size
+
+    // File was truncated (e.g., /compact) — drop cached state and re-read from start
+    let state = fileOffsets.get(filePath)
+    if (state && currentSize < state.offset) {
+      fileOffsets.delete(filePath)
+      state = undefined
+    }
+
+    const fromByte = state?.offset ?? 0
+
+    // Nothing new — return cached totals without lastEntry to avoid duplicate SSE
+    if (currentSize === fromByte && state) return { ...state.totals, lastEntry: undefined }
+
+    // Read only the new bytes since last processed offset
+    const buf = Buffer.alloc(currentSize - fromByte)
+    await fd.read(buf, 0, buf.length, fromByte)
+    const newContent = buf.toString('utf8')
+
+    // Accumulate on top of previous totals (or start from zero on first read)
+    const prevTotals = state?.totals
+    const totals: CostUpdate = {
+      input_tokens:   prevTotals?.input_tokens   ?? 0,
+      output_tokens:  prevTotals?.output_tokens  ?? 0,
+      cache_read:     prevTotals?.cache_read      ?? 0,
+      cache_creation: prevTotals?.cache_creation  ?? 0,
+      cost_usd:       prevTotals?.cost_usd        ?? 0,
+      context_used:   prevTotals?.context_used    ?? 0,
+      context_window: prevTotals?.context_window  ?? 200_000,
+      firstTs:        prevTotals?.firstTs,
+      lastModel:      prevTotals?.lastModel,
+    }
+
+    let lastInputUsd    = 0
+    let lastOutputUsd   = 0
+    let lastInputTokens  = 0
+    let lastOutputTokens = 0
+    let hasNewAssistant  = false
+
+    for (const raw of newContent.split('\n')) {
+      const line = raw.trim()
+      if (!line) continue
+      try {
+        const obj = JSON.parse(line)
+        if (obj.type !== 'assistant') continue
+        const msg = obj.message
+        if (!msg?.usage) continue
+
+        const usage = msg.usage as UsageEntry
+        const model = msg.model ?? 'claude-sonnet-4-6'
+        hasNewAssistant = true
+
+        if (totals.firstTs === undefined && obj.timestamp) {
+          try { totals.firstTs = new Date(obj.timestamp as string).getTime() } catch { /* ignore */ }
+        }
+
+        totals.input_tokens   += usage.input_tokens                ?? 0
+        totals.output_tokens  += usage.output_tokens               ?? 0
+        totals.cache_read     += usage.cache_read_input_tokens      ?? 0
+        totals.cache_creation += usage.cache_creation_input_tokens  ?? 0
+        totals.cost_usd       += calcCost(model, usage)
+        totals.context_used    = (usage.input_tokens                ?? 0)
+                               + (usage.cache_read_input_tokens     ?? 0)
+                               + (usage.cache_creation_input_tokens ?? 0)
+        totals.context_window  = getContextWindow(model)
+
+        const price = PRICING[model] ?? DEFAULT_PRICING
+        const M     = 1_000_000
+        const inp   = usage.input_tokens ?? 0
+        const cacheRead = usage.cache_read_input_tokens ?? 0
+        const cacheCreate = usage.cache_creation_input_tokens ?? 0
+        const out = usage.output_tokens ?? 0
+        lastInputUsd     = (inp * price.input + cacheRead * price.cacheRead + cacheCreate * price.cacheCreate) / M
+        lastOutputUsd    = out * price.output / M
+        lastInputTokens  = inp + cacheRead + cacheCreate
+        lastOutputTokens = out
+        totals.lastModel = model
+      } catch { /* skip malformed lines */ }
+    }
+
+    // lastEntry only when there are new API calls — drives the block_cost SSE event
+    if (hasNewAssistant && lastInputUsd + lastOutputUsd > 0) {
+      const totalUsd = lastInputUsd + lastOutputUsd
+      totals.lastEntry = {
+        inputUsd: lastInputUsd, outputUsd: lastOutputUsd,
+        totalUsd,
+        inputTokens: lastInputTokens, outputTokens: lastOutputTokens,
+      }
+    }
+
+    fileOffsets.set(filePath, { offset: currentSize, lastAccess: Date.now(), totals })
+    return totals
   } catch {
     return null
+  } finally {
+    await fd?.close()
   }
-
-  const currentSize = Buffer.byteLength(fileContent, 'utf8')
-  const knownEntry  = fileOffsets.get(filePath)
-  const knownOffset = knownEntry?.offset ?? 0
-  if (currentSize < knownOffset) fileOffsets.set(filePath, { offset: 0, lastAccess: Date.now() })
-
-  const totals: CostUpdate = {
-    input_tokens: 0, output_tokens: 0,
-    cache_read: 0, cache_creation: 0, cost_usd: 0,
-    context_used: 0, context_window: 200_000
-  }
-
-  let lastInputUsd    = 0
-  let lastOutputUsd   = 0
-  let lastInputTokens  = 0
-  let lastOutputTokens = 0
-  let lastModel: string | undefined
-  let firstTs: number | undefined
-
-  for (const raw of fileContent.split('\n')) {
-    const line = raw.trim()
-    if (!line) continue
-    try {
-      const obj = JSON.parse(line)
-      if (obj.type !== 'assistant') continue
-
-      const msg = obj.message
-      if (!msg?.usage) continue
-
-      const usage = msg.usage as UsageEntry
-      const model = msg.model ?? 'claude-sonnet-4-6'
-
-      if (firstTs === undefined && obj.timestamp) {
-        try { firstTs = new Date(obj.timestamp as string).getTime() } catch { /* ignore */ }
-      }
-
-      totals.input_tokens   += usage.input_tokens                  ?? 0
-      totals.output_tokens  += usage.output_tokens                 ?? 0
-      totals.cache_read     += usage.cache_read_input_tokens       ?? 0
-      totals.cache_creation += usage.cache_creation_input_tokens   ?? 0
-      totals.cost_usd       += calcCost(model, usage)
-
-      totals.context_used   = (usage.input_tokens ?? 0)
-                            + (usage.cache_read_input_tokens ?? 0)
-                            + (usage.cache_creation_input_tokens ?? 0)
-      totals.context_window = getContextWindow(model)
-
-      const price   = PRICING[model] ?? DEFAULT_PRICING
-      const M       = 1_000_000
-      lastInputUsd     = ((usage.input_tokens                  ?? 0) * price.input       +
-                          (usage.cache_read_input_tokens       ?? 0) * price.cacheRead   +
-                          (usage.cache_creation_input_tokens   ?? 0) * price.cacheCreate) / M
-      lastOutputUsd    = ((usage.output_tokens                 ?? 0) * price.output)     / M
-      lastInputTokens  = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
-      lastOutputTokens = usage.output_tokens ?? 0
-      lastModel        = model ?? lastModel
-    } catch { /* skip malformed lines */ }
-  }
-
-  if (lastInputUsd + lastOutputUsd > 0) {
-    totals.lastEntry = {
-      inputUsd: lastInputUsd, outputUsd: lastOutputUsd,
-      totalUsd: lastInputUsd + lastOutputUsd,
-      inputTokens: lastInputTokens, outputTokens: lastOutputTokens,
-    }
-  }
-  totals.lastModel = lastModel
-  totals.firstTs   = firstTs
-
-  fileOffsets.set(filePath, { offset: currentSize, lastAccess: Date.now() })
-  return totals
 }
 
 export const claudeCodeAdapter: WatcherAdapter = {

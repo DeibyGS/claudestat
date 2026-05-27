@@ -21,24 +21,25 @@ fs.mkdirSync(CLAUDESTAT_DIR, { recursive: true })
 
 const db = new DatabaseSync(DB_PATH)
 
-// Migraciones: añadir columnas nuevas sin romper instalaciones previas
-try { db.exec(`ALTER TABLE sessions ADD COLUMN project_path TEXT`) } catch { /* ya existe */ }
-try { db.exec(`ALTER TABLE sessions ADD COLUMN ai_summary   TEXT`) } catch { /* ya existe */ }
-try { db.exec(`
-  CREATE TABLE IF NOT EXISTS weekly_reports (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    date            TEXT    NOT NULL UNIQUE,
-    report_markdown TEXT    NOT NULL,
-    created_at      TEXT    DEFAULT (datetime('now'))
-  )
-`) } catch { /* ya existe */ }
+// ─── Tool response size cap ────────────────────────────────────────────────────
 
-try { db.exec(`
+export const TOOL_RESPONSE_MAX_BYTES = 8192
+
+export function capToolResponse(raw: string): string {
+  if (Buffer.byteLength(raw, 'utf8') <= TOOL_RESPONSE_MAX_BYTES) return raw
+  const buf = Buffer.from(raw, 'utf8').subarray(0, TOOL_RESPONSE_MAX_BYTES)
+  return buf.toString('utf8') + `…[truncated: ${raw.length} chars]`
+}
+
+// ─── Base tables (idempotent — safe on every start) ───────────────────────────
+
+// meta must exist before runMigrations reads schema_version
+db.exec(`
   CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   )
-`) } catch { /* ya existe */ }
+`)
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
@@ -72,16 +73,48 @@ db.exec(`
 `)
 
 // Índices para acelerar las subqueries de getRecentSessions (N+3 pattern)
-// Wrapped en try-catch para no romper instalaciones que ya los tienen
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_events_session_type ON events(session_id, type)`) } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_events_tool       ON events(session_id, tool_name)`) } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_started  ON sessions(started_at DESC)`) } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_project  ON sessions(project_path)`) } catch {}
-try { db.exec(`ALTER TABLE sessions ADD COLUMN dominant_model TEXT`) } catch {}
-try { db.exec(`ALTER TABLE events ADD COLUMN skill_parent TEXT`) } catch {}
-try { db.exec(`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT`) } catch {}
-try { db.exec(`ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'claude-code'`) } catch {}
-try { db.exec(`ALTER TABLE events ADD COLUMN source TEXT DEFAULT 'claude-code'`) } catch {}
+
+// ─── Schema migrations ─────────────────────────────────────────────────────────
+// Each migration runs exactly once, tracked by meta.schema_version.
+// try/catch per migration handles existing installs where columns already exist.
+
+const MIGRATIONS: Array<{ version: number; sql: string }> = [
+  { version: 1, sql: `ALTER TABLE sessions ADD COLUMN project_path TEXT` },
+  { version: 2, sql: `ALTER TABLE sessions ADD COLUMN ai_summary TEXT` },
+  { version: 3, sql: `CREATE TABLE IF NOT EXISTS weekly_reports (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    date            TEXT    NOT NULL UNIQUE,
+    report_markdown TEXT    NOT NULL,
+    created_at      TEXT    DEFAULT (datetime('now'))
+  )` },
+  { version: 4, sql: `ALTER TABLE sessions ADD COLUMN dominant_model TEXT` },
+  { version: 5, sql: `ALTER TABLE events ADD COLUMN skill_parent TEXT` },
+  { version: 6, sql: `ALTER TABLE sessions ADD COLUMN parent_session_id TEXT` },
+  { version: 7, sql: `ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'claude-code'` },
+  { version: 8,  sql: `ALTER TABLE events ADD COLUMN source TEXT DEFAULT 'claude-code'` },
+  { version: 9,  sql: `ALTER TABLE sessions ADD COLUMN exact_retries INTEGER DEFAULT 0` },
+  { version: 10, sql: `ALTER TABLE sessions ADD COLUMN error_rate REAL DEFAULT 0` },
+  { version: 11, sql: `ALTER TABLE sessions ADD COLUMN file_churn_score REAL DEFAULT 0` },
+  { version: 12, sql: `ALTER TABLE sessions ADD COLUMN seq_cycle_count INTEGER DEFAULT 0` },
+]
+
+function runMigrations() {
+  const row = db.prepare(`SELECT value FROM meta WHERE key = 'schema_version'`).get() as { value: string } | undefined
+  const currentVersion = row ? parseInt(row.value, 10) : 0
+  const upsertVersion  = db.prepare(`INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+
+  for (const m of MIGRATIONS) {
+    if (m.version <= currentVersion) continue
+    try { db.exec(m.sql) } catch { /* column/table already exists on prior installs */ }
+    upsertVersion.run(String(m.version))
+  }
+}
+
+runMigrations()  // must run before stmts — some queries reference migrated columns
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -102,6 +135,10 @@ export interface SessionRow {
   dominant_model?: string
   parent_session_id?: string
   source?: string
+  exact_retries?: number
+  error_rate?: number
+  file_churn_score?: number
+  seq_cycle_count?: number
 }
 
 export interface EventRow {
@@ -157,7 +194,11 @@ const stmts = {
       total_cache_creation = ?,
       efficiency_score     = ?,
       loops_detected       = ?,
-      dominant_model       = ?
+      dominant_model       = ?,
+      exact_retries        = ?,
+      error_rate           = ?,
+      file_churn_score     = ?,
+      seq_cycle_count      = ?
     WHERE id = ?
   `),
 
@@ -568,13 +609,22 @@ export const dbOps = {
     `).get(sessionId, toolName) as { id: number; ts: number } | undefined
 
     if (pending) {
-      stmts.pairPost.run(response, postTs - pending.ts, sessionId, toolName)
+      stmts.pairPost.run(capToolResponse(response), postTs - pending.ts, sessionId, toolName)
       return pending.id
     }
     return null
   },
 
-  updateSessionCost(sessionId: string, cost: CostUpdate, efficiencyScore: number, loopsDetected: number) {
+  updateSessionCost(
+    sessionId: string,
+    cost: CostUpdate,
+    efficiencyScore: number,
+    loopsDetected: number,
+    exactRetries = 0,
+    errorRate = 0,
+    fileChurnScore = 1,
+    seqCycleCount = 0,
+  ) {
     stmts.updateSessionCost.run(
       cost.cost_usd,
       cost.input_tokens,
@@ -584,7 +634,11 @@ export const dbOps = {
       efficiencyScore,
       loopsDetected,
       cost.lastModel ?? null,
-      sessionId
+      exactRetries,
+      errorRate,
+      fileChurnScore,
+      seqCycleCount,
+      sessionId,
     )
   },
 

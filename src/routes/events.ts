@@ -26,6 +26,10 @@ const LOOP_ALERT_COOLDOWN_MS = 120_000  // coincide con LOOP_COOLDOWN_MS en inte
 // ─── Session cost alert: sesiones que ya recibieron notificación ───────────────
 const sessionCostAlertFired = new Set<string>()
 
+// ─── Memory leak bounds ────────────────────────────────────────────────────────
+const AGENT_CWD_TTL_MS   = 30 * 60_000  // entries older than 30min can't be valid parents
+const TAGGED_PARENTS_MAX = 500           // prevent unbounded growth over long daemon runs
+
 export const eventsRouter = Router()
 
 // Skill activa por sesión — se setea tras Skill Done, se limpia en Stop.
@@ -126,6 +130,10 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
 
     // Registrar Agent PreToolUse para detección de sub-sesiones
     if (type === 'PreToolUse' && tool_name === 'Agent' && resolvedCwd) {
+      const cwdCutoff = Date.now() - AGENT_CWD_TTL_MS
+      for (const [cwd, info] of lastAgentByCwd) {
+        if (info.pre_ts < cwdCutoff) lastAgentByCwd.delete(cwd)
+      }
       lastAgentByCwd.set(resolvedCwd, { pre_ts: ts, session_id })
     }
   }
@@ -219,6 +227,10 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
   // a recent Agent PreToolUse from another session in the same CWD → tag as child.
   if (!taggedSessionParents.has(sessionId) && cost.firstTs) {
     taggedSessionParents.add(sessionId)
+    if (taggedSessionParents.size > TAGGED_PARENTS_MAX) {
+      const arr = Array.from(taggedSessionParents)
+      for (const id of arr.slice(0, arr.length >> 1)) taggedSessionParents.delete(id)
+    }
     const cwd = sessionRow?.cwd
     if (cwd) {
       const agentInfo = lastAgentByCwd.get(cwd)
@@ -231,7 +243,11 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
   const events  = dbOps.getSessionEvents(sessionId)
   const report  = analyzeSession(events, cost.cost_usd)
 
-  dbOps.updateSessionCost(sessionId, cost, report.efficiencyScore, report.loops.length)
+  dbOps.updateSessionCost(
+    sessionId, cost,
+    report.efficiencyScore, report.loops.length,
+    report.exactRetries, report.errorRate, report.fileChurnScore, report.seqCycleCount,
+  )
 
   const startedAt = sessionRow?.started_at ?? Date.now()
   const sessionDurationMinutes = (Date.now() - startedAt) / 60_000

@@ -19,10 +19,11 @@ export interface HiddenCostStats {
 export interface SessionPromptItem { index: number; ts: number; text: string }
 
 export interface Block {
-  index:   number
-  tools:   TraceEvent[]
-  hasStop: boolean
-  endTs?:  number
+  index:        number
+  tools:        TraceEvent[]
+  hasStop:      boolean
+  endTs?:       number
+  textPreview?: string
 }
 
 export interface Actor {
@@ -112,6 +113,8 @@ export function groupBlocks(events: TraceEvent[]): Block[] {
     if (ev.type === 'SessionStart') continue
     if (ev.type === 'Stop') {
       current.hasStop = true; current.endTs = ev.ts
+      // text_preview: live SSE event; tool_input: persisted in DB for Stop events
+      current.textPreview = ev.text_preview ?? ev.tool_input ?? undefined
       blocks.push(current)
       current = { index: blocks.length + 1, tools: [], hasStop: false }
     } else {

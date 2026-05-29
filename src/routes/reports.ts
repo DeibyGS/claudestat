@@ -64,6 +64,15 @@ reportsRouter.get('/api/analytics', (req: Request, res: Response) => {
   })
 })
 
+// ─── GET /api/analytics/coach — eventos combinados para el coach multi-source ─
+
+reportsRouter.get('/api/analytics/coach', (req: Request, res: Response) => {
+  const raw = req.query.session_ids as string | undefined
+  const sessionIds = raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : []
+  const events = dbOps.getCoachEvents(sessionIds)
+  res.json({ events })
+})
+
 // ─── POST /api/weekly-reports/generate-now — generar informe inmediatamente ───
 
 reportsRouter.post('/api/weekly-reports/generate-now', (_req: Request, res: Response) => {

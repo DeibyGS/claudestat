@@ -10,7 +10,7 @@ import fs   from 'fs/promises'
 import fsSync from 'fs'
 import { type WatcherAdapter, type ParsedEvent, registerAdapter } from './adapter'
 import { getClaudeDir } from '../paths'
-import { calcCost, PRICING, DEFAULT_PRICING } from '../pricing'
+import { calcCost, getContextWindow, PRICING, DEFAULT_PRICING } from '../pricing'
 import type { CostUpdate } from '../db'
 import type { BlockCostEntry } from '../db'
 
@@ -21,16 +21,6 @@ interface UsageEntry {
   output_tokens: number
   cache_read_input_tokens: number
   cache_creation_input_tokens: number
-}
-
-const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
-  'claude-opus-4-6':   200_000,
-  'claude-sonnet-4-6': 200_000,
-  'claude-haiku-4-5':  200_000,
-}
-
-export function getContextWindow(model: string): number {
-  return KNOWN_CONTEXT_WINDOWS[model] ?? 200_000
 }
 
 interface FileState {
@@ -105,8 +95,12 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
         const model = msg.model ?? 'claude-sonnet-4-6'
         hasNewAssistant = true
 
-        if (totals.firstTs === undefined && obj.timestamp) {
-          try { totals.firstTs = new Date(obj.timestamp as string).getTime() } catch { /* ignore */ }
+        if (obj.timestamp) {
+          try {
+            const ts = new Date(obj.timestamp as string).getTime()
+            if (totals.firstTs === undefined) totals.firstTs = ts
+            totals.lastTs = ts
+          } catch { /* ignore */ }
         }
 
         totals.input_tokens   += usage.input_tokens                ?? 0
@@ -193,6 +187,114 @@ export const claudeCodeAdapter: WatcherAdapter = {
 
 setInterval(cleanupStaleOffsets, 5 * 60_000).unref()
 registerAdapter(claudeCodeAdapter)
+
+// ─── Semantic enrichment ───────────────────────────────────────────────────────
+
+export interface AssistantTurn {
+  turn_index: number
+  ts?: number
+  text_preview: string
+  tool_calls: string[]
+  error_count: number
+  output_chars: number
+  context_used: number
+}
+
+export interface SemanticData {
+  turns: AssistantTurn[]
+  avg_output_chars: number
+  error_block_count: number
+}
+
+export async function findJSONLForSession(sessionId: string): Promise<string | null> {
+  try {
+    if (!fsSync.existsSync(projectsDir())) return null
+    const dirs = await fs.readdir(projectsDir())
+    for (const dir of dirs) {
+      const dirPath = path.join(projectsDir(), dir)
+      try { const stat = await fs.stat(dirPath); if (!stat.isDirectory()) continue } catch { continue }
+      const filePath = path.join(dirPath, `${sessionId}.jsonl`)
+      try { await fs.access(filePath); return filePath } catch { continue }
+    }
+  } catch { /* ignore */ }
+  return null
+}
+
+export async function extractSemanticData(filePath: string): Promise<SemanticData | null> {
+  try {
+    const content = await fs.readFile(filePath, 'utf8')
+    const turns: AssistantTurn[] = []
+    let pendingTurn: AssistantTurn | null = null
+    let totalErrorBlocks = 0
+    let turnIndex = 0
+
+    for (const raw of content.split('\n')) {
+      const line = raw.trim()
+      if (!line) continue
+      try {
+        const obj = JSON.parse(line)
+
+        if (obj.type === 'assistant') {
+          if (pendingTurn) turns.push(pendingTurn)
+
+          const msgContent = obj.message?.content
+          if (!Array.isArray(msgContent)) { pendingTurn = null; continue }
+
+          let outputChars = 0
+          const textParts: string[] = []
+          const toolCalls: string[] = []
+
+          for (const block of msgContent as any[]) {
+            if (block?.type === 'text' && typeof block.text === 'string') {
+              outputChars += block.text.length
+              textParts.push(block.text)
+            } else if (block?.type === 'tool_use' && typeof block.name === 'string') {
+              toolCalls.push(block.name)
+            }
+          }
+
+          let ts: number | undefined
+          if (obj.timestamp) {
+            try { ts = new Date(obj.timestamp as string).getTime() } catch { /* ignore */ }
+          }
+
+          const usage = obj.message?.usage
+          const contextUsed = usage
+            ? ((usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0))
+            : 0
+
+          pendingTurn = {
+            turn_index:   turnIndex++,
+            ts,
+            text_preview: textParts.join('\n').slice(0, 500),
+            tool_calls:   toolCalls,
+            error_count:  0,
+            output_chars: outputChars,
+            context_used: contextUsed,
+          }
+        } else if ((obj.type === 'human' || obj.type === 'user') && pendingTurn) {
+          const msgContent = obj.message?.content
+          if (!Array.isArray(msgContent)) continue
+          for (const block of msgContent as any[]) {
+            if (block?.type === 'tool_result' && block.is_error === true) {
+              pendingTurn.error_count++
+              totalErrorBlocks++
+            }
+          }
+        }
+      } catch { /* skip malformed lines */ }
+    }
+
+    if (pendingTurn) turns.push(pendingTurn)
+
+    const totalOutputChars = turns.reduce((sum, t) => sum + t.output_chars, 0)
+    const avg_output_chars = turns.length > 0 ? Math.round(totalOutputChars / turns.length) : 0
+
+    return { turns, avg_output_chars, error_block_count: totalErrorBlocks }
+  } catch {
+    return null
+  }
+}
 
 // ─── Session-level utilities (used by routes/stream and routes/misc) ───────────
 

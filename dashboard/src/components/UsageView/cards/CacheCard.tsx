@@ -1,5 +1,5 @@
 import { AlertTriangle, Shield } from 'lucide-react'
-import type { CostInfo } from '../../../types'
+import type { CostInfo, LoopAlert } from '../../../types'
 import { Tip } from '../../Tip'
 import { PRICE_PER_M, cacheSavingsPerM, fmtTok, fmtUsd } from '../utils'
 import { Card, CardHeader } from './StatusCard'
@@ -76,29 +76,50 @@ export function CacheCard({ cost }: { cost: CostInfo }) {
 
 // ─── Card: Loops ───────────────────────────────────────────────────────────────
 
+function groupLoopsByTool(loops: LoopAlert[]): { toolName: string; totalCalls: number; alertCount: number }[] {
+  const map = new Map<string, { totalCalls: number; alertCount: number }>()
+  for (const l of loops) {
+    const g = map.get(l.toolName) ?? { totalCalls: 0, alertCount: 0 }
+    g.totalCalls += l.count
+    g.alertCount += 1
+    map.set(l.toolName, g)
+  }
+  return [...map.entries()]
+    .map(([toolName, g]) => ({ toolName, ...g }))
+    .sort((a, b) => b.totalCalls - a.totalCalls)
+}
+
 export function LoopsCard({ cost }: { cost: CostInfo }) {
   const { loops, efficiency_score } = cost
-  const totalLoops  = loops?.reduce((s, l) => s + l.count, 0) ?? 0
-  const wastedUsd   = (totalLoops * 1_200 / 1_000_000) * PRICE_PER_M.sonnet
-  const scoreColor  = efficiency_score >= 90 ? '#3fb950' : efficiency_score >= 70 ? '#d29922' : '#f85149'
+  const totalAlerts   = loops?.length ?? 0
+  const grouped       = loops ? groupLoopsByTool(loops) : []
+  const totalCalls    = grouped.reduce((s, g) => s + g.totalCalls, 0)
+  const topTool       = grouped[0]
+  const avgTokensPerLoop = 1_200
+  const wastedUsd     = (totalCalls * avgTokensPerLoop / 1_000_000) * PRICE_PER_M.sonnet
+  const scoreColor    = efficiency_score >= 90 ? '#3fb950' : efficiency_score >= 70 ? '#d29922' : '#f85149'
+  const hasLoops      = totalAlerts > 0
 
   return (
     <Card>
-      <CardHeader icon={AlertTriangle} title="Loops and efficiency" subtitle="current session" color={totalLoops > 0 ? '#f85149' : '#3fb950'} />
-      <div style={{ display: 'flex', gap: 16, marginBottom: totalLoops > 0 ? 10 : 0 }}>
+      <CardHeader icon={AlertTriangle} title="Loops and efficiency" subtitle="current session" color={hasLoops ? '#f85149' : '#3fb950'} />
+      <div style={{ display: 'flex', gap: 16, marginBottom: hasLoops ? 10 : 0 }}>
         <div>
-          <div style={{ fontSize: 26, fontWeight: 700, color: totalLoops > 0 ? '#f85149' : '#3fb950', lineHeight: 1 }}>
-            {totalLoops}
+          <div style={{ fontSize: 26, fontWeight: 700, color: hasLoops ? '#f85149' : '#3fb950', lineHeight: 1 }}>
+            {totalAlerts}
           </div>
-          <div style={{ fontSize: 9, color: '#484f58' }}>loops detected</div>
+          <div style={{ fontSize: 9, color: '#484f58' }}>loop blocks</div>
+          {totalCalls > 0 && (
+            <div style={{ fontSize: 9, color: '#3d444d' }}>{totalCalls} total calls</div>
+          )}
         </div>
         <Tip position="bottom" align="left" content={
           <div>
             <div style={{ color: scoreColor, fontWeight: 700, fontSize: 11, marginBottom: 3 }}>Efficiency score</div>
             <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
               100 = no loops detected.<br />
-              ~5 points deducted for each repeated tool in a block.<br />
-              Below 70 indicates inefficient session with wasted tokens.
+              -10 per loop block (cap -25), plus penalties for excessive calls + high cost.<br />
+              Below 70 → the agent is repeating itself. Consider giving clearer instructions or /clear to reset context.
             </div>
           </div>
         }>
@@ -109,13 +130,13 @@ export function LoopsCard({ cost }: { cost: CostInfo }) {
             <div style={{ fontSize: 9, color: '#484f58' }}>efficiency /100</div>
           </div>
         </Tip>
-        {totalLoops > 0 && (
+        {hasLoops && (
           <Tip position="bottom" align="left" content={
             <div>
-              <div style={{ color: '#d29922', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>Lost cost estimate</div>
+              <div style={{ color: '#d29922', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>Wasted cost estimate</div>
               <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
-                Calculated as: loops × ~1,200 tokens × blended Sonnet price.<br />
-                This is a conservative estimate — actual cost may be higher if loops involve large files.
+                {totalCalls} redundant tool calls × ~{avgTokensPerLoop.toLocaleString()} tokens/tool × Sonnet blended price.<br />
+                Conservative — actual cost higher if loops involve large file reads/edits.
               </div>
             </div>
           }>
@@ -123,18 +144,45 @@ export function LoopsCard({ cost }: { cost: CostInfo }) {
               <div style={{ fontSize: 16, fontWeight: 600, color: '#d29922', lineHeight: 1 }}>
                 ~{fmtUsd(wastedUsd)}
               </div>
-              <div style={{ fontSize: 9, color: '#484f58' }}>wasted tokens</div>
+              <div style={{ fontSize: 9, color: '#484f58' }}>wasted cost</div>
             </div>
           </Tip>
         )}
       </div>
-      {totalLoops > 0 && loops && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 8 }}>
-          {loops.map((l, i) => (
-            <span key={i} style={{ fontSize: 11, color: '#f85149', background: '#f8514914', border: '1px solid #f8514930', borderRadius: 4, padding: '2px 7px' }}>
-              {l.toolName} ×{l.count}
-            </span>
-          ))}
+      {hasLoops && (
+        <div style={{ marginBottom: 10 }}>
+          {topTool && (
+            <div style={{ fontSize: 10, color: '#8b949e', marginBottom: 6 }}>
+              Most loops: <span style={{ color: '#f85149', fontWeight: 600 }}>{topTool.toolName}</span> — {topTool.totalCalls} calls in {topTool.alertCount} block{topTool.alertCount > 1 ? 's' : ''}.{' '}
+              {topTool.toolName === 'Edit' || topTool.toolName === 'Bash'
+                ? 'The agent is likely re-trying the same operation. Try a /clear and rephrase the instruction.'
+                : topTool.toolName === 'Read'
+                ? 'The agent is re-reading files without making progress. Provide more precise file paths.'
+                : 'Consider whether the task needs more structure from the start.'}
+            </div>
+          )}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+            {grouped.slice(0, 8).map(g => (
+              <Tip key={g.toolName} position="top" align="left" content={
+                <div>
+                  <div style={{ color: '#f85149', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>{g.toolName}</div>
+                  <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
+                    {g.totalCalls} total redundant calls<br />
+                    across {g.alertCount} detected loop block{g.alertCount > 1 ? 's' : ''}
+                  </div>
+                </div>
+              }>
+                <span style={{ fontSize: 11, color: '#f85149', background: '#f8514914', border: '1px solid #f8514930', borderRadius: 4, padding: '2px 7px', cursor: 'help' }}>
+                  {g.toolName} ×{g.totalCalls}
+                </span>
+              </Tip>
+            ))}
+            {grouped.length > 8 && (
+              <span style={{ fontSize: 10, color: '#484f58', padding: '2px 4px' }}>
+                +{grouped.length - 8} more
+              </span>
+            )}
+          </div>
         </div>
       )}
       <div style={{ height: 3, background: '#21262d', borderRadius: 2, overflow: 'hidden' }}>

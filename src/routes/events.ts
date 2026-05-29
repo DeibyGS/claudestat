@@ -1,9 +1,10 @@
 // ─── POST /event — recibe eventos de los hooks de Claude Code ─────────────────
 
+import fs   from 'fs'
 import path from 'path'
 import { Router, type Request, type Response } from 'express'
 import { dbOps }                               from '../db'
-import { analyzeSession }                      from '../intelligence'
+import { analyzeSession, analyzeSemanticLoops, predictSaturation } from '../intelligence'
 import { summarizeSession }                    from '../summarizer'
 import { deriveSessionState, STATE_META }      from '../session-state'
 import { computeQuota, invalidateQuotaCache }  from '../quota-tracker'
@@ -18,6 +19,17 @@ import {
   type CostUpdateCallback,
   type CompactDetectedCallback,
 } from '../enricher'
+import { findJSONLForSession, extractSemanticData } from '../watchers/claude-code'
+
+// ─── Semantic extraction debounce: 3s after last new assistant turn ───────────
+const semanticDebounce = new Map<string, ReturnType<typeof setTimeout>>()
+
+// ─── Predictive saturation: context samples + alert cooldown per session ──────
+const contextSamples   = new Map<string, Array<{ ts: number; context_used: number }>>()
+const saturationCooldown = new Map<string, number>()
+const SATURATION_WARN_MINUTES = 30
+const SATURATION_COOLDOWN_MS  = 15 * 60_000
+const CONTEXT_SAMPLES_MAX     = 20
 
 // ─── Loop alert cooldown (toolName:sessionId → last alert ts) ─────────────────
 const loopAlertCooldown = new Map<string, number>()
@@ -68,6 +80,36 @@ function shouldFireAlert(level: 'yellow' | 'orange' | 'red', pct: number): boole
   return true
 }
 
+function extractTextPreview(transcriptPath: string): string | undefined {
+  try {
+    const size = fs.statSync(transcriptPath).size
+    const readSize = Math.min(size, 8192)
+    const buf = Buffer.alloc(readSize)
+    const fd  = fs.openSync(transcriptPath, 'r')
+    fs.readSync(fd, buf, 0, readSize, Math.max(0, size - readSize))
+    fs.closeSync(fd)
+
+    const lines = buf.toString('utf8').split('\n').filter(l => l.trim())
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const obj = JSON.parse(lines[i])
+        const data = obj.message ?? obj
+        if (data.role !== 'assistant') continue
+        let text = ''
+        if (typeof data.content === 'string') {
+          text = data.content
+        } else if (Array.isArray(data.content)) {
+          text = data.content.find((c: any) => c.type === 'text')?.text ?? ''
+        }
+        text = text.replace(/\s+/g, ' ').trim()
+        if (!text) continue
+        return text.length > 120 ? text.slice(0, 120) + '…' : text
+      } catch {}
+    }
+  } catch {}
+  return undefined
+}
+
 eventsRouter.post('/event', (req: Request, res: Response) => {
   const ip = req.ip ?? '127.0.0.1'
   if (isRateLimited(ip)) {
@@ -75,12 +117,15 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
     return
   }
 
-  const { type, session_id, tool_name, tool_input, tool_response, ts, cwd, transcript_path, source } = req.body
+  const { type, session_id, tool_name, tool_input, tool_response, ts, cwd, transcript_path, source: rawSource } = req.body
 
   if (!session_id || !type) {
     res.status(400).json({ error: 'Missing session_id or type' })
     return
   }
+
+  const KNOWN_SOURCES = new Set(['claude-code', 'opencode', 'codex', 'amp', 'droid', 'codebuff'])
+  const source = rawSource && KNOWN_SOURCES.has(rawSource) ? rawSource : 'claude-code'
 
   const resolvedCwd = cwd
     ?? (transcript_path ? path.dirname(transcript_path) || undefined : undefined)
@@ -114,13 +159,23 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
       } catch { activeSkillBySession.set(session_id, 'skill') }
     }
   } else {
+    const stopPreview = type === 'Stop'
+      ? (() => {
+          const lam = req.body.last_assistant_message
+          if (lam && typeof lam === 'string') {
+            const t = lam.replace(/\s+/g, ' ').trim()
+            return t.length > 120 ? t.slice(0, 120) + '…' : t
+          }
+          return transcript_path ? extractTextPreview(transcript_path) : undefined
+        })()
+      : undefined
     dbOps.insertEvent({
       session_id, type,
       tool_name: tool_name ?? undefined,
-      tool_input: tool_input ? JSON.stringify(tool_input) : undefined,
+      tool_input: tool_input ? JSON.stringify(tool_input) : (stopPreview ?? undefined),
       ts, cwd: resolvedCwd, skill_parent: skillParent, source
     })
-    broadcast({ type: 'event', payload: { ...req.body, skill_parent: skillParent } })
+    broadcast({ type: 'event', payload: { ...req.body, skill_parent: skillParent, ...(stopPreview ? { text_preview: stopPreview } : {}) } })
 
     // Stop limpia el skill activo para esta sesión
     if (type === 'Stop') {
@@ -147,6 +202,18 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
       if (typeof filePath === 'string' && path.isAbsolute(filePath)) {
         const projectCwd = findProjectCwdForFile(filePath)
         if (projectCwd) dbOps.updateSessionProject(session_id, projectCwd)
+
+        // Auto-declare intent for write tools when no active intent exists yet
+        if (type === 'PreToolUse' && ['Write','Edit'].includes(tool_name || '')) {
+          if (!dbOps.hasActiveIntent(source, filePath)) {
+            const conflicts = dbOps.getWriteConflicts([filePath], source)
+            if (conflicts.length === 0) {
+              const aid = dbOps.insertIntent(source, session_id, 'auto: ' + tool_name)
+              dbOps.insertIntentFile(aid, filePath, 'write')
+              broadcast({ type: 'intent_declared', payload: { tool: source, files: [filePath], task: 'auto: ' + tool_name } })
+            }
+          }
+        }
       }
     } catch { /* ignorar errores de parsing */ }
   }
@@ -220,7 +287,7 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
 export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
   // Ensure session row exists — sub-agent JSONLs arrive from the enricher without a
   // prior hook event (Claude Code does not fire hooks for sub-agent sessions).
-  dbOps.upsertSession({ id: sessionId, cwd: undefined, started_at: cost.firstTs ?? Date.now(), last_event_at: Date.now(), source })
+  dbOps.insertSessionIfAbsent({ id: sessionId, cwd: undefined, started_at: cost.firstTs ?? Date.now(), last_event_at: cost.lastTs ?? cost.firstTs ?? Date.now(), source })
   let sessionRow = dbOps.getSession(sessionId)
 
   // Sub-agent detection: first time we see a session, check if its firstTs falls after
@@ -249,16 +316,46 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
     report.exactRetries, report.errorRate, report.fileChurnScore, report.seqCycleCount,
   )
 
+  // ─── Predictive saturation ────────────────────────────────────────────────────
+  if (cost.context_used > 0 && cost.context_window > 0) {
+    const samples = contextSamples.get(sessionId) ?? []
+    samples.push({ ts: Date.now(), context_used: cost.context_used })
+    if (samples.length > CONTEXT_SAMPLES_MAX) samples.shift()
+    contextSamples.set(sessionId, samples)
+
+    const prediction = predictSaturation(samples, cost.context_window)
+    if (prediction && prediction.minutesLeft <= SATURATION_WARN_MINUTES) {
+      const lastFired = saturationCooldown.get(sessionId) ?? 0
+      if (Date.now() - lastFired >= SATURATION_COOLDOWN_MS) {
+        saturationCooldown.set(sessionId, Date.now())
+        broadcast({
+          type: 'saturation_warning',
+          payload: {
+            session_id:   sessionId,
+            minutes_left: prediction.minutesLeft,
+            pct_per_min:  prediction.pctPerMin,
+            context_used: cost.context_used,
+            context_window: cost.context_window,
+          }
+        })
+      }
+    }
+  }
+
   const startedAt = sessionRow?.started_at ?? Date.now()
   const sessionDurationMinutes = (Date.now() - startedAt) / 60_000
   const projectedHourlyUsd = sessionDurationMinutes > 0.5
     ? cost.cost_usd / sessionDurationMinutes * 60
     : 0
 
+  const sessionSource = sessionRow?.source ?? 'claude-code'
+
   broadcast({
     type: 'cost_update',
     payload: {
       session_id:            sessionId,
+      source:                sessionSource,
+      started_at:            startedAt,
       cost_usd:              cost.cost_usd,
       input_tokens:          cost.input_tokens,
       output_tokens:         cost.output_tokens,
@@ -313,6 +410,25 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
         outputTokens: cost.lastEntry.outputTokens,
       }
     })
+
+    // Semantic extraction: debounced 3s so rapid updates don't cause duplicate parses
+    const existing = semanticDebounce.get(sessionId)
+    if (existing) clearTimeout(existing)
+    semanticDebounce.set(sessionId, setTimeout(async () => {
+      semanticDebounce.delete(sessionId)
+      try {
+        const filePath = await findJSONLForSession(sessionId)
+        if (!filePath) return
+        const semantic = await extractSemanticData(filePath)
+        if (!semantic) return
+        dbOps.upsertAssistantTurns(sessionId, semantic.turns)
+        const semLoops = analyzeSemanticLoops(semantic.turns)
+        dbOps.updateSessionSemantic(sessionId, semantic.avg_output_chars, semantic.error_block_count, semLoops.length)
+        if (semLoops.length > 0) {
+          broadcast({ type: 'semantic_loop', payload: { session_id: sessionId, loops: semLoops } })
+        }
+      } catch (err) { console.warn('[events] Semantic extraction error:', err) }
+    }, 3_000))
   }
 }
 

@@ -20,7 +20,7 @@ interface Props {
 }
 
 export function LiveSourceBar({ sources, active, onSelect }: Props) {
-  if (sources.length <= 1) return null
+  if (sources.length === 0) return null
 
   return (
     <div style={{
@@ -51,9 +51,11 @@ export function LiveSourceBar({ sources, active, onSelect }: Props) {
             <span style={{ fontWeight: isActive ? 600 : 400 }}>
               {SOURCE_LABELS[s.source] ?? s.source}
             </span>
-            <span style={{ color: '#7d8590', fontSize: 10 }}>
-              {fmtCost(s.cost_usd)}
-            </span>
+            {s.cost_usd > 0 && (
+              <span style={{ color: '#7d8590', fontSize: 10 }}>
+                {fmtCost(s.cost_usd)}
+              </span>
+            )}
           </button>
         )
       })}
@@ -92,8 +94,12 @@ export function ActiveSourceCard({ source }: CardProps) {
           </span>
           <span style={{ color: '#7d8590' }}>Model</span>
           <span style={{ color: '#e6edf3' }}>{source.model}</span>
-          <span style={{ color: '#7d8590' }}>Cost</span>
-          <span style={{ color: '#3fb950', fontWeight: 600 }}>{fmtCost(source.cost_usd)}</span>
+          {source.cost_usd > 0 && (
+            <>
+              <span style={{ color: '#7d8590' }}>Cost</span>
+              <span style={{ color: '#3fb950', fontWeight: 600 }}>{fmtCost(source.cost_usd)}</span>
+            </>
+          )}
         </div>
       </div>
     </div>

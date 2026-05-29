@@ -40,7 +40,14 @@ export function CoachPanel({ tips }: { tips: CoachTip[] }) {
               <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                 <s.Icon size={13} color={s.color} style={{ flexShrink: 0, marginTop: 2 }} />
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: s.color, marginBottom: 3 }}>{tip.title}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: s.color }}>{tip.title}</span>
+                    {tip.source && (
+                      <span style={{ fontSize: 9, fontWeight: 700, color: '#484f58', background: '#21262d', border: '1px solid #30363d', borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        {tip.source === 'claude-code' ? 'CC' : tip.source === 'opencode' ? 'OC' : tip.source}
+                      </span>
+                    )}
+                  </div>
                   <div style={{ fontSize: 11, color: '#8b949e', lineHeight: 1.5 }}>{tip.text}</div>
                 </div>
               </div>

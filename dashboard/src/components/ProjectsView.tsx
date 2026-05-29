@@ -84,7 +84,7 @@ function SkeletonCard() {
 }
 
 const S = {
-  wrap:    { padding: '16px 24px', overflowY: 'auto' as const, height: '100%' },
+  wrap:    { padding: '16px 24px', overflowY: 'auto' as const, overflowX: 'hidden' as const, height: '100%' },
   summary: {
     display: 'flex', alignItems: 'center', gap: 20,
     padding: '12px 16px', marginBottom: 20,
@@ -94,7 +94,7 @@ const S = {
   sumItem: { display: 'flex', flexDirection: 'column' as const, gap: 2 },
   sumVal:  { color: '#e6edf3', fontWeight: 700, fontSize: 16 },
   sumLbl:  { color: '#7d8590', fontSize: 11 },
-  grid:    { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 },
+  grid:    { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 },
   sep:     { width: 1, height: 32, background: '#21262d', flexShrink: 0 },
 }
 

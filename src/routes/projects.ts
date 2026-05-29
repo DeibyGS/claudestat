@@ -125,6 +125,14 @@ projectsRouter.get('/projects', (_req: Request, res: Response) => {
     })
   }
 
+  // CLI hours per project (source breakdown from DB)
+  const cliHoursRows = dbOps.getProjectCliHours()
+  const cliHoursMap = new Map<string, Record<string, number>>()
+  for (const row of cliHoursRows) {
+    if (!cliHoursMap.has(row.project_path)) cliHoursMap.set(row.project_path, {})
+    cliHoursMap.get(row.project_path)![row.source] = row.total_ms / 3_600_000
+  }
+
   // Attach pattern insights per project (only if DB has enough data)
   const projects = [...projectMap.values()].map(p => {
     const toolCounts  = dbOps.getProjectToolCounts(p.path)
@@ -132,7 +140,8 @@ projectsRouter.get('/projects', (_req: Request, res: Response) => {
     const insights = (sessionStats && sessionStats.session_count >= 2)
       ? analyzePatterns(toolCounts, sessionStats)
       : []
-    return { ...p, insights }
+    const cli_hours = cliHoursMap.get(p.path)
+    return { ...p, insights, ...(cli_hours ? { cli_hours } : {}) }
   })
     .sort((a, b) => (b.last_active ?? 0) - (a.last_active ?? 0))
 

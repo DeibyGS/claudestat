@@ -3,6 +3,7 @@ import { GitCompareArrows, X, History, List, GitGraph, Search, Sparkles } from '
 import type { DaySessions, SessionSummary } from '../types'
 import { SessionCard } from './SessionCard'
 import { Tip } from './Tip'
+import { ReplayModal } from './ReplayModal'
 
 const MODE_COLOR_MAP: Record<string, string> = {
   directo: '#7d8590', agentes: '#d29922', skills: '#58a6ff', 'agentes+skills': '#d29922',
@@ -370,10 +371,11 @@ const COST_FILTERS: { label: string; min: number | null; max: number | null }[] 
 ]
 
 export function HistoryView({ days, activeSessionId }: Props) {
-  const [selectedIds, setSelectedIds] = useState<string[]>([])
-  const [viewMode, setViewMode]       = useState<'list' | 'timeline'>('list')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [costFilter, setCostFilter]   = useState(0) // índice en COST_FILTERS
+  const [selectedIds,      setSelectedIds]      = useState<string[]>([])
+  const [viewMode,         setViewMode]         = useState<'list' | 'timeline'>('list')
+  const [searchQuery,      setSearchQuery]      = useState('')
+  const [costFilter,       setCostFilter]       = useState(0) // índice en COST_FILTERS
+  const [replaySessionId,  setReplaySessionId]  = useState<string | null>(null)
 
   // Filtrado reactivo
   const filteredDays = useMemo(() => {
@@ -609,12 +611,17 @@ export function HistoryView({ days, activeSessionId }: Props) {
                   selectable
                   selected={selectedIds.includes(session.id)}
                   onSelect={toggleSelect}
+                  onReplay={() => setReplaySessionId(session.id)}
                 />
               ))}
             </div>
           </div>
         ))
       }
+
+      {replaySessionId && (
+        <ReplayModal sessionId={replaySessionId} onClose={() => setReplaySessionId(null)} />
+      )}
     </div>
   )
 }

@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { GitBranch, Cpu, BrainCircuit, FileText, Zap, Settings2, ChevronDown, ChevronRight,
-         CheckCircle2, XCircle, Bot, Layers, Workflow, MemoryStick } from 'lucide-react'
+         CheckCircle2, XCircle, Bot, Layers, Workflow, MemoryStick, Globe, Users } from 'lucide-react'
 import { Tip } from './Tip'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -18,6 +18,15 @@ export interface SystemConfig {
     killSwitchThreshold?: number
     warnThresholds?:     number[]   // [yellow, orange, red]
     plan?:               string | null
+  }
+  opencode?: {
+    config:     Record<string, unknown> | null
+    agentsMd:   { lines: number; sizeKb: number } | null
+    skills:     { name: string; description: string; lines: number }[]
+    agents:     string[]
+    projects:   number
+    commands:   string[]
+    plugins:    string[]
   }
 }
 
@@ -277,6 +286,10 @@ function MemorySection({ memoryFiles }: { memoryFiles: string[] }) {
   const [open, setOpen] = useState(true)
   const engramOk = memoryFiles.length > 0
 
+  const MEMORY_TIPS: Record<string, string> = {
+    'MEMORY.md': 'Auto-loaded index — every session reads this file automatically.',
+  }
+
   return (
     <Card>
       <SectionHeader
@@ -291,13 +304,20 @@ function MemorySection({ memoryFiles }: { memoryFiles: string[] }) {
               Engram not detected. Optional MCP plugin for persistent memory between sessions.
             </span>
           ) : memoryFiles.map((f, i) => (
-            <TreeRow
-              key={f}
-              label={f}
-              last={i === memoryFiles.length - 1}
-              color={f === 'MEMORY.md' ? '#79c0ff' : '#58a6ff'}
-              tip={f === 'MEMORY.md' ? 'Auto-loaded index — every session reads this file automatically.' : `Memory file: ~/.claude/projects/…/memory/${f}`}
-            />
+            <Tip key={f} position="top" align="left" content={
+              <div>
+                <div style={{ color: f === 'MEMORY.md' ? '#79c0ff' : '#58a6ff', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>{f}</div>
+                <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
+                  {MEMORY_TIPS[f] || `Memory file: ~/.claude/projects/…/memory/${f}`}
+                </div>
+              </div>
+            }>
+              <TreeRow
+                label={f}
+                last={i === memoryFiles.length - 1}
+                color={f === 'MEMORY.md' ? '#79c0ff' : '#58a6ff'}
+              />
+            </Tip>
           ))}
         </div>
       )}
@@ -517,6 +537,210 @@ function ModesSection({ dist }: { dist: SystemConfig['modeDistribution'] }) {
   )
 }
 
+// ─── Sección: Active tools ─────────────────────────────────────────────────────
+
+function ActiveToolsSection({ config }: { config?: SystemConfig }) {
+  const [intents, setIntents] = useState<Array<{ tool: string; file_path: string }>>([])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      fetch('/api/intent/active').then(r => r.json()).then(d => setIntents(d.intents ?? [])).catch(() => {})
+    }, 5_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const hasOC = !!config?.opencode
+  const activeTools = hasOC ? 2 : 1
+  const hasConflict = intents.some(i => i.tool === 'opencode')
+
+  return (
+    <Card>
+      <SectionHeader
+        icon={Users} title="Active tools" color="#58a6ff"
+        badge={<span style={{ fontSize: 10, fontWeight: 600, color: '#3fb950', background: '#3fb95018', border: '1px solid #3fb95035', borderRadius: 4, padding: '1px 6px' }}>
+          {activeTools} tool{activeTools > 1 ? 's' : ''}
+        </span>}
+        open={true} onToggle={() => {}}
+      />
+      <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+        <div style={{ flex: 1, background: '#0d1117', borderRadius: 6, padding: '10px 12px', border: '1px solid #21262d' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+            <Bot size={12} color="#d29922" />
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#d29922' }}>Claude Code</span>
+            <CheckCircle2 size={10} color="#3fb950" style={{ marginLeft: 'auto' }} />
+          </div>
+          <div style={{ fontSize: 9, color: '#484f58' }}>
+            {config?.hooks ? `${Object.keys(config.hooks).length} hooks` : 'checking...'}
+          </div>
+        </div>
+        <div style={{ flex: 1, background: '#0d1117', borderRadius: 6, padding: '10px 12px', border: '1px solid #21262d' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+            <Globe size={12} color="#bc8cff" />
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#bc8cff' }}>OpenCode</span>
+            {hasOC
+              ? <CheckCircle2 size={10} color="#3fb950" style={{ marginLeft: 'auto' }} />
+              : <span style={{ marginLeft: 'auto', fontSize: 9, color: '#484f58' }}>inactive</span>
+            }
+          </div>
+          <div style={{ fontSize: 9, color: '#484f58' }}>
+            {hasOC ? `${config?.opencode?.skills?.length ?? 0} skills` : 'not detected'}
+          </div>
+        </div>
+      </div>
+      {intents.length > 0 && (
+        <div style={{ background: '#0d1117', borderRadius: 6, padding: '8px 10px' }}>
+          <div style={{ fontSize: 10, color: '#484f58', fontWeight: 600, marginBottom: 6 }}>Active coordination</div>
+          {intents.map((i, idx) => (
+            <div key={idx} style={{ display: 'flex', gap: 6, fontSize: 10, color: '#8b949e', padding: '2px 0' }}>
+              <span style={{ color: i.tool === 'opencode' ? '#bc8cff' : '#d29922', fontWeight: 600 }}>{i.tool}</span>
+              <span style={{ color: '#484f58' }}>editing</span>
+              <span style={{ color: '#e6edf3' }}>{i.file_path.split('/').pop()}</span>
+            </div>
+          ))}
+          {hasConflict && (
+            <div style={{ fontSize: 9, color: '#f85149', marginTop: 4 }}>⚠ Collision detected — tools editing same file</div>
+          )}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ─── Sección: OpenCode config ──────────────────────────────────────────────────
+
+function OpenCodeConfigSection({ oc }: { oc: NonNullable<SystemConfig['opencode']> }) {
+  const [open, setOpen] = useState(true)
+  const model = (oc.config?.small_model as string) ?? (oc.config?.model as string) ?? 'unknown'
+
+  return (
+    <Card>
+      <SectionHeader
+        icon={Settings2} title="OpenCode config" color="#bc8cff"
+        subtitle="~/.config/opencode/opencode.json"
+        open={open} onToggle={() => setOpen(v => !v)}
+      />
+      {open && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          <Tip position="top" align="left" content={
+            <div>
+              <div style={{ color: '#bc8cff', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>Model</div>
+              <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>small_model from opencode.json</div>
+            </div>
+          }>
+            <TreeRow label="Model" value={<span style={{ color: '#bc8cff', fontSize: 10 }}>{model}</span>} />
+          </Tip>
+          <Tip position="top" align="left" content={
+            <div>
+              <div style={{ color: '#bc8cff', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>AGENTS.md</div>
+              <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>Global instructions loaded every session</div>
+            </div>
+          }>
+            <TreeRow label="AGENTS.md" value={oc.agentsMd ? `${oc.agentsMd.lines} ln · ${oc.agentsMd.sizeKb} KB` : 'not found'} />
+          </Tip>
+          <Tip position="top" align="left" content={
+            <div>
+              <div style={{ color: '#bc8cff', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>Projects</div>
+              <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>Registered in ~/.config/opencode/projects.json</div>
+            </div>
+          }>
+            <TreeRow label="Projects" value={<span style={{ color: '#e6edf3' }}>{oc.projects}</span>} />
+          </Tip>
+          <Tip position="top" align="left" content={
+            <div>
+              <div style={{ color: '#bc8cff', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>Plugins</div>
+              <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>MCP plugins in ~/.config/opencode/plugins/</div>
+            </div>
+          }>
+            <TreeRow
+              label="Plugins"
+              last
+              value={oc.plugins.length > 0 ? oc.plugins.join(', ') : <span style={{ color: '#484f58' }}>none</span>}
+            />
+          </Tip>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ─── Sección: OpenCode skills ──────────────────────────────────────────────────
+
+function OpenCodeSkillsSection({ skills }: { skills: { name: string; description: string; lines: number }[] }) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <Card>
+      <SectionHeader
+        icon={Zap} title="OpenCode skills" color="#bc8cff"
+        subtitle="~/.config/opencode/skills/"
+        badge={skills.length > 0 ? <Badge text={`${skills.length}`} color="#bc8cff" /> : undefined}
+        open={open} onToggle={() => setOpen(v => !v)}
+      />
+      {open && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {skills.length === 0
+            ? <span style={{ fontSize: 11, color: '#484f58' }}>No skills</span>
+            : skills.map((s, i) => (
+              <Tip key={s.name} position="top" align="left" content={
+                <div>
+                  <div style={{ color: '#bc8cff', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>{s.name}</div>
+                  <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
+                    {s.description || 'No description in SKILL.md frontmatter'}
+                  </div>
+                  <div style={{ color: '#3d444d', fontSize: 9, marginTop: 4 }}>{s.lines} lines</div>
+                </div>
+              }>
+                <TreeRow
+                  label={s.name}
+                  last={i === skills.length - 1}
+                  color="#bc8cff"
+                  value={<span style={{ color: '#3d444d' }}>{s.lines} ln</span>}
+                />
+              </Tip>
+            ))
+          }
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ─── Sección: OpenCode agents ──────────────────────────────────────────────────
+
+function OpenCodeAgentsSection({ agents }: { agents: string[] }) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <Card>
+      <SectionHeader
+        icon={Bot} title="OpenCode agents" color="#bc8cff"
+        subtitle="~/.config/opencode/agents/"
+        badge={agents.length > 0 ? <Badge text={`${agents.length}`} color="#bc8cff" /> : undefined}
+        open={open} onToggle={() => setOpen(v => !v)}
+      />
+      {open && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {agents.length === 0
+            ? <span style={{ fontSize: 11, color: '#484f58' }}>No agents</span>
+            : agents.map((a, i) => (
+              <Tip key={a} position="top" align="left" content={
+                <div>
+                  <div style={{ color: '#bc8cff', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>{a.replace('.md', '')}</div>
+                  <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
+                    Agent file: ~/.config/opencode/agents/{a}
+                  </div>
+                </div>
+              }>
+                <TreeRow key={a} label={a.replace('.md', '')} last={i === agents.length - 1} color="#bc8cff" />
+              </Tip>
+            ))
+          }
+        </div>
+      )}
+    </Card>
+  )
+}
+
 // ─── Sección: claudestat config ─────────────────────────────────────────────
 
 function ClaudestatSection({ cfg }: { cfg: SystemConfig['claudestatConfig'] }) {
@@ -622,7 +846,7 @@ export function SystemView({ config, error, onRetry }: { config?: SystemConfig; 
         <Layers size={16} color="#58a6ff" />
         <div>
           <div style={{ fontSize: 14, fontWeight: 700, color: '#e6edf3' }}>System map</div>
-          <div style={{ fontSize: 11, color: '#484f58' }}>How Claude Code is configured on this machine</div>
+          <div style={{ fontSize: 11, color: '#484f58' }}>Claude Code + OpenCode configuration overview</div>
         </div>
         {/* Resumen rápido */}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -648,10 +872,10 @@ export function SystemView({ config, error, onRetry }: { config?: SystemConfig; 
             </span>
           </Tip>
           <Tip position="bottom" align="right" content={
-            <div style={{ color: '#8b949e', fontSize: 10 }}>Skills in ~/.claude/commands/</div>
+            <div style={{ color: '#8b949e', fontSize: 10 }}>Skills (CC + OC)</div>
           }>
             <span style={{ fontSize: 10, color: '#3fb950', background: '#3fb95015', border: '1px solid #3fb95035', borderRadius: 4, padding: '2px 7px', cursor: 'help' }}>
-              {config.skills.length} skills
+              {config.skills.length + (config.opencode?.skills?.length ?? 0)} skills
             </span>
           </Tip>
           <Tip position="bottom" align="right" content={
@@ -661,6 +885,15 @@ export function SystemView({ config, error, onRetry }: { config?: SystemConfig; 
               {config.memoryFiles.length} memories
             </span>
           </Tip>
+          {config.opencode && (
+            <Tip position="bottom" align="right" content={
+              <div style={{ color: '#8b949e', fontSize: 10 }}>OpenCode config detected</div>
+            }>
+              <span style={{ fontSize: 10, color: '#bc8cff', background: '#bc8cff15', border: '1px solid #bc8cff35', borderRadius: 4, padding: '2px 7px', cursor: 'help' }}>
+                OC {config.opencode.skills.length} skills
+              </span>
+            </Tip>
+          )}
           {onRetry && (
             <Tip position="bottom" align="right" content={
               <div style={{ color: '#8b949e', fontSize: 10 }}>Refresh system configuration</div>
@@ -670,8 +903,8 @@ export function SystemView({ config, error, onRetry }: { config?: SystemConfig; 
                 padding: '2px 7px', cursor: 'pointer', color: '#6e7681', fontSize: 12,
                 lineHeight: 1, transition: 'color 0.15s, border-color 0.15s',
               }}
-                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#e6edf3'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#6e7681' }}
-                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = '#6e7681'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#30363d' }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#e6edf3'; (e.currentTarget as HTMLElement).style.borderColor = '#6e7681' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = '#6e7681'; (e.currentTarget as HTMLElement).style.borderColor = '#30363d' }}
               >↺</button>
             </Tip>
           )}
@@ -679,6 +912,12 @@ export function SystemView({ config, error, onRetry }: { config?: SystemConfig; 
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, maxWidth: 1200, margin: '0 auto' }}>
+
+        <ActiveToolsSection config={config} />
+
+        <div style={{ gridColumn: '1 / -1' }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Claude Code</div>
+        </div>
 
         <SkillsSection skills={config.skills} />
         <AgentsSection agents={config.agents} />
@@ -696,6 +935,48 @@ export function SystemView({ config, error, onRetry }: { config?: SystemConfig; 
         <div style={{ gridColumn: '1 / -1' }}>
           <MemorySection memoryFiles={config.memoryFiles} />
         </div>
+
+        {(() => {
+          const oc = config.opencode
+          if (!oc) return null
+          return (
+            <>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', letterSpacing: '0.06em', textTransform: 'uppercase' }}>OpenCode</div>
+              </div>
+
+              <OpenCodeConfigSection oc={oc} />
+              <OpenCodeSkillsSection skills={oc.skills} />
+
+              <OpenCodeAgentsSection agents={oc.agents} />
+              <Card>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                  <FileText size={11} color="#3d444d" />
+                  <span style={{ fontSize: 11, color: '#8b949e' }}>Commands</span>
+                  <span style={{ fontSize: 10, color: '#484f58', marginLeft: 'auto' }}>
+                    {oc.commands.length} files
+                  </span>
+                </div>
+                {oc.commands.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {oc.commands.map((c, i) => (
+                      <Tip key={c} position="top" align="left" content={
+                        <div>
+                          <div style={{ color: '#8b949e', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>{c.replace('.md', '')}</div>
+                          <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
+                            Command file: ~/.config/opencode/commands/{c}
+                          </div>
+                        </div>
+                      }>
+                        <TreeRow label={c.replace('.md', '')} last={i === oc.commands.length - 1} color="#8b949e" />
+                      </Tip>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            </>
+          )
+        })()}
 
       </div>
     </div>

@@ -182,6 +182,119 @@ export function detectSeqCycles(events: EventRow[]): number {
   return cycles
 }
 
+// ─── Semantic loop detection ──────────────────────────────────────────────────
+
+export interface SemanticLoop {
+  type: 'tool_sequence' | 'error_persistence'
+  turn_start: number
+  count: number
+  detail: string
+}
+
+interface TurnLike {
+  turn_index: number
+  tool_calls?: string[]
+  error_count: number
+}
+
+/**
+ * Detects two kinds of semantic loops using assistant_turns data:
+ * - tool_sequence: same tool_calls signature repeated in ≥2 of the last 5 turns
+ * - error_persistence: ≥3 consecutive turns with error_count > 0
+ */
+export function analyzeSemanticLoops(turns: TurnLike[]): SemanticLoop[] {
+  const loops: SemanticLoop[] = []
+
+  // ── error_persistence ────────────────────────────────────────────────────────
+  const ERROR_RUN_MIN = 3
+  let runStart = -1
+  let runLen   = 0
+  for (let i = 0; i < turns.length; i++) {
+    if (turns[i].error_count > 0) {
+      if (runLen === 0) runStart = turns[i].turn_index
+      runLen++
+    } else {
+      if (runLen >= ERROR_RUN_MIN) {
+        loops.push({ type: 'error_persistence', turn_start: runStart, count: runLen, detail: `${runLen} consecutive error turns` })
+      }
+      runLen = 0
+    }
+  }
+  if (runLen >= ERROR_RUN_MIN) {
+    loops.push({ type: 'error_persistence', turn_start: runStart, count: runLen, detail: `${runLen} consecutive error turns` })
+  }
+
+  // ── tool_sequence: same tool_calls fingerprint in ≥2 of last 5 turns ────────
+  const WINDOW = 5
+  const fingerprint = (t: TurnLike) => (t.tool_calls ?? []).join(',')
+  for (let i = 1; i < turns.length; i++) {
+    const fp = fingerprint(turns[i])
+    if (!fp) continue
+    const window = turns.slice(Math.max(0, i - WINDOW + 1), i)
+    const matches = window.filter(t => fingerprint(t) === fp)
+    if (matches.length >= 1) {
+      const alreadyLogged = loops.some(
+        l => l.type === 'tool_sequence' && l.turn_start === turns[i - matches.length].turn_index
+      )
+      if (!alreadyLogged) {
+        const label = (turns[i].tool_calls ?? []).join('→') || 'empty'
+        loops.push({
+          type:       'tool_sequence',
+          turn_start: turns[i - matches.length].turn_index,
+          count:      matches.length + 1,
+          detail:     `${label} ×${matches.length + 1}`,
+        })
+      }
+    }
+  }
+
+  return loops
+}
+
+// ─── Predictive saturation ────────────────────────────────────────────────────
+
+export interface SaturationPrediction {
+  minutesLeft: number
+  pctPerMin:   number
+}
+
+/**
+ * Linear regression over context_used samples → predicts minutes until 90% of context_window.
+ * Returns null if insufficient data or trend is flat/negative.
+ */
+export function predictSaturation(
+  samples: Array<{ ts: number; context_used: number }>,
+  contextWindow: number,
+): SaturationPrediction | null {
+  if (samples.length < 3 || contextWindow <= 0) return null
+
+  const n  = samples.length
+  const t0 = samples[0].ts
+  const xs = samples.map(s => (s.ts - t0) / 60_000)  // minutes from first sample
+  const ys = samples.map(s => s.context_used / contextWindow)  // 0-1 fraction
+
+  const sumX  = xs.reduce((a, b) => a + b, 0)
+  const sumY  = ys.reduce((a, b) => a + b, 0)
+  const sumXY = xs.reduce((a, x, i) => a + x * ys[i], 0)
+  const sumX2 = xs.reduce((a, x) => a + x * x, 0)
+
+  const denom = n * sumX2 - sumX * sumX
+  if (Math.abs(denom) < 1e-9) return null
+
+  const slope     = (n * sumXY - sumX * sumY) / denom  // fraction per minute
+  const intercept = (sumY - slope * sumX) / n
+
+  if (slope <= 0) return null  // context shrinking or flat → no saturation risk
+
+  const target      = 0.9
+  const currentX    = xs[n - 1]
+  const minutesLeft = (target - (intercept + slope * currentX)) / slope
+
+  if (minutesLeft < 0) return null  // already past target
+
+  return { minutesLeft: Math.round(minutesLeft), pctPerMin: Math.round(slope * 100 * 10) / 10 }
+}
+
 /**
  * Genera el reporte completo de inteligencia para una sesión.
  */

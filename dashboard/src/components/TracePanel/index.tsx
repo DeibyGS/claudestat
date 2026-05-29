@@ -82,8 +82,12 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12, opacity: 0.25 }}>
             <Terminal size={36} />
           </div>
-          <div style={{ fontSize: 13, fontWeight: 500, color: '#6e7681', marginBottom: 4 }}>Esperando actividad…</div>
-          <div style={{ fontSize: 11 }}>Abre {cliLabel} y empieza a trabajar</div>
+          <div style={{ fontSize: 13, fontWeight: 500, color: '#6e7681', marginBottom: 4 }}>
+            {cost ? 'Waiting for next message…' : 'Esperando actividad…'}
+          </div>
+          <div style={{ fontSize: 11 }}>
+            {cost ? `${cliLabel} is ready — session active` : `Abre ${cliLabel} y empieza a trabajar`}
+          </div>
         </div>
       </div>
     )

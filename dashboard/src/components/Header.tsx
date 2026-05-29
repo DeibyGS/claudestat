@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Radio, History, FolderGit2, FolderOpen, Zap, Settings2, Wrench, Layers, TrendingUp, Trophy, type LucideIcon } from 'lucide-react'
-import type { AppState, TraceEvent, QuotaData } from '../types'
+import type { AppState, TraceEvent, QuotaData, ActiveSource } from '../types'
 import { Tip } from './Tip'
 
 // Inject keyframes once (tooltip fade-in + tool pulse)
@@ -28,6 +28,7 @@ interface Props {
   activeProject:  string | null
   onOpenConfig:   () => void
   quota?:         QuotaData
+  activeSources?: ActiveSource[]
 }
 
 const CONN_LABEL: Record<string, string> = {
@@ -39,6 +40,19 @@ const CONN_COLOR: Record<string, string> = {
   idle:      '#8b949e',
   connected: '#3fb950',
   error:     '#f85149',
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  'claude-code': 'Claude Code',
+  'opencode':    'OpenCode',
+  'codex':       'Codex',
+  'amp':         'Amp',
+  'droid':       'Droid',
+  'codebuff':    'Codebuff',
+}
+const SOURCE_COLORS: Record<string, string> = {
+  'claude-code': '#58a6ff',
+  'opencode':    '#3fb950',
 }
 
 const TAB_LABELS: { id: Tab; label: string; icon: LucideIcon }[] = [
@@ -230,7 +244,7 @@ function ContextBadge({ remaining, contextPct, color }: { remaining: number; con
 
 // Tip re-exported from shared component — see Tip.tsx
 
-export function Header({ state, connStatus, activeTab, onTabChange, activeProject, onOpenConfig, quota }: Props) {
+export function Header({ activeSources: as, state, connStatus, activeTab, onTabChange, activeProject, onOpenConfig, quota }: Props) {
   const connected = connStatus === 'connected'
   const { sessionId, cost, startedAt } = state
 
@@ -246,10 +260,10 @@ export function Header({ state, connStatus, activeTab, onTabChange, activeProjec
       })()
     : null
 
-  const projectName = activeProject ? activeProject.split('/').at(-1) : null
   const hasSession  = Boolean(sessionId)
   const costUsd     = cost?.cost_usd ?? 0
   const modelLabel  = fmtModel(cost?.model)
+  const activeSources = as ?? []
 
   return (
     <div style={S.header}>
@@ -290,8 +304,69 @@ export function Header({ state, connStatus, activeTab, onTabChange, activeProjec
       {/* Right section */}
       <div style={S.right}>
 
-        {/* Modelo activo */}
-        {modelLabel && (
+        {/* Badge por cada tool activo */}
+        {activeSources.map(as => {
+          const ml = fmtModel(as.model)
+          const srcLabel = SOURCE_LABELS[as.source] ?? as.source
+          const srcColor = SOURCE_COLORS[as.source] ?? '#8b949e'
+          const projName = as.project ? as.project.split('/').at(-1) : null
+          return (
+            <Tip key={as.source} content={
+              <div>
+                <div style={{ color: srcColor, fontWeight: 700, fontSize: 13, marginBottom: 4 }}>
+                  {srcLabel}
+                </div>
+                <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
+                  {ml && <><span style={{ color: ml.color, fontWeight: 600 }}>{ml.name}</span><br /></>}
+                  {projName && <>Project: <span style={{ color: '#79c0ff' }}>{projName}</span><br /></>}
+                  Session: <code style={{ color: '#8b949e', fontSize: 9 }}>{as.sessionId.slice(0, 16)}…</code>
+                </div>
+              </div>
+            }>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                background: '#21262d', border: `1px solid ${srcColor}44`,
+                borderRadius: 5, padding: '2px 8px',
+                fontSize: 11, fontWeight: 600, color: srcColor,
+                flexShrink: 0, cursor: 'default',
+              }}>
+                <span style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: srcColor, flexShrink: 0,
+                }} />
+                {srcLabel}
+                {ml && <span style={{ color: '#8b949e', fontWeight: 400 }}>{ml.name}</span>}
+                {projName && <FolderOpen size={10} style={{ color: '#6e7681', marginLeft: 2 }} />}
+                {projName && <span style={{ color: '#8b949e', fontWeight: 400 }}>{projName}</span>}
+              </span>
+            </Tip>
+          )
+        })}
+
+        {/* Costo agregado de todos los sources activos */}
+        {activeSources.length > 0 && (() => {
+          const total = activeSources.reduce((s, a) => s + a.cost_usd, 0)
+          if (total <= 0) return null
+          return (
+            <Tip content={
+              <div>
+                <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 18, marginBottom: 5 }}>
+                  {fmtCost(total)}
+                </div>
+                <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
+                  Accumulated cost across all active tools.
+                </div>
+              </div>
+            }>
+              <span style={{ ...S.costBadge(total), cursor: 'default' }}>
+                {fmtCost(total)}
+              </span>
+            </Tip>
+          )
+        })()}
+
+        {/* Modelo de la sesión SSE actual (fallback si no hay activeSources) */}
+        {activeSources.length === 0 && modelLabel && (
           <Tip content={
             <div>
               <div style={{ color: modelLabel.color, fontWeight: 700, fontSize: 13, marginBottom: 5 }}>
@@ -313,67 +388,6 @@ export function Header({ state, connStatus, activeTab, onTabChange, activeProjec
               flexShrink: 0, cursor: 'default',
             }}>
               {modelLabel.name}
-            </span>
-          </Tip>
-        )}
-
-        {/* Haiku en uso (sub-agentes) */}
-        {quota && quota.weeklyHoursHaiku > 0 && (
-          <Tip content={
-            <div>
-              <div style={{ color: '#3fb950', fontWeight: 700, fontSize: 13, marginBottom: 5 }}>Haiku active</div>
-              <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
-                {quota.weeklyHoursHaiku.toFixed(1)}h used this week<br />
-                Running in sub-agents (code-explorer, devops…)
-              </div>
-            </div>
-          }>
-            <span style={{
-              display: 'inline-flex', alignItems: 'center', gap: 4,
-              background: '#3fb95012', border: '1px solid #3fb95025',
-              borderRadius: 5, padding: '2px 8px',
-              fontSize: 11, fontWeight: 600, color: '#3fb95099',
-              flexShrink: 0, cursor: 'default',
-            }}>
-              Haiku
-            </span>
-          </Tip>
-        )}
-
-        {/* Proyecto activo */}
-        {projectName && (
-          <Tip content={
-            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
-              <div style={{ fontWeight: 700, color: '#79c0ff', marginBottom: 4 }}>Active project</div>
-              <div style={{ color: '#7d8590' }}>Working directory detected by claudestat</div>
-              <div style={{ color: '#484f58', marginTop: 6, fontFamily: 'monospace', fontSize: 10, wordBreak: 'break-all' }}>
-                {activeProject}
-              </div>
-            </div>
-          }>
-            <span style={S.projectBadge}>
-              <FolderOpen size={11} />
-              {projectName}
-            </span>
-          </Tip>
-        )}
-
-        {/* Costo de sesión (solo si hay sesión activa y costo > 0) */}
-        {hasSession && costUsd > 0 && (
-          <Tip content={
-            <div>
-              <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 18, marginBottom: 5 }}>
-                {fmtCost(costUsd)}
-              </div>
-              <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
-                Accumulated cost of the current session.<br />
-                Only includes usage from Claude Code,<br />
-                not from claude.ai web.
-              </div>
-            </div>
-          }>
-            <span style={{ ...S.costBadge(costUsd), cursor: 'default' }}>
-              {fmtCost(costUsd)}
             </span>
           </Tip>
         )}
@@ -460,9 +474,11 @@ function UptimeBadge({ startedAt }: { startedAt: number }) {
 
 function fmtModel(model?: string): { name: string; color: string; bg: string } | null {
   if (!model) return null
-  if (model.includes('opus'))   return { name: 'Opus 4.6',   color: '#d29922', bg: '#d2992212' }
-  if (model.includes('haiku'))  return { name: 'Haiku 4.5',  color: '#3fb950', bg: '#3fb95012' }
-  if (model.includes('sonnet')) return { name: 'Sonnet 4.6', color: '#58a6ff', bg: '#58a6ff12' }
+  if (model.includes('opus'))     return { name: 'Opus 4.6',    color: '#d29922', bg: '#d2992212' }
+  if (model.includes('haiku'))    return { name: 'Haiku 4.5',   color: '#3fb950', bg: '#3fb95012' }
+  if (model.includes('sonnet'))   return { name: 'Sonnet 4.6',  color: '#58a6ff', bg: '#58a6ff12' }
+  if (model.includes('deepseek')) return { name: 'DeepSeek',    color: '#c9a0ff', bg: '#c9a0ff12' }
+  if (model.includes('gpt'))      return { name: 'GPT',         color: '#74aa9c', bg: '#74aa9c12' }
   // Fallback: recortar a "claude-X-Y" → "X Y"
   const parts = model.replace('claude-', '').split('-').slice(0, 2).join(' ')
   return { name: parts || model, color: '#8b949e', bg: '#8b949e12' }

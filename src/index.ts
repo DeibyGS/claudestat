@@ -63,9 +63,19 @@ if (!SKIP_UPDATE_NOTICE.has(subcommand)) {
     fetchLatestVersion()
   }
 
+  const semverGt = (a: string, b: string) => {
+    const [pa, pb] = [a.split('.').map(Number), b.split('.').map(Number)]
+    for (let i = 0; i < 3; i++) {
+      const aVal = pa[i] ?? 0, bVal = pb[i] ?? 0
+      if (aVal > bVal) return true
+      if (aVal < bVal) return false
+    }
+    return false
+  }
+
   const _exit = process.exit.bind(process)
   process.exit = ((code?: number) => {
-    if ((code ?? 0) === 0 && cachedLatest && cachedLatest !== PKG_VERSION) {
+    if ((code ?? 0) === 0 && cachedLatest && semverGt(cachedLatest, PKG_VERSION)) {
       console.log(`\n  ✦ Update available: ${PKG_VERSION} → ${cachedLatest}`)
       console.log(`    Run: npm install -g @statforge/claudestat\n`)
     }

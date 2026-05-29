@@ -444,6 +444,27 @@ export function BlockDetailPanel({
           </div>
         )}
 
+        {/* ── Response preview (solo bloques sin tools) ── */}
+        {block.tools.length === 0 && block.textPreview && (
+          <div>
+            <SectionLabel>Response</SectionLabel>
+            <div style={{
+              background: '#0d1117', border: '1px solid #21262d', borderRadius: 6,
+              padding: '10px 14px',
+            }}>
+              <span style={{ fontSize: 12, color: '#8b949e', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                {block.textPreview}
+              </span>
+            </div>
+            {blockCost && (blockCost.inputTokens + blockCost.outputTokens) > 0 && (
+              <div style={{ display: 'flex', gap: 12, marginTop: 8, fontSize: 11, color: '#6e7681' }}>
+                <span><span style={{ color: '#58a6ff88' }}>{fmtTokens(blockCost.inputTokens)}</span> in</span>
+                <span><span style={{ color: '#3fb95088' }}>{fmtTokens(blockCost.outputTokens)}</span> out</span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* ── Modelo real de la sesión + sub-agentes ── */}
         {sessionModel && (() => {
           const m = fmtModelBlock(sessionModel)

@@ -128,7 +128,7 @@ export async function runDoctor(): Promise<void> {
   if (activeBinary) {
     try {
       const runningVersion = execSync(`${activeBinary} --version`, { stdio: 'pipe' })
-        .toString().trim().replace(/^v?/, '')
+        .toString().split('\n')[0].trim().replace(/^v?/, '')
       versionOk = runningVersion === installedVersion
       if (!versionOk) {
         versionNote = `Active binary reports v${runningVersion}, installed package is v${installedVersion}`

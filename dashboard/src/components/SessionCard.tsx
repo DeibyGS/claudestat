@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { FolderOpen, TriangleAlert, Sparkles, GitBranch, Check } from 'lucide-react'
+import { FolderOpen, TriangleAlert, Sparkles, GitBranch, Check, Play } from 'lucide-react'
 import type { SessionSummary } from '../types'
 import { Tip } from './Tip'
 
@@ -9,6 +9,7 @@ interface Props {
   selectable?: boolean
   selected?:   boolean
   onSelect?:   (id: string) => void
+  onReplay?:   () => void
 }
 
 const TOOL_COLORS: Record<string, string> = {
@@ -20,15 +21,18 @@ const TOOL_COLORS: Record<string, string> = {
 
 const MODE_LABEL: Record<string, string> = {
   directo: 'direct', agentes: 'agents', skills: 'skills', 'agentes+skills': 'agents+skills',
+  'sub-agente': 'sub-agent',
 }
 const MODE_COLOR: Record<string, string> = {
   directo: '#7d8590', agentes: '#d29922', skills: '#58a6ff', 'agentes+skills': '#d29922',
+  'sub-agente': '#8b949e',
 }
 const MODE_TOOLTIP: Record<string, string> = {
   directo:          'Claude responded directly, without launching sub-agents or invoking skills',
   agentes:          'Sub-agents (Agent tool) were launched during the session',
   skills:           'Skills (Skill tool) were invoked during the session',
   'agentes+skills': 'Both sub-agents and skills were used in this session',
+  'sub-agente':     'Background sub-agent spawned by the parent session — no tool events recorded separately',
 }
 
 function fmtTime(ts: number) {
@@ -69,7 +73,7 @@ const S = {
   sep: { color: '#21262d', userSelect: 'none' as const, fontSize: 11 },
 }
 
-function SessionCardInner({ session: s, isActive, selectable, selected = false, onSelect }: Props) {
+function SessionCardInner({ session: s, isActive, selectable, selected = false, onSelect, onReplay }: Props) {
   const color      = MODE_COLOR[s.mode] ?? '#7d8590'
   const scoreColor = s.efficiency_score >= 90 ? '#3fb950'
     : s.efficiency_score >= 70 ? '#d29922' : '#f85149'
@@ -121,6 +125,30 @@ function SessionCardInner({ session: s, isActive, selectable, selected = false, 
           </>
         )}
         <div style={{ flex: 1 }} />
+        {onReplay && (
+          <Tip position="top" align="right" content={
+            <div>
+              <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Session Replay</div>
+              <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>Turn-by-turn replay · context decay curve · agent tree</div>
+            </div>
+          }>
+            <button
+              onClick={e => { e.stopPropagation(); onReplay() }}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '2px 8px', borderRadius: 4, cursor: 'pointer', fontSize: 10, fontWeight: 600,
+                background: '#1c2128', border: '1px solid #58a6ff50', color: '#58a6ff',
+              }}
+            >
+              <Play size={9} />Replay
+            </button>
+          </Tip>
+        )}
+        {s.source && (
+          <span style={S.badge('#8b949e')}>
+            {s.source === 'claude-code' ? 'Claude Code' : s.source === 'opencode' ? 'OpenCode' : s.source}
+          </span>
+        )}
         <Tip position="top" align="right" content={
           <div>
             <div style={{ color, fontWeight: 700, fontSize: 12, marginBottom: 4 }}>{MODE_LABEL[s.mode] ?? s.mode}</div>
@@ -190,10 +218,19 @@ function SessionCardInner({ session: s, isActive, selectable, selected = false, 
         <Tip position="top" align="right" content={
           <div>
             <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Tool calls</div>
-            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>Number of tools that completed execution (Done type) in this session</div>
+            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>
+              {s.is_sub_agent
+                ? 'Sub-agent sessions have no separate tool events — they are background tasks managed by the parent session'
+                : s.done_count === 0 && s.total_cost_usd > 0
+                  ? 'Session has cost/token data from JSONL but no tool events were recorded (hooks may not be installed)'
+                  : 'Number of tools that completed execution (Done type) in this session'
+              }
+            </div>
           </div>
         }>
-          <span style={S.dim}>{s.done_count} tools</span>
+          <span style={S.dim}>
+            {s.is_sub_agent || (s.done_count === 0 && s.total_cost_usd > 0) ? '—' : `${s.done_count} tools`}
+          </span>
         </Tip>
       </div>
 

@@ -1,20 +1,23 @@
 import { useEffect, useState } from 'react'
-import { Wrench, DollarSign, Clock, Hash, HelpCircle } from 'lucide-react'
+import { Wrench, DollarSign, Clock, Hash, HelpCircle, type LucideIcon } from 'lucide-react'
 import { Tip } from './Tip'
+import { sourceColor, sourceLabel } from './shared'
 
 interface TopTool {
-  tool:           string
-  count:          number
-  totalDurationMs: number
+  tool:             string
+  source:           string
+  count:            number
+  totalDurationMs:  number
   estimatedCostUsd: number
-  pctCost:        number
-  pctCount:       number
+  pctCost:          number
+  pctCount:         number
 }
 
 interface TopData {
-  by:   string
-  days: number
-  tools: TopTool[]
+  by:     string
+  days:   number
+  source: string
+  tools:  TopTool[]
 }
 
 interface CostProjection {
@@ -23,8 +26,50 @@ interface CostProjection {
 }
 
 type SortBy = 'cost' | 'count' | 'duration'
+type SourceFilter = 'all' | 'claude-code' | 'opencode'
 
-function fmtCost(n: number): string {
+interface FilterButtonProps<T extends string | number> {
+  value: T
+  options: Array<{ key: T; label: string; icon?: LucideIcon; color?: string; tip?: string }>
+  onChange: (value: T) => void
+}
+
+function FilterButton<T extends string | number>({ value, options, onChange }: FilterButtonProps<T>) {
+  return (
+    <div style={{ display: 'flex', gap: options.some(o => o.tip) ? 6 : 4 }}>
+      {options.map(({ key, label, icon: Icon, color, tip }) => {
+        const isActive = value === key
+        const activeColor = color ?? '#e6edf3'
+        return (
+          <Tip key={String(key)} position="bottom" align="left" content={
+            tip ? (
+              <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                <div style={{ fontWeight: 700, color: activeColor, marginBottom: 4 }}>{label}</div>
+                <div style={{ color: '#7d8590' }}>{tip}</div>
+              </div>
+            ) : undefined
+          }>
+            <button
+              onClick={() => onChange(key)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: Icon ? 5 : 0,
+                padding: '4px 8px', fontSize: 11, fontWeight: isActive ? 600 : 400,
+                color: isActive ? activeColor : '#8b949e',
+                background: isActive ? (color ? color + '18' : '#21262d') : 'transparent',
+                border: `1px solid ${isActive ? (color ? color + '50' : '#30363d') : 'transparent'}`,
+                borderRadius: 5, cursor: 'pointer',
+              }}
+            >
+              {Icon && <Icon size={11} color={isActive ? activeColor : undefined} />} {label}
+            </button>
+          </Tip>
+        )
+      })}
+    </div>
+  )
+}
+
+function fmtCostPrecise(n: number): string {
   if (n < 0.001) return '$0'
   if (n < 0.01) return `$${n.toFixed(4)}`
   if (n < 1) return `$${n.toFixed(3)}`
@@ -47,22 +92,28 @@ export function TopView() {
   const [projection, setProjection] = useState<CostProjection | undefined>()
   const [sortBy, setSortBy] = useState<SortBy>('cost')
   const [days, setDays] = useState(30)
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    fetch(`/api/top?by=${sortBy}&limit=10&days=${days}`)
+    setLoading(true)
+    fetch(`/api/top?by=${sortBy}&limit=10&days=${days}&source=${sourceFilter}`)
       .then(r => r.ok ? r.json() : undefined)
-      .then(d => d && setData(d))
-      .catch(() => {})
+      .then(d => { if (d) setData(d); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [sortBy, days, sourceFilter])
 
+  useEffect(() => {
     fetch('/cost-projection')
       .then(r => r.ok ? r.json() : undefined)
       .then(d => d && setProjection(d))
       .catch(() => {})
-  }, [sortBy, days])
+  }, [])
 
   const tools = data?.tools ?? []
   const maxCost = Math.max(...tools.map(t => t.estimatedCostUsd), 0.001)
   const maxCount = Math.max(...tools.map(t => t.count), 1)
+  const maxDuration = Math.max(...tools.map(t => t.totalDurationMs), 1)
 
   return (
     <div style={{ height: '100%', overflow: 'auto', padding: '20px 24px' }}>
@@ -72,54 +123,31 @@ export function TopView() {
           Tool Rankings
         </h2>
 
-        {/* Sort buttons */}
-        <div style={{ display: 'flex', gap: 6 }}>
-          {([
+        <FilterButton<SortBy>
+          value={sortBy}
+          options={[
             { key: 'cost',     label: 'Cost',     icon: DollarSign, color: '#3fb950', tip: "Estimated USD cost per tool, calculated from each tool's share of total token usage" },
             { key: 'count',    label: 'Calls',    icon: Hash,        color: '#58a6ff', tip: 'Total number of invocations in the selected period' },
             { key: 'duration', label: 'Duration', icon: Clock,       color: '#e3b341', tip: 'Cumulative execution time (sum of all calls)' },
-          ] as const).map(({ key, label, icon: Icon, color, tip }) => (
-            <Tip key={key} position="bottom" align="left" content={
-              <div style={{ fontSize: 11, lineHeight: 1.7 }}>
-                <div style={{ fontWeight: 700, color, marginBottom: 4 }}>Sort by {label.toLowerCase()}</div>
-                <div style={{ color: '#7d8590' }}>{tip}</div>
-              </div>
-            }>
-              <button
-                onClick={() => setSortBy(key)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 5,
-                  padding: '4px 10px', fontSize: 11, fontWeight: sortBy === key ? 600 : 400,
-                  color: sortBy === key ? '#e6edf3' : '#8b949e',
-                  background: sortBy === key ? '#21262d' : 'transparent',
-                  border: `1px solid ${sortBy === key ? '#30363d' : 'transparent'}`,
-                  borderRadius: 5, cursor: 'pointer',
-                }}
-              >
-                <Icon size={11} /> {label}
-              </button>
-            </Tip>
-          ))}
-        </div>
+          ]}
+          onChange={setSortBy}
+        />
 
-        {/* Days selector */}
-        <div style={{ display: 'flex', gap: 4 }}>
-          {[7, 30, 90].map(d => (
-            <button
-              key={d}
-              onClick={() => setDays(d)}
-              style={{
-                padding: '4px 8px', fontSize: 11, fontWeight: days === d ? 600 : 400,
-                color: days === d ? '#e6edf3' : '#8b949e',
-                background: days === d ? '#21262d' : 'transparent',
-                border: `1px solid ${days === d ? '#30363d' : 'transparent'}`,
-                borderRadius: 5, cursor: 'pointer',
-              }}
-            >
-              {d}d
-            </button>
-          ))}
-        </div>
+        <FilterButton<SourceFilter>
+          value={sourceFilter}
+          options={[
+            { key: 'all',         label: 'All',         tip: 'Show tools from all AI assistants combined' },
+            { key: 'claude-code', label: 'Claude Code', color: '#58a6ff', tip: 'Show only tools used by Claude Code' },
+            { key: 'opencode',    label: 'OpenCode',    color: '#3fb950', tip: 'Show only tools used by OpenCode' },
+          ]}
+          onChange={setSourceFilter}
+        />
+
+        <FilterButton<number>
+          value={days}
+          options={[7, 30, 90].map(d => ({ key: d, label: `${d}d` }))}
+          onChange={setDays}
+        />
       </div>
 
       {/* Cost projection cards */}
@@ -145,13 +173,14 @@ export function TopView() {
       {/* Tool table */}
       {tools.length === 0 ? (
         <div style={{ color: '#8b949e', fontSize: 13, textAlign: 'center', marginTop: 40 }}>
-          No tool usage data for this period.
+          {loading ? 'Loading…' : 'No tool usage data for this period.'}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {loading && <div style={{ fontSize: 10, color: '#484f58', marginBottom: 6 }}>Refreshing…</div>}
           {/* Table header */}
           <div style={{
-            display: 'grid', gridTemplateColumns: '32px 140px 70px 80px 80px',
+            display: 'grid', gridTemplateColumns: '32px 200px 70px 80px 80px',
             gap: 8, padding: '0 8px', fontSize: 10, fontWeight: 600, color: '#8b949e',
             textTransform: 'uppercase', letterSpacing: '0.5px',
           }}>
@@ -186,10 +215,10 @@ export function TopView() {
           {tools.map((t, i) => {
             const barWidth = sortBy === 'cost' ? t.estimatedCostUsd / maxCost
               : sortBy === 'count' ? t.count / maxCount
-              : t.totalDurationMs / (Math.max(...tools.map(x => x.totalDurationMs), 1))
+              : t.totalDurationMs / maxDuration
             return (
-              <div key={t.tool} style={{
-                display: 'grid', gridTemplateColumns: '32px 140px 70px 80px 80px',
+              <div key={`${t.tool}-${t.source}`} style={{
+                display: 'grid', gridTemplateColumns: '32px 200px 70px 80px 80px',
                 gap: 8, padding: '8px', fontSize: 12, color: '#e6edf3',
                 background: '#161b22', border: '1px solid #21262d', borderRadius: 6,
                 position: 'relative', overflow: 'hidden',
@@ -216,15 +245,62 @@ export function TopView() {
                       </span>
                     </Tip>
                   ) : (
-                    <><Wrench size={11} color={COLORS[i % COLORS.length]} />{t.tool}</>
+                    <>
+                      <Wrench size={11} color={COLORS[i % COLORS.length]} style={{ flexShrink: 0 }} />
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.tool}>
+                        {t.tool}
+                      </span>
+                      {sourceFilter === 'all' && (
+                        <Tip position="top" align="left" content={
+                          <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                            <div style={{ fontWeight: 700, color: sourceColor(t.source), marginBottom: 4 }}>
+                              {sourceLabel(t.source)}
+                            </div>
+                            <div style={{ color: '#7d8590' }}>This tool was invoked by {sourceLabel(t.source)}</div>
+                          </div>
+                        }>
+                          <span style={{
+                            fontSize: 9, fontWeight: 700, letterSpacing: '0.04em',
+                            padding: '1px 5px', borderRadius: 3,
+                            background: t.source === 'opencode' ? '#0d1f10' : '#0d1e33',
+                            border: `1px solid ${sourceColor(t.source)}60`,
+                            color: sourceColor(t.source),
+                            cursor: 'default', whiteSpace: 'nowrap',
+                          }}>
+                            {sourceLabel(t.source)}
+                          </span>
+                        </Tip>
+                      )}
+                    </>
                   )}
                 </span>
                  <span style={{ textAlign: 'right', color: '#8b949e', position: 'relative' }}>{t.tool === 'Other' ? '—' : t.count.toLocaleString()}</span>
-                 <span style={{ textAlign: 'right', color: '#8b949e', position: 'relative' }}>{t.tool === 'Other' ? '—' : fmtDur(t.totalDurationMs)}</span>
-                <span style={{ textAlign: 'right', fontWeight: 600, color: COLORS[i % COLORS.length], position: 'relative' }}>{fmtCost(t.estimatedCostUsd)}</span>
+                 <span style={{ textAlign: 'right', color: '#8b949e', position: 'relative' }}>{t.tool === 'Other' || t.totalDurationMs === 0 ? '—' : fmtDur(t.totalDurationMs)}</span>
+                <span style={{ textAlign: 'right', fontWeight: 600, color: COLORS[i % COLORS.length], position: 'relative' }}>{fmtCostPrecise(t.estimatedCostUsd)}</span>
               </div>
             )
           })}
+
+          {/* Total row */}
+          {(() => {
+            const listed = tools.filter(t => t.tool !== 'Other')
+            const totalCalls    = listed.reduce((s, t) => s + t.count, 0)
+            const totalDuration = listed.reduce((s, t) => s + t.totalDurationMs, 0)
+            const totalCost     = tools.reduce((s, t) => s + t.estimatedCostUsd, 0)
+            return (
+              <div style={{
+                display: 'grid', gridTemplateColumns: '32px 200px 70px 80px 80px',
+                gap: 8, padding: '8px', fontSize: 12,
+                borderTop: '1px solid #30363d', marginTop: 2,
+              }}>
+                <span />
+                <span style={{ color: '#8b949e', fontWeight: 600, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.5px', alignSelf: 'center' }}>Total shown</span>
+                <span style={{ textAlign: 'right', color: '#e6edf3', fontWeight: 600 }}>{totalCalls.toLocaleString()}</span>
+                <span style={{ textAlign: 'right', color: '#e6edf3', fontWeight: 600 }}>{fmtDur(totalDuration)}</span>
+                <span style={{ textAlign: 'right', color: '#e6edf3', fontWeight: 700 }}>{fmtCostPrecise(totalCost)}</span>
+              </div>
+            )
+          })()}
         </div>
       )}
     </div>
@@ -248,7 +324,7 @@ function ProjectionCard({ label, tooltip, costSoFar, projected, daysWithData }: 
         <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 8, cursor: 'default' }}>{label}</div>
       </Tip>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
-        <span style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3' }}>{fmtCost(projected)}</span>
+        <span style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3' }}>{fmtCostPrecise(projected)}</span>
         <Tip position="top" align="left" content={
           <div style={{ fontSize: 11, lineHeight: 1.7 }}>
             <div style={{ fontWeight: 700, color: '#58a6ff', marginBottom: 4 }}>Projected spend</div>
@@ -259,7 +335,7 @@ function ProjectionCard({ label, tooltip, costSoFar, projected, daysWithData }: 
         </Tip>
       </div>
       <div style={{ fontSize: 11, color: '#484f58' }}>
-        {fmtCost(costSoFar)} spent over {daysWithData.toFixed(1)} days
+        {fmtCostPrecise(costSoFar)} spent over {daysWithData.toFixed(1)} days
       </div>
     </div>
   )

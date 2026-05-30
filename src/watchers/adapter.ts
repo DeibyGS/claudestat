@@ -43,6 +43,7 @@ export interface WatcherAdapter {
 export interface PollSession {
   sessionId: string
   cost: CostUpdate
+  cwd?: string
 }
 
 /** Adapters que no usan archivos JSONL sino una DB o API propia */

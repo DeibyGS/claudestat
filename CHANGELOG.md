@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-05-30
+
+### Added
+
+- **Shared formatting library** (`shared.ts`) — centralized `fmtCost`/`fmtTok`/`fmtHours`/`fmtDuration`/`sourceColor`/`sourceLabel` across 6+ components, eliminates duplicate function definitions
+- **System tab: real collision detection** — `hasConflict` now checks same `file_path` across tools, not just tool name
+- **System tab: large_model display** — shows when configured in opencode.json
+- **System tab: ActiveToolsSection toggle** — collapsible like every other section
+- **Analytics tab: source filter** — All / Claude Code / OpenCode across KPIs and charts
+- **Analytics tab: weekly reports modal** — MarkdownView with CSS-styled checkboxes
+- **Analytics tab: single period selector** — unified period for charts and project hours
+- **Analytics tab: useMemo for filteredKpis** — avoids recomputation on every render
+- **Top tab: loading states** — "Loading…" / "Refreshing…" indicators during fetch
+- **Top tab: cost projection in separate useEffect** — no longer re-fetches on filter/sort changes
+- **Live tab: source badge in block view** — color-coded dot (CC=blue, OC=green) + label in TracePanel header
+- **Live tab: expandable bash commands** — "show all N" toggle for blocks with more than 4 Bash calls
+- **History tab: project name in ComparePanel** — headers show `project_name · time` instead of timestamp only
+
+### Fixed
+
+- **OpenCode session grouping** — gap threshold 60 s → 300 s; conversation blocks no longer split on short pauses
+- **OpenCode active session detection** — `pollSessions` now sets `lastTs` from `row.time_updated`; `upsertSession` replaces `INSERT OR IGNORE` so `last_event_at` updates correctly
+- **Live tab: OC event strategy** — events replace on each poll instead of accumulating (prevents stale PreToolUse entries remaining on screen)
+- **Analytics: Spanish labels** — "Informe semanal", "Ya existe", "Generado" → English
+- **System: emoji in tooltips** — 🟡🟠🔴 → text "yellow → orange → red"
+- **System: plan default** — `cfg.plan ?? 'pro'` → `cfg.plan ?? null` (shows — when unset)
+- **System: ActiveToolsSection initial fetch** — `fetchIntents()` called on mount before interval starts
+- **History tab: pulse animation scope** — `livePulse` keyframe moved to HistoryView render scope (was only in TimelineView)
+- **Projects tab: weekly heatmap labels** — ambiguous M/T/W/T/F/S/S → Sun/Mon/Tue/Wed/Thu/Fri/Sat derived from actual date
+- **Top tab: tool deduplication** — `key` uses `tool+source` instead of just `tool` (duplicate React keys when source='all')
+- **Top tab: maxDuration pre-computed** — consistent with maxCost/maxCount pattern
+- **LiveSourceBar: source dot color** — all dots were green; now CC=blue, OC=green, unknown=gray
+- **SidebarStats: Spanish labels** — "Sub-agentes", "sesiones" → English
+
+### Changed
+
+- **fmtCost precision** — 3 decimal places for amounts < $10 (was always 2); affects all tabs via shared.ts
+- **fmtTok boundary** — handles k ≥ 1000 → M formatting in shared.ts
+- **Projects tooltip** — "read from Claude Code JSONL files" → "recorded from tool activity"
+- **All remaining Spanish UI text → English** across Live, History, Analytics, and System tabs
+
+## [1.6.1] - 2026-05-27
+
+### Fixed
+
+- **SSE init for OpenCode-only users** — Live dashboard now loads the correct session on connect when Claude Code has no recent sessions (`getLatestSession` instead of `getLatestClaudeSession`)
+- **OpenCode DB file descriptor leak** — `pollSessions` now closes the SQLite connection in a `finally` block, preventing fd accumulation on query failures
+- **`processLatestForSession` no-op for poll-based adapters** — Skips `PollableAdapter` instances that have no JSONL paths to iterate
+- **OpenCode DB path deduplication** — Centralized in `paths.ts` as `getOpencodeDb()` (was duplicated in `opencode.ts` and `opencode-reader.ts`)
+- **Live Source Bar misclassification** — Sessions without a `source` field now appear as `unknown` instead of `claude-code`
+
 ## [1.6.0] - 2026-05-26
 
 ### Added

@@ -15,8 +15,9 @@ import { readClaudeStats }      from '../claude-stats'
 import { getCachedGitInfo, getCachedPRStatus } from '../cache/projects-cache'
 import { inferProjectCwd }      from './projects'
 import { deriveSessionState }   from '../session-state'
-import { sessionLastEvent }     from './stream'
-import { getClaudeDir, getClaudestatDir, getHomeSlug } from '../paths'
+import { sessionLastEvent, broadcast } from './stream'
+import { getClaudeDir, getClaudestatDir, getOpencodeDir, getHomeSlug } from '../paths'
+import { isSessionArchived } from '../watchers/opencode'
 import { computeProjection }    from '../cost-projector'
 
 export const miscRouter = Router()
@@ -148,12 +149,13 @@ miscRouter.get('/claude-stats', (_req: Request, res: Response) => {
 // ─── GET /api/active-sessions — fuentes activas en los últimos 5 min ──────────
 
 miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
-  const cutoff   = Date.now() - 5 * 60 * 1000
+  const cutoff   = Date.now() - 24 * 60 * 60 * 1000
   const sessions = dbOps.getAllSessions()
 
   const bySource = new Map<string, {
     sessionId: string; model: string; cost_usd: number; last_seen_ms: number
     input_tokens: number; output_tokens: number; cache_read: number; cache_creation: number
+    project: string | null
   }>()
   for (const s of sessions) {
     const lastSeen = s.last_event_at ?? s.started_at
@@ -170,11 +172,19 @@ miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
         output_tokens: s.total_output_tokens ?? 0,
         cache_read:    s.total_cache_read ?? 0,
         cache_creation: s.total_cache_creation ?? 0,
+        project:       s.project_path ?? s.cwd ?? null,
       })
     }
   }
 
-  const result = Array.from(bySource.entries()).map(([source, v]) => ({ source, ...v }))
+  const KNOWN_SOURCES = new Set(['claude-code', 'opencode', 'codex', 'amp', 'droid', 'codebuff'])
+  let result = Array.from(bySource.entries())
+    .filter(([source]) => KNOWN_SOURCES.has(source))
+    .map(([source, v]) => ({ source, ...v }))
+
+  // OpenCode: filter out archived sessions (user closed the tool)
+  result = result.filter(s => s.source !== 'opencode' || !isSessionArchived(s.sessionId))
+
   res.json(result)
 })
 
@@ -281,7 +291,73 @@ miscRouter.get('/system-config', (_req: Request, res: Response) => {
     // 6. Config de claudestat
     const claudestatConfig = readConfig()
 
-    _systemConfigCache = { hooks, agents, workflows, skills, contextFiles, memoryFiles, modeDistribution, claudestatConfig }
+    // ─── 7. OpenCode data ────────────────────────────────────────────────────────
+    const opencodeDir = getOpencodeDir()
+    let opencodeConfig: Record<string, unknown> | null = null
+    try {
+      opencodeConfig = JSON.parse(fs.readFileSync(path.join(opencodeDir, 'opencode.json'), 'utf-8'))
+    } catch {}
+
+    let opencodeAgentsMd: { lines: number; sizeKb: number } | null = null
+    try {
+      const p = path.join(opencodeDir, 'AGENTS.md')
+      const content = fs.readFileSync(p, 'utf-8')
+      opencodeAgentsMd = { lines: content.split('\n').length, sizeKb: Math.round(Buffer.byteLength(content, 'utf-8') / 1024 * 10) / 10 }
+    } catch {}
+
+    let opencodeSkills: { name: string; description: string; lines: number }[] = []
+    try {
+      const skillsDir = path.join(opencodeDir, 'skills')
+      for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          const skillMd = path.join(skillsDir, entry.name, 'SKILL.md')
+          try {
+            const content = fs.readFileSync(skillMd, 'utf-8')
+            const lines = content.split('\n').length
+            const description = content.match(/^description:\s*(.+)$/m)?.[1]?.trim() ?? ''
+            opencodeSkills.push({ name: entry.name, description, lines })
+          } catch {}
+        }
+      }
+    } catch {}
+
+    let opencodeAgents: string[] = []
+    try {
+      const agentsDir = path.join(opencodeDir, 'agents')
+      opencodeAgents = fs.readdirSync(agentsDir).filter(f => f.endsWith('.md'))
+    } catch {}
+
+    let opencodeProjects: number = 0
+    try {
+      const raw = JSON.parse(fs.readFileSync(path.join(opencodeDir, 'projects.json'), 'utf-8'))
+      opencodeProjects = Object.keys(raw.projects ?? {}).length
+    } catch {}
+
+    let opencodeCommands: string[] = []
+    try {
+      const cmdsDir = path.join(opencodeDir, 'commands')
+      opencodeCommands = fs.readdirSync(cmdsDir).filter(f => f.endsWith('.md'))
+    } catch {}
+
+    const opencodePlugins: string[] = []
+    try {
+      const pluginsDir = path.join(opencodeDir, 'plugins')
+      opencodePlugins.push(...fs.readdirSync(pluginsDir).filter(f => f.endsWith('.ts') || f.endsWith('.js')))
+    } catch {}
+
+    _systemConfigCache = {
+      hooks, agents, workflows, skills, contextFiles, memoryFiles,
+      modeDistribution, claudestatConfig,
+      opencode: {
+        config: opencodeConfig,
+        agentsMd: opencodeAgentsMd,
+        skills: opencodeSkills,
+        agents: opencodeAgents,
+        projects: opencodeProjects,
+        commands: opencodeCommands,
+        plugins: opencodePlugins,
+      },
+    }
     _systemConfigCacheTs = Date.now()
     res.json(_systemConfigCache)
   } catch (err) {
@@ -313,5 +389,62 @@ miscRouter.put('/config', (req: Request, res: Response) => {
 
 miscRouter.get('/cost-projection', (_req: Request, res: Response) => {
   res.json(computeProjection(90))
+})
+
+// ─── GET /coordination/status — detección automática de herramienta activa ───
+
+miscRouter.get('/coordination/status', (req: Request, res: Response) => {
+  const project = req.query.project as string | undefined
+  const tool    = (req.query.tool as string | undefined) ?? 'unknown'
+  if (!project) { res.status(400).json({ error: 'project is required' }); return }
+
+  const active = dbOps.getActiveToolsInProject(project, tool)
+  res.json({
+    other_tool_active: active.length > 0,
+    tools:             active.map(r => r.source),
+    since:             active.length > 0 ? Math.min(...active.map(r => r.last_event_at)) : null,
+  })
+})
+
+// ─── GET /tool-status — estado de cada tool (claude-code, opencode) ──────────
+
+const AI_COLLAB_STATUS = path.join(process.env.HOME ?? '/tmp', '.ai-collab', 'STATUS.json')
+
+miscRouter.get('/tool-status', (_req: Request, res: Response) => {
+  try {
+    const raw = fs.readFileSync(AI_COLLAB_STATUS, 'utf-8')
+    res.json(JSON.parse(raw))
+  } catch {
+    res.json({
+      'claude-code': { status: 'unknown', last_task: null, finished_at: null, session_id: null, waiting_for: null },
+      'opencode':    { status: 'unknown', last_task: null, finished_at: null, session_id: null, waiting_for: null },
+    })
+  }
+})
+
+// ─── POST /tool-status — actualizar estado de un tool ────────────────────────
+
+miscRouter.post('/tool-status', (req: Request, res: Response) => {
+  const { tool, status, last_task, session_id, waiting_for } = req.body as {
+    tool: string; status: 'idle' | 'working'
+    last_task?: string; session_id?: string; waiting_for?: string | null
+  }
+  if (!tool || !status) { res.status(400).json({ error: 'tool and status are required' }); return }
+
+  let current: Record<string, unknown> = {}
+  try { current = JSON.parse(fs.readFileSync(AI_COLLAB_STATUS, 'utf-8')) } catch {}
+
+  const finished_at = status === 'idle' ? Date.now() : null
+  current[tool] = { status, last_task: last_task ?? null, finished_at, session_id: session_id ?? null, waiting_for: waiting_for ?? null }
+
+  try {
+    fs.mkdirSync(path.dirname(AI_COLLAB_STATUS), { recursive: true })
+    fs.writeFileSync(AI_COLLAB_STATUS, JSON.stringify(current, null, 2), 'utf-8')
+  } catch (e) {
+    res.status(500).json({ error: String(e) }); return
+  }
+
+  broadcast({ type: 'tool_status_changed', payload: { tool, status, last_task: last_task ?? null, finished_at, session_id: session_id ?? null, waiting_for: waiting_for ?? null } })
+  res.json({ ok: true })
 })
 

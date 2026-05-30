@@ -32,10 +32,37 @@ export function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [
     <div style={{ borderTop: '1px solid #21262d', flexShrink: 0, padding: '8px 12px',
       display: 'flex', flexDirection: 'column', gap: 6, background: '#090d12' }}>
 
-      {cost && cost.cost_usd > 0 && (
-        <>
-          {/* Cost + tokens */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+      {/* Cache hit rate — shown when there are tokens but no paid cost (free models) */}
+      {cost && cost.cost_usd === 0 && cost.cache_read > 0 && (cost.input_tokens + cost.output_tokens) > 0 && (() => {
+        const total = cost.input_tokens + cost.output_tokens + cost.cache_read
+        const hitPct = Math.round(cost.cache_read / total * 100)
+        const hitColor = hitPct >= 70 ? '#3fb950' : hitPct >= 40 ? '#d29922' : '#8b949e'
+        return (
+          <Tip position="top" align="left" content={
+            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+              <div style={{ fontWeight: 700, color: hitColor, marginBottom: 4 }}>Cache hit rate</div>
+              <div style={{ color: '#7d8590' }}>% of total tokens served from cache (cache read / all tokens).</div>
+              <div style={{ color: '#484f58', marginTop: 6 }}>
+                <div>Cache read: {fmtTok(cost.cache_read)}</div>
+                <div>Total: {fmtTok(total)}</div>
+              </div>
+            </div>
+          }>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'default' }}>
+              <span style={{ fontSize: 9, color: '#484f58', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>cache hit</span>
+              <div style={{ flex: 1, height: 3, background: '#21262d', borderRadius: 2, overflow: 'hidden', minWidth: 60 }}>
+                <div style={{ width: `${hitPct}%`, height: '100%', background: hitColor, borderRadius: 2, transition: 'width 0.5s' }} />
+              </div>
+              <span style={{ fontSize: 10, fontWeight: 700, color: hitColor }}>{hitPct}%</span>
+            </div>
+          </Tip>
+        )
+      })()}
+
+      {/* Token row — shown whenever there are tokens (even cost=0 for free models) */}
+      {cost && (cost.input_tokens + cost.output_tokens) > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+          {cost.cost_usd > 0 && (
             <Tip position="top" align="left" content={
               <div style={{ fontSize: 11, lineHeight: 1.7 }}>
                 <div style={{ fontWeight: 700, color: '#3fb950', marginBottom: 4 }}>Session cost</div>
@@ -52,16 +79,22 @@ export function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [
                 <AnimatedCost usd={cost.cost_usd} />
               </span>
             </Tip>
-            <span style={{ fontSize: 10, color: '#6e7681' }}>{fmtTok(cost.input_tokens)} in</span>
-            <span style={{ color: '#30363d', fontSize: 10 }}>·</span>
-            <span style={{ fontSize: 10, color: '#6e7681' }}>{fmtTok(cost.output_tokens)} out</span>
-            {cost.cache_read > 0 && (
-              <>
-                <span style={{ color: '#30363d', fontSize: 10 }}>·</span>
-                <span style={{ fontSize: 10, color: '#3fb95099' }}>{fmtTok(cost.cache_read)} cache</span>
-              </>
-            )}
-          </div>
+          )}
+          <span style={{ fontSize: 10, color: '#6e7681' }}>{fmtTok(cost.input_tokens)} in</span>
+          <span style={{ color: '#30363d', fontSize: 10 }}>·</span>
+          <span style={{ fontSize: 10, color: '#6e7681' }}>{fmtTok(cost.output_tokens)} out</span>
+          {cost.cache_read > 0 && (
+            <>
+              <span style={{ color: '#30363d', fontSize: 10 }}>·</span>
+              <span style={{ fontSize: 10, color: '#3fb95099' }}>{fmtTok(cost.cache_read)} cache</span>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Cache savings + efficiency — only when cost is known */}
+      {cost && cost.cost_usd > 0 && (
+        <>
           {savings >= 0.001 && (
             <Tip position="top" align="left" content={
               <div style={{ fontSize: 11, lineHeight: 1.7 }}>
@@ -73,7 +106,6 @@ export function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [
               <div style={{ fontSize: 9, color: '#3fb95088', cursor: 'default' }}>~{fmtUsd(savings)} saved via cache</div>
             </Tip>
           )}
-          {/* Efficiency */}
           {score !== null && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -99,8 +131,7 @@ export function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [
                 </div>
                 <span style={{ fontSize: 10, fontWeight: 700, color: scoreColor }}>{score}</span>
               </div>
-
-              {score !== null && score < 70 && cost && <EfficiencyAlert cost={cost} events={events} prompts={prompts} />}
+              {score < 70 && <EfficiencyAlert cost={cost} events={events} prompts={prompts} />}
             </div>
           )}
         </>
@@ -163,7 +194,7 @@ export function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [
             <span style={{ fontSize: 9, color: '#484f58' }}>lost in loops</span>
           </div>
           <div style={{ fontSize: 9, color: '#3d444d' }}>
-            {hiddenCost.total_loops} loop{hiddenCost.total_loops > 1 ? 's' : ''} · {hiddenCost.loop_sessions}/{hiddenCost.total_sessions} sesiones
+            {hiddenCost.total_loops} loop{hiddenCost.total_loops > 1 ? 's' : ''} · {hiddenCost.loop_sessions}/{hiddenCost.total_sessions} sessions
           </div>
         </div>
       )}
@@ -173,7 +204,7 @@ export function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [
         <div style={{ borderTop: '1px solid #21262d', paddingTop: 6, marginTop: 2, display: 'flex', flexDirection: 'column', gap: 3 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <Bot size={9} color="#bc8cff" />
-            <span style={{ fontSize: 9, color: '#7d8590', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Sub-agentes</span>
+            <span style={{ fontSize: 9, color: '#7d8590', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Sub-agents</span>
           </div>
           {subAgentSessions.map(s => {
             const m = s.dominant_model
@@ -194,7 +225,7 @@ export function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [
           })}
           {subAgentSessions.length > 1 && (
             <div style={{ fontSize: 9, color: '#484f58' }}>
-              total sub-agentes {fmtUsd(subAgentSessions.reduce((s, a) => s + (a.total_cost_usd ?? 0), 0))}
+              total sub-agents {fmtUsd(subAgentSessions.reduce((s, a) => s + (a.total_cost_usd ?? 0), 0))}
             </div>
           )}
         </div>

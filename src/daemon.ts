@@ -13,22 +13,26 @@
  * - Procesa JSONL al conectar nuevo cliente SSE (contexto inmediato)
  */
 
+import crypto from 'crypto'
 import express, { type Request, type Response } from 'express'
 import path   from 'path'
 import fs     from 'fs'
+import os     from 'os'
 import { dbOps }                                                    from './db'
 import { startEnricher, stopEnricher }                                        from './enricher'
 import { readConfig, getWarnLevel }                                 from './config'
 import { computeQuota }                                              from './quota-tracker'
 import { sendDesktopNotification }                                   from './notifier'
 import { eventsRouter, onCostUpdate, onCompactDetected }            from './routes/events'
-import { streamRouter, getSseClientsSize }                          from './routes/stream'
+import { streamRouter, getSseClientsSize, broadcast }               from './routes/stream'
 import { projectsRouter, inferProjectCwd }                          from './routes/projects'
 import { historyRouter }                                            from './routes/history'
 import { miscRouter }                                               from './routes/misc'
 import { reportsRouter, getReportDateLabel, generateReport }        from './routes/reports'
 import { topRouter }                                                  from './routes/top'
 import { opencodeReaderRouter }                                       from './routes/opencode-reader'
+import { replayRouter }                                               from './routes/replay'
+import { intentsRouter }                                             from './routes/intents'
 import { getProjectsCached, invalidateProjectsCache }               from './cache/projects-cache'
 import { stopRateLimiter }                                            from './middleware/rate-limiter'
 import { summarizeSession }                                         from './summarizer'
@@ -58,6 +62,8 @@ app.use(miscRouter)
 app.use(reportsRouter)
 app.use(topRouter)
 app.use(opencodeReaderRouter)
+app.use(replayRouter)
+app.use(intentsRouter)
 
 // ─── GET /health — necesita acceso al tamaño del pool SSE ─────────────────────
 
@@ -86,9 +92,10 @@ app.get('*', (_req: Request, res: Response) => {
 
 function migrateSessionProjects() {
   const sessions = dbOps.getAllSessions()
+  const HOME = os.homedir()
   let tagged = 0
   for (const session of sessions) {
-    if (session?.project_path) continue
+    if (session?.project_path && session.project_path !== HOME) continue
     const events = dbOps.getSessionEvents(session.id)
     const projectCwd = inferProjectCwd(events)
     if (projectCwd) {
@@ -121,18 +128,26 @@ async function migrateSessionSummaries(limit = 5) {
   }
 }
 
+// ─── Previous hashes map for external change detection ──────────────────────────
+let _prevHashes = new Map<string, string>()
+
 // ─── Interval refs for cleanup ────────────────────────────────────────────────
 
 let projectCacheInterval: ReturnType<typeof setInterval> | null = null
-let reportInterval: ReturnType<typeof setInterval> | null = null
-let alertInterval:  ReturnType<typeof setInterval> | null = null
+let reportInterval:       ReturnType<typeof setInterval> | null = null
+let alertInterval:        ReturnType<typeof setInterval> | null = null
+let intentCleanupInterval: ReturnType<typeof setInterval> | null = null
+let intentWatchInterval: ReturnType<typeof setInterval> | null = null
 
 function shutdown(server: import('http').Server) {
   stopEnricher()
   stopRateLimiter()
-  if (projectCacheInterval) { clearInterval(projectCacheInterval); projectCacheInterval = null }
-  if (reportInterval) { clearInterval(reportInterval); reportInterval = null }
-  if (alertInterval)  { clearInterval(alertInterval);  alertInterval  = null }
+  if (projectCacheInterval)   { clearInterval(projectCacheInterval);   projectCacheInterval   = null }
+  if (reportInterval)         { clearInterval(reportInterval);         reportInterval         = null }
+  if (alertInterval)          { clearInterval(alertInterval);          alertInterval          = null }
+  if (intentCleanupInterval)  { clearInterval(intentCleanupInterval);  intentCleanupInterval  = null }
+  if (intentWatchInterval)    { clearInterval(intentWatchInterval);    intentWatchInterval    = null }
+  _prevHashes.clear()
   cleanPid()
   server.close(() => {})
 }
@@ -284,6 +299,41 @@ export function startDaemon() {
       dbOps.insertWeeklyReport(dateLabel, markdown)
       console.log(`[daemon] Report auto-generated: ${dateLabel}`)
     }, 60_000)
+
+    // Al arrancar: liberar intents activos de sesiones anteriores (ya no hay nadie que los use)
+    dbOps.releaseOrphanedIntents()
+
+    // Cleanup de intents — cada 2min marca stale los sin heartbeat > 10min, borra viejos > 1h
+    intentCleanupInterval = setInterval(() => {
+      dbOps.markStaleIntents()
+      dbOps.deleteOldStaleIntents()
+    }, 2 * 60_000)
+
+    // Watcher de cambios externos — cada 10s compara hashes de archivos en intents activos
+    intentWatchInterval = setInterval(() => {
+      const active = dbOps.getActiveIntents()
+      if (active.length === 0) return
+      const fileSet = new Set(active.map(a => a.file_path))
+      for (const filePath of fileSet) {
+        try {
+          if (!fs.existsSync(filePath)) continue
+          const content = fs.readFileSync(filePath)
+          const hash = crypto.createHash('sha256').update(content).digest('hex')
+          const prev = _prevHashes.get(filePath)
+          if (prev && prev !== hash) {
+            // Check if any active intent covers this file
+            const coveringIntent = active.find(a => a.file_path === filePath)
+            const tool = coveringIntent?.tool ?? 'unknown'
+            broadcast({ type: 'external_change', payload: { file: filePath, tool, hash_prev: prev, hash_now: hash } })
+          }
+          _prevHashes.set(filePath, hash)
+        } catch {}
+      }
+      // Cleanup stale entries from prevHashes
+      for (const [fp] of _prevHashes) {
+        if (!fileSet.has(fp)) _prevHashes.delete(fp)
+      }
+    }, 10_000)
 
     // Summaries IA solo si opt-in explícito (CLAUDESTAT_AI_SUMMARY=true)
     if (process.env.CLAUDESTAT_AI_SUMMARY === 'true') {

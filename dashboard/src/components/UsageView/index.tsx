@@ -16,11 +16,12 @@ interface Props {
   events?:      TraceEvent[]
   prompts?:     SessionPrompt[]
   claudeStats?: ClaudeStatsData
+  weeklyModels?: { key: string; label: string; tokens: number; cost: number }[]
 }
 
 // ─── Main component ────────────────────────────────────────────────────────────
 
-export function UsageView({ quota, cost, events, prompts, claudeStats }: Props) {
+export function UsageView({ quota, cost, events, prompts, claudeStats, weeklyModels }: Props) {
   if (!quota) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#484f58', fontSize: 13 }}>
@@ -74,7 +75,7 @@ export function UsageView({ quota, cost, events, prompts, claudeStats }: Props) 
         )}
 
         {/* Row 5: Models | Loops */}
-        <ModelCard quota={quota} />
+        <ModelCard quota={quota} weeklyModels={weeklyModels} />
         {cost ? <LoopsCard cost={cost} /> : (
           <Card>
             <CardHeader icon={AlertTriangle} title="Loops and efficiency" />

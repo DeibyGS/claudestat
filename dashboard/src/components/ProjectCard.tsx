@@ -2,18 +2,9 @@ import { useState, memo } from 'react'
 import { ChevronDown, ChevronUp, Lightbulb, TriangleAlert, CheckCircle2, FolderOpen } from 'lucide-react'
 import type { ProjectSummary, ModelUsage, PatternInsight, InsightLevel } from '../types'
 import { Tip } from './Tip'
+import { fmtTok, fmtHours, fmtCost } from './shared'
 
 interface Props { project: ProjectSummary; isActive?: boolean }
-
-function fmtTok(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000)     return `${Math.round(n / 1_000)}K`
-  return String(n)
-}
-function fmtCost(usd: number): string {
-  if (usd > 0 && usd < 0.01) return '<$0.01'
-  return `$${usd.toFixed(2)}`
-}
 /** Returns the label of the model that consumed the most tokens, or null if tied/empty */
 function dominantModel(usage: ModelUsage | undefined): { label: string; color: string } | null {
   if (!usage) return null
@@ -34,54 +25,62 @@ function relativeTime(ts: number | null) {
   return new Date(ts).toLocaleDateString('en', { day:'numeric', month:'short' })
 }
 
-/** Barra horizontal de uso por modelo */
-function ModelUsageBars({ usage }: { usage: ModelUsage }) {
-  const total = usage.opusTokens + usage.sonnetTokens + usage.haikuTokens
-  if (total === 0) return null
+/** Barra horizontal de tiempo por herramienta (Claude Code / OpenCode) */
+function ToolTimeBars({ cliHours }: { cliHours: Record<string, number> }) {
+  const entries = Object.entries(cliHours).filter(([, h]) => h > 0)
+  if (entries.length === 0) return null
 
-  const bars: { label: string; tokens: number; color: string }[] = [
-    { label: 'Sonnet', tokens: usage.sonnetTokens, color: '#58a6ff' },
-    { label: 'Opus',   tokens: usage.opusTokens,   color: '#d29922' },
-    { label: 'Haiku',  tokens: usage.haikuTokens,  color: '#3fb950' },
-  ].filter(b => b.tokens > 0)
+  const total = entries.reduce((s, [, h]) => s + h, 0)
+
+  const TOOL_COLORS: Record<string, string> = {
+    'claude-code': '#58a6ff',
+    'opencode':    '#3fb950',
+  }
+  const TOOL_LABELS: Record<string, string> = {
+    'claude-code': 'Claude Code',
+    'opencode':    'OpenCode',
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
       <Tip position="top" align="left" content={
         <div>
-          <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 6 }}>Usage by model</div>
+          <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 6 }}>Usage by tool</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {bars.map(b => (
-              <div key={b.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: b.color, flexShrink: 0 }} />
-                <span style={{ color: b.color, fontSize: 10, fontWeight: 700, width: 42 }}>{b.label}</span>
-                <span style={{ color: '#c9d1d9', fontSize: 10 }}>{fmtTok(b.tokens)} tok</span>
-                <span style={{ color: '#484f58', fontSize: 9 }}>{Math.round(b.tokens / total * 100)}%</span>
+            {entries.map(([src, h]) => (
+              <div key={src} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: TOOL_COLORS[src] ?? '#7d8590', flexShrink: 0 }} />
+                <span style={{ color: TOOL_COLORS[src] ?? '#7d8590', fontSize: 10, fontWeight: 700, width: 66 }}>{TOOL_LABELS[src] ?? src}</span>
+                <span style={{ color: '#c9d1d9', fontSize: 10 }}>{fmtHours(h)}</span>
+                <span style={{ color: '#484f58', fontSize: 9 }}>{Math.round(h / total * 100)}%</span>
               </div>
             ))}
           </div>
         </div>
       }>
-        <span style={{ color: '#7d8590', fontSize: 10, marginBottom: 1 }}>model usage</span>
+        <span style={{ color: '#7d8590', fontSize: 10, marginBottom: 1 }}>tool usage</span>
       </Tip>
       {/* Barra segmentada */}
       <div style={{ display: 'flex', height: 5, borderRadius: 3, overflow: 'hidden', gap: 1 }}>
-        {bars.map(b => (
-          <div key={b.label} style={{
-            height: '100%',
-            width: `${Math.round(b.tokens / total * 100)}%`,
-            background: b.color,
-            minWidth: b.tokens > 0 ? 2 : 0,
-          }} />
-        ))}
+        {entries.map(([src, h]) => {
+          const pct = h / total * 100
+          return (
+            <div key={src} style={{
+              height: '100%',
+              width: `${Math.round(pct)}%`,
+              background: TOOL_COLORS[src] ?? '#7d8590',
+              minWidth: h > 0 ? 2 : 0,
+            }} />
+          )
+        })}
       </div>
       {/* Leyenda */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {bars.map(b => (
-          <span key={b.label} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: b.color, flexShrink: 0 }} />
-            <span style={{ color: b.color, fontSize: 9, fontWeight: 700 }}>{b.label}</span>
-            <span style={{ color: '#7d8590', fontSize: 9 }}>{fmtTok(b.tokens)}</span>
+        {entries.map(([src, h]) => (
+          <span key={src} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: TOOL_COLORS[src] ?? '#7d8590', flexShrink: 0 }} />
+            <span style={{ color: TOOL_COLORS[src] ?? '#7d8590', fontSize: 9, fontWeight: 700 }}>{TOOL_LABELS[src] ?? src}</span>
+            <span style={{ color: '#7d8590', fontSize: 9 }}>{fmtHours(h)}</span>
           </span>
         ))}
       </div>
@@ -175,9 +174,11 @@ const S = {
     gap: 10,
     cursor: 'default',
     transition: 'border-color 0.2s',
+    overflow: 'hidden',
+    minWidth: 0,
   }),
   header: { display: 'flex', alignItems: 'center', gap: 8 },
-  name:   { color: '#e6edf3', fontWeight: 700, fontSize: 15, flex: 1 },
+  name:   { color: '#e6edf3', fontWeight: 700, fontSize: 15, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   activeBadge: {
     color: '#3fb950', background: '#3fb95018', border: '1px solid #3fb95030',
     borderRadius: 4, padding: '1px 7px', fontSize: 10, fontWeight: 700,
@@ -186,7 +187,7 @@ const S = {
     color: '#7d8590', background: '#7d859015', border: '1px solid #7d859030',
     borderRadius: 4, padding: '1px 6px', fontSize: 9,
   } as React.CSSProperties,
-  path: { color: '#7d8590', fontSize: 10, marginTop: -4 },
+  path: { color: '#7d8590', fontSize: 10, marginTop: -4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
 
   progressWrap: { display: 'flex', flexDirection: 'column' as const, gap: 4 },
   progressRow:  { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
@@ -207,8 +208,8 @@ const S = {
   nextTask: { color: '#58a6ff', fontSize: 10, fontStyle: 'italic' as const, opacity: 0.85, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
 
   stats: {
-    display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)',
-    gap: 8, marginTop: 2,
+    display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)',
+    gap: 10, marginTop: 2,
   },
   stat: { display: 'flex', flexDirection: 'column' as const, gap: 1 },
   statVal: { color: '#e6edf3', fontWeight: 700, fontSize: 12 },
@@ -305,9 +306,9 @@ function ProjectCardInner({ project: p, isActive }: Props) {
         </div>
       ) : null}
 
-      {/* Uso por modelo */}
-      {p.model_usage && (
-        <ModelUsageBars usage={p.model_usage} />
+      {/* Tiempo por herramienta */}
+      {p.cli_hours && Object.keys(p.cli_hours).length > 0 && (
+        <ToolTimeBars cliHours={p.cli_hours} />
       )}
 
       {/* Stats: coste · tokens · sesiones · última actividad */}
@@ -350,7 +351,7 @@ function ProjectCardInner({ project: p, isActive }: Props) {
         <Tip position="top" align="left" content={
           <div>
             <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Sessions</div>
-            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>Total recorded sessions, including those before claudestat was installed (read from Claude Code JSONL files).</div>
+            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>Total recorded sessions, including those before claudestat was installed (recorded from tool activity).</div>
           </div>
         }>
           <div style={S.stat}>

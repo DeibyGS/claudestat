@@ -21,7 +21,9 @@ historyRouter.get('/history', (_req: Request, res: Response) => {
     // Detectar modo desde los contadores precalculados en la query
     const hasAgent = (s.agent_count ?? 0) > 0
     const hasSkill = (s.skill_count  ?? 0) > 0
-    const mode = hasAgent && hasSkill ? 'agentes+skills'
+    const isSubAgent = s.parent_session_id != null
+    const mode = isSubAgent ? 'sub-agente'
+      : hasAgent && hasSkill ? 'agentes+skills'
       : hasAgent ? 'agentes' : hasSkill ? 'skills' : 'directo'
 
     // Git info cacheada para este proyecto
@@ -41,7 +43,9 @@ historyRouter.get('/history', (_req: Request, res: Response) => {
       done_count:       s.done_count      ?? 0,
       top_tools:        s.top_tools_csv   ? (() => { try { return JSON.parse(s.top_tools_csv as string) } catch { return [] } })() : [],
       mode,
+      source:       s.source ?? 'claude-code',
       ai_summary:   (s as any).ai_summary ?? null,
+      is_sub_agent: isSubAgent,
       git_branch:   gitInfo?.branch       ?? null,
       git_dirty:    gitInfo?.dirty        ?? false,
       git_ahead:    gitInfo?.ahead        ?? 0,

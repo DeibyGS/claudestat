@@ -140,18 +140,22 @@ export function BlockListItem({
       {/* Row 2: dist bar + intent + duration */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         {block.tools.length === 0
-          ? <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{
-                fontSize: 10, fontWeight: 600,
-                color: '#79c0ff', background: '#79c0ff15',
-                border: '1px solid #79c0ff30',
-                borderRadius: 4, padding: '1px 6px',
-                display: 'flex', alignItems: 'center', gap: 3,
-              }}>
-                <MessageSquare size={9} />
-                text response
-              </span>
-              {blockCost?.outputTokens ? <span style={{ color: '#484f58', fontSize: 10 }}>· {fmtTok(blockCost.outputTokens)} out</span> : null}
+          ? <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, flex: 1 }}>
+              <MessageSquare size={9} color="#79c0ff" style={{ flexShrink: 0 }} />
+              {block.textPreview
+                ? <span style={{ color: '#6e7681', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {block.textPreview.length > 55 ? block.textPreview.slice(0, 55) + '…' : block.textPreview}
+                  </span>
+                : <span style={{
+                    fontSize: 10, fontWeight: 600,
+                    color: '#79c0ff', background: '#79c0ff15',
+                    border: '1px solid #79c0ff30',
+                    borderRadius: 4, padding: '1px 6px',
+                  }}>
+                    text response
+                  </span>
+              }
+              {blockCost?.outputTokens ? <span style={{ color: '#484f58', fontSize: 10, flexShrink: 0 }}>· {fmtTok(blockCost.outputTokens)} out</span> : null}
             </span>
           : <>
               <ToolDistBar stats={stats} />

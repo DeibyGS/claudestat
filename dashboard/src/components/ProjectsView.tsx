@@ -2,6 +2,7 @@ import { FolderGit2 } from 'lucide-react'
 import type { ProjectSummary, DayStats } from '../types'
 import { ProjectCard } from './ProjectCard'
 import { Tip } from './Tip'
+import { fmtTok } from './shared'
 
 interface Props {
   projects:      ProjectSummary[]
@@ -10,17 +11,12 @@ interface Props {
   loading?:      boolean
 }
 
-function fmtTok(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000)     return `${Math.round(n / 1_000)}K`
-  return String(n)
-}
+const DAY_LABELS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 
 /** C.13 — Mini heatmap de 7 días en la barra de resumen */
 function WeeklyHeatmap({ data }: { data: DayStats[] }) {
   if (data.length === 0) return null
   const max = Math.max(...data.map(d => d.tokens), 1)
-  const days = ['M','T','W','T','F','S','S']
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
       <div style={{ display: 'flex', gap: 3 }}>
@@ -48,9 +44,9 @@ function WeeklyHeatmap({ data }: { data: DayStats[] }) {
         })}
       </div>
       <div style={{ display: 'flex', gap: 3 }}>
-        {data.slice(-7).map((_, i) => (
+        {data.slice(-7).map((d, i) => (
           <span key={i} style={{ width: 12, fontSize: 8, color: '#484f58', textAlign: 'center' }}>
-            {days[i]}
+            {DAY_LABELS[new Date(d.date + 'T12:00:00').getDay()]}
           </span>
         ))}
       </div>
@@ -84,7 +80,7 @@ function SkeletonCard() {
 }
 
 const S = {
-  wrap:    { padding: '16px 24px', overflowY: 'auto' as const, height: '100%' },
+  wrap:    { padding: '16px 24px', overflowY: 'auto' as const, overflowX: 'hidden' as const, height: '100%' },
   summary: {
     display: 'flex', alignItems: 'center', gap: 20,
     padding: '12px 16px', marginBottom: 20,
@@ -94,7 +90,7 @@ const S = {
   sumItem: { display: 'flex', flexDirection: 'column' as const, gap: 2 },
   sumVal:  { color: '#e6edf3', fontWeight: 700, fontSize: 16 },
   sumLbl:  { color: '#7d8590', fontSize: 11 },
-  grid:    { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 },
+  grid:    { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 },
   sep:     { width: 1, height: 32, background: '#21262d', flexShrink: 0 },
 }
 
@@ -176,7 +172,7 @@ export function ProjectsView({ projects, activeProject, weeklyData = [], loading
             }>
               <div style={S.sumItem}>
                 <span style={{ ...S.sumVal, color: avgProgress >= 70 ? '#3fb950' : '#d29922' }}>
-                  {avgProgress}%
+                  {avgProgress > 0 ? `${avgProgress}%` : '—'}
                 </span>
                 <span style={S.sumLbl}>average progress</span>
               </div>

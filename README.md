@@ -112,6 +112,8 @@ Then just ask:
 - **MCP server** — 7 tools so Claude can answer questions about its own usage
 - **Weekly insights** — pattern analysis with actionable tips
 - **Multi-source** — switch between Claude Code and OpenCode sessions in one click
+- **Source filter** — filter KPIs, charts, and tool rankings by Claude Code / OpenCode across all tabs
+- **Multi-tool coordination** — live intent panel with real collision detection (same file edited by CC and OC)
 
 ---
 
@@ -184,7 +186,7 @@ claudestat start     # start the daemon manually
 
 ## Dashboard
 
-The dashboard lives at `http://localhost:7337` and has six tabs: **Live** (real-time trace), **History** (sessions by date), **Projects** (grid with stats), **Analytics** (KPIs + charts), **Top** (tool rankings), and **System** (daemon health).
+The dashboard lives at `http://localhost:7337` and has six tabs: **Live** (real-time trace with source badge and expandable Bash commands), **History** (sessions by date with compare panel), **Projects** (grid with weekly heatmap and cost breakdown), **Analytics** (real spend + tokens + hours + efficiency KPIs, source filter, weekly AI reports), **Top** (tool rankings by cost/count/duration with cost projection), and **System** (hooks, agents, skills, workflows, context file limits, work mode distribution, OpenCode config, memory files, claudestat config).
 
 ![Live tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225605/My%20portfolio%7D/live_oeucqs.png)
 

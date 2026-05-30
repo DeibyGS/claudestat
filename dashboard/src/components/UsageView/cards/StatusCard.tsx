@@ -1,7 +1,12 @@
-import { Activity, BrainCircuit, Cpu, Flame, Info } from 'lucide-react'
+import { Activity, BrainCircuit, Cpu, Flame, Info, Clock, GitBranch } from 'lucide-react'
 import type { QuotaData, CostInfo } from '../../../types'
 import { Tip } from '../../Tip'
 import { fmtTok, fmtUsd } from '../utils'
+
+const SOURCE_LABELS: Record<string, string> = {
+  'claude-code': 'Claude Code',
+  'opencode':    'OpenCode',
+}
 
 // ─── Shared helpers (used by multiple cards) ──────────────────────────────────
 
@@ -48,7 +53,8 @@ export function StatusCard({ quota, cost }: { quota: QuotaData; cost?: CostInfo 
   const ctxUsed       = cost?.context_used ?? 0
   const ctxWindow     = cost?.context_window ?? 200_000
   const compactWindow = Math.round(ctxWindow * 0.85)
-  const ctxPct   = ctxUsed > 0 && compactWindow > 0 ? Math.min(100, Math.round(ctxUsed / compactWindow * 100)) : null
+  const hasCtxData    = cost !== undefined && ctxUsed > 0 && compactWindow > 0
+  const ctxPct   = hasCtxData ? Math.min(100, Math.round(ctxUsed / compactWindow * 100)) : null
   const ctxFree  = ctxPct !== null ? 100 - ctxPct : null
   const ctxColor = ctxFree === null ? '#484f58'
     : ctxFree < 20 ? '#f85149' : ctxFree < 40 ? '#d29922' : '#3fb950'
@@ -59,17 +65,92 @@ export function StatusCard({ quota, cost }: { quota: QuotaData; cost?: CostInfo 
   const outputTok   = cost?.output_tokens ?? 0
   const cacheRead   = cost?.cache_read ?? 0
 
+  // Source
+  const source = cost?.source ?? 'claude-code'
+  const sourceLabel = SOURCE_LABELS[source] ?? source
+  const sourceColor = source === 'opencode' ? '#3fb950' : '#58a6ff'
+
+  // Duración de la sesión
+  const startedAt = cost?.started_at
+  const sessionDurationMinutes = startedAt ? (Date.now() - startedAt) / 60_000 : 0
+  const durationLabel = sessionDurationMinutes > 0
+    ? sessionDurationMinutes >= 120
+      ? `${Math.round(sessionDurationMinutes / 60)}h ${Math.round(sessionDurationMinutes % 60)}m`
+      : `${Math.round(sessionDurationMinutes)}m`
+    : null
+
   // Modelo + burn rate
-  const model    = cost?.model ?? null
+  const rawModel = cost?.model
+  const defaultModel = source === 'opencode' ? 'deepseek-v4-flash-free' : 'claude-sonnet-4-6'
+  const model    = rawModel || defaultModel
   const burnRate = quota.burnRateTokensPerMin ?? 0
   const shortModel = model
-    ? model.replace('claude-', '').replace(/-\d{8}$/, '')
+    ? model.replace(/^claude-/, '').replace(/-\d{8}$/, '').replace(/^opencode-go\//, '')
     : null
+
+  // Context is estimated for OpenCode
+  const isContextEstimated = source === 'opencode'
 
   return (
     <Card style={{ borderColor: '#30363d' }}>
-      <CardHeader icon={Activity} title="Current status" subtitle="real-time" color="#58a6ff" />
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+      <CardHeader icon={Activity} title="Current status" subtitle="real-time" color={sourceColor} />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 12 }}>
+
+        {/* Source + Session info */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+            <Activity size={10} color="#484f58" />
+            <span style={{ fontSize: 10, color: '#484f58', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Source</span>
+          </div>
+          <span style={{ fontSize: 12, fontWeight: 700, color: sourceColor, background: `${sourceColor}18`, border: `1px solid ${sourceColor}30`, borderRadius: 4, padding: '2px 8px', marginBottom: 4 }}>
+            {sourceLabel}
+          </span>
+          {durationLabel && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginTop: 4 }}>
+              <Clock size={9} color="#3d444d" />
+              <span style={{ fontSize: 10, color: '#484f58' }}>{durationLabel} session</span>
+            </div>
+          )}
+          {sessionCost > 0 && (
+            <div style={{ fontSize: 10, color: '#3d444d', marginTop: 2 }}>
+              <span style={{ color: '#79c0ff' }}>{fmtTok(inputTok)} in</span>
+              {cacheRead > 0 && <span style={{ color: '#3d444d' }}> · {fmtTok(cacheRead)} cache</span>}
+              <br />
+              <span style={{ color: '#56d364' }}>{fmtTok(outputTok)} out</span>
+            </div>
+          )}
+        </div>
+
+        {/* Session cost */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
+            <Activity size={10} color="#484f58" />
+            <span style={{ fontSize: 10, color: '#484f58', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Session cost</span>
+            <InfoTip position="bottom" align="left" content={
+              <div>
+                <div style={{ color: '#58a6ff', fontWeight: 700, fontSize: 11, marginBottom: 4 }}>Cost of this session</div>
+                <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.6 }}>
+                  Accumulated from the first message of the active session.
+                </div>
+              </div>
+            } />
+          </div>
+          {sessionCost > 0 ? (
+            <>
+              <div style={{ fontSize: 26, fontWeight: 700, color: '#e6edf3', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
+                {fmtUsd(sessionCost)}
+              </div>
+              <div style={{ fontSize: 9, color: '#484f58', marginTop: 4 }}>
+                {sessionDurationMinutes > 0
+                  ? `~${fmtUsd(sessionCost / sessionDurationMinutes * 60)}/hr`
+                  : '—'
+                }
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 12, color: '#484f58' }}>No active session</div>
+          )}
+        </div>
 
         {/* Contexto */}
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
@@ -80,9 +161,11 @@ export function StatusCard({ quota, cost }: { quota: QuotaData; cost?: CostInfo 
               <div>
                 <div style={{ color: '#58a6ff', fontWeight: 700, fontSize: 11, marginBottom: 4 }}>Free context space</div>
                 <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.6 }}>
-                  Percentage available before Claude activates auto-compact.<br />
-                  Compact occurs at 85% of the window limit (normally 200K tokens).<br />
-                  <span style={{ color: '#d29922' }}>Below 20%: consider using /clear.</span>
+                  {isContextEstimated
+                    ? 'Estimated from total tokens sent (CC scans JSONL; for OC uses input+cache tokens).'
+                    : 'Percentage available before Claude auto-compacts. Compact at 85% of window.'
+                  }
+                  {isContextEstimated && <><br /><span style={{ color: '#d29922' }}>Approximate — OC does not report context directly.</span></>}
                 </div>
               </div>
             } />
@@ -98,45 +181,20 @@ export function StatusCard({ quota, cost }: { quota: QuotaData; cost?: CostInfo 
                 <div style={{ width: `${ctxPct}%`, height: '100%', background: ctxColor, borderRadius: 2, transition: 'width 0.5s' }} />
               </div>
               <div style={{ fontSize: 9, color: '#3d444d', marginTop: 4 }}>
-                {ctxFree < 20 ? '⚠ Consider /clear soon' : ctxFree < 40 ? 'Moderate — ok for now' : 'No context pressure'}
+                {isContextEstimated
+                  ? '⚠ Estimated (OC)'
+                  : ctxFree < 20
+                    ? '⚠ Consider /clear soon'
+                    : ctxFree < 40
+                      ? 'Moderate — ok for now'
+                      : 'No context pressure'
+                }
               </div>
             </>
           ) : (
-            <div style={{ fontSize: 12, color: '#484f58' }}>Waiting for data…</div>
-          )}
-        </div>
-
-        {/* Current session */}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 6 }}>
-            <Activity size={10} color="#484f58" />
-            <span style={{ fontSize: 10, color: '#484f58', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Current session</span>
-            <InfoTip position="bottom" align="left" content={
-              <div>
-                <div style={{ color: '#58a6ff', fontWeight: 700, fontSize: 11, marginBottom: 4 }}>Cost of this session</div>
-                <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.6 }}>
-                  Accumulated from the first message of the active session.<br />
-                  <span style={{ color: '#79c0ff' }}>in</span> = tokens sent to Claude (context + message).<br />
-                  <span style={{ color: '#56d364' }}>out</span> = tokens generated by Claude.<br />
-                  cache = tokens reused (~10× cheaper than fresh input).
-                </div>
-              </div>
-            } />
-          </div>
-          {sessionCost > 0 ? (
-            <>
-              <div style={{ fontSize: 26, fontWeight: 700, color: '#e6edf3', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
-                {fmtUsd(sessionCost)}
-              </div>
-              <div style={{ fontSize: 9, color: '#484f58', marginTop: 6, lineHeight: 2 }}>
-                <span style={{ color: '#79c0ff' }}>in</span> {fmtTok(inputTok)}
-                {cacheRead > 0 && <span style={{ color: '#3d444d' }}> · {fmtTok(cacheRead)} cache</span>}
-                <br />
-                <span style={{ color: '#56d364' }}>out</span> {fmtTok(outputTok)}
-              </div>
-            </>
-          ) : (
-            <div style={{ fontSize: 12, color: '#484f58' }}>No active session</div>
+            <div style={{ fontSize: 12, color: '#484f58' }}>
+              {cost ? '—' : 'Waiting for data…'}
+            </div>
           )}
         </div>
 
@@ -149,8 +207,8 @@ export function StatusCard({ quota, cost }: { quota: QuotaData; cost?: CostInfo 
               <div>
                 <div style={{ color: '#58a6ff', fontWeight: 700, fontSize: 11, marginBottom: 4 }}>Active model</div>
                 <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.6 }}>
-                  Claude model used in the current session.<br />
-                  The <span style={{ color: '#d29922' }}>burn rate</span> indicates tokens consumed per minute in real time — useful for estimating how long the quota will last before the next 5h reset.
+                  Model used in the current session.<br />
+                  The <span style={{ color: '#d29922' }}>burn rate</span> indicates tokens consumed per minute — useful for estimating quota depletion.
                 </div>
               </div>
             } />
@@ -171,8 +229,7 @@ export function StatusCard({ quota, cost }: { quota: QuotaData; cost?: CostInfo 
                 <div style={{ color: '#d29922', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>Current burn rate</div>
                 <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
                   Tokens consumed per minute in this session.<br />
-                  High burn rate = large context or long responses.<br />
-                  More than 6,000 tok/min can drain quota quickly.
+                  High burn rate = large context or long responses.
                 </div>
               </div>
             }>

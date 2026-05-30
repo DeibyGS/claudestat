@@ -59,6 +59,8 @@ export default function App() {
   const [activeLiveSource, setActiveLiveSource] = useState<string>('claude-code')
   const [opencodeEvents,   setOpencodeEvents]   = useState<TraceEvent[]>([])
   const [opencodePrompts,  setOpencodePrompts]  = useState<Array<{ index: number; ts: number; text: string }>>([])
+  const [claudeCodeEvents,  setClaudeCodeEvents]  = useState<TraceEvent[]>([])
+  const [claudeCodePrompts, setClaudeCodePrompts] = useState<Array<{ index: number; ts: number; text: string }>>([])
   const stateRef = useRef(state)
   stateRef.current = state
 
@@ -231,16 +233,58 @@ export default function App() {
   }, [])
 
   // ── OpenCode events polling (10s when active) ───────────────────────────────
+  // OC creates one session per prompt. We poll directly from OC's SQLite via
+  // opencode-reader which groups sessions by directory (60s gap threshold raised to 5min).
+  // Dep: ocSessionId — only restarts when the actual session changes, not on every
+  // activeSources array reference update (which would cancel in-flight fetches every 10s).
+  const ocSessionId = activeSources.find(s => s.source === activeLiveSource)?.sessionId
   useEffect(() => {
-    const src = activeSources.find(s => s.source === activeLiveSource)
-    if (!src || activeLiveSource === 'claude-code') return
+    if (!ocSessionId || activeLiveSource === 'claude-code') return
+    // Clear stale events from previous session
+    setOpencodeEvents([])
+    setOpencodePrompts([])
     let cancelled = false
     function fetchEvents() {
-      fetch(`/api/opencode/session/${src!.sessionId}`)
+      fetch(`/api/opencode/session/${ocSessionId}`)
         .then(r => r.ok ? r.json() : null)
         .then(d => {
-          if (!cancelled && d?.events) setOpencodeEvents(d.events)
-          if (!cancelled && d?.prompts) setOpencodePrompts(d.prompts)
+          if (cancelled) return
+          if (d?.events) {
+            setOpencodeEvents(() => {
+              // Replace entirely each poll — reader returns the full session group
+              const events = (d.events as TraceEvent[]).slice(-MAX_EVENTS)
+              return events
+            })
+          }
+          if (d?.prompts) {
+            setOpencodePrompts(() => d.prompts)
+          }
+        })
+        .catch(() => {})
+    }
+    fetchEvents()
+    const t = setInterval(fetchEvents, 5_000)
+    return () => { cancelled = true; clearInterval(t) }
+  }, [ocSessionId, activeLiveSource])
+
+  // ── Claude Code events polling (10s when active) ────────────────────────────
+  useEffect(() => {
+    const src = activeSources.find(s => s.source === activeLiveSource)
+    if (!src || activeLiveSource !== 'claude-code') return
+    let cancelled = false
+    function fetchEvents() {
+      Promise.all([
+        fetch(`/api/session-events?session_id=${src!.sessionId}`),
+        fetch(`/prompts?session_id=${src!.sessionId}`),
+      ])
+        .then(([evtRes, prmRes]) => Promise.all([
+          evtRes.ok ? evtRes.json() : null,
+          prmRes.ok ? prmRes.json() : null,
+        ]))
+        .then(([evtData, prmData]) => {
+          if (cancelled) return
+          if (evtData?.events) setClaudeCodeEvents(evtData.events)
+          if (prmData?.prompts) setClaudeCodePrompts(prmData.prompts)
         })
         .catch(() => {})
     }
@@ -297,6 +341,7 @@ export default function App() {
         activeProject={activeProject}
         onOpenConfig={() => setConfigOpen(true)}
         quota={quota}
+        activeSources={activeSources}
       />
       {configOpen && <ConfigPanel onClose={() => setConfigOpen(false)} />}
 
@@ -315,7 +360,7 @@ export default function App() {
           />
           <div style={liveLayout}>
             {(() => {
-              const isClaudeCode = activeLiveSource === 'claude-code' || activeSources.length <= 1
+              const isClaudeCode = activeLiveSource === 'claude-code'
               const activeSource = activeSources.find(s => s.source === activeLiveSource)
               const sourceCost: CostInfo | undefined = activeSource ? {
                 cost_usd:         activeSource.cost_usd,
@@ -323,24 +368,35 @@ export default function App() {
                 output_tokens:    activeSource.output_tokens,
                 cache_read:       activeSource.cache_read,
                 cache_creation:   activeSource.cache_creation,
-                efficiency_score: 100,
+                efficiency_score: isClaudeCode ? (state.cost?.efficiency_score ?? 100) : 0,
                 model:            activeSource.model,
                 loops:            [],
+                context_used:     isClaudeCode ? undefined : activeSource.input_tokens,
               } : undefined
+              // Fallback to SSE state.events while polling hasn't loaded claudeCodeEvents yet
+              const ccEvents = claudeCodeEvents.length > 0 ? claudeCodeEvents : state.events
+              const ccLast   = ccEvents[ccEvents.length - 1]
+              const ccState: SessionState = !ccLast ? 'idle'
+                : Date.now() - ccLast.ts > 120_000 ? 'idle'
+                : ccLast.type === 'PreToolUse' ? 'working' : 'waiting_for_input'
+              const ocState: SessionState = !activeSource ? 'idle'
+                : (Date.now() - activeSource.last_seen_ms) < 30_000 ? 'working'
+                : (Date.now() - activeSource.last_seen_ms) < 60_000 ? 'waiting_for_input'
+                : 'idle'
               return (
                 <TracePanel
-                  events={isClaudeCode ? state.events : opencodeEvents}
-                  startedAt={isClaudeCode ? state.startedAt : activeSource?.last_seen_ms ?? Date.now()}
-                  cost={isClaudeCode ? (state.cost ?? sourceCost) : sourceCost}
+                  events={isClaudeCode ? ccEvents : opencodeEvents}
+                  startedAt={isClaudeCode ? (ccEvents[0]?.ts ?? activeSource?.last_seen_ms ?? Date.now()) : (opencodeEvents[0]?.ts ?? activeSource?.last_seen_ms ?? Date.now())}
+                  cost={sourceCost}
                   blockCosts={isClaudeCode ? state.blockCosts : []}
                   meta={isClaudeCode ? metaStats : undefined}
                   quota={isClaudeCode ? quota : undefined}
-                  sessionState={isClaudeCode ? state.sessionState : 'idle'}
+                  sessionState={isClaudeCode ? ccState : ocState}
                   weeklyData={state.weeklyData}
                   hiddenCost={isClaudeCode ? hiddenCost : undefined}
-                  prompts={isClaudeCode ? prompts : opencodePrompts}
+                  prompts={isClaudeCode ? claudeCodePrompts : opencodePrompts}
                   quotaStats={isClaudeCode ? quotaStats : undefined}
-                  subAgentSessions={isClaudeCode ? state.subAgentSessions : []}
+                  subAgentSessions={[]}
                   cliLabel={isClaudeCode ? 'Claude Code' : (activeSource ? (SOURCE_LABELS[activeSource.source] ?? activeSource.source) : 'Claude Code')}
                 />
               )
@@ -368,7 +424,7 @@ export default function App() {
       {activeTab === 'analytics' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <Suspense fallback={null}>
-            <AnalyticsView quota={quota} cost={state.cost} events={state.events} prompts={prompts} claudeStats={claudeStats} />
+            <AnalyticsView quota={quota} cost={state.cost} events={[...claudeCodeEvents, ...opencodeEvents].sort((a, b) => a.ts - b.ts)} prompts={prompts} claudeStats={claudeStats} />
           </Suspense>
         </div>
       )}
@@ -453,6 +509,8 @@ function handleMessage(prev: AppState, msg: any): AppState {
       context_used: p.context_used, context_window: p.context_window,
       loops: p.loops || [], summary: p.summary,
       model: p.model,
+      source: p.source,
+      started_at: p.started_at,
       projected_hourly_usd: p.projected_hourly_usd,
     }
     return { ...prev, cost }

@@ -21,6 +21,18 @@ export const PRICING: Record<string, ModelPricing> = {
 
 export const DEFAULT_PRICING = PRICING['claude-sonnet-4-6']
 
+export const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
+  'claude-opus-4-6':          200_000,
+  'claude-sonnet-4-6':        200_000,
+  'claude-haiku-4-5':         200_000,
+  'claude-haiku-4-5-20251001': 200_000,
+  'deepseek-v4-flash-free':   1_000_000,
+}
+
+export function getContextWindow(model: string): number {
+  return KNOWN_CONTEXT_WINDOWS[model] ?? 200_000
+}
+
 export function calcCost(
   model: string, 
   usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }

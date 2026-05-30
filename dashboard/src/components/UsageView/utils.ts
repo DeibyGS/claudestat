@@ -36,8 +36,9 @@ export interface CoachTip {
   level:        TipLevel
   title:        string
   text:         string
-  prompt?:      string   // prompt del usuario que originó el problema
-  blockIndex?:  number   // bloque de referencia (para navegación)
+  prompt?:      string
+  blockIndex?:  number
+  source?:      string
 }
 
 export interface LoopOccurrence {
@@ -155,7 +156,7 @@ export function loopAdvice(toolName: string, multiFile: boolean, detail?: string
   }
 }
 
-export function generateTips(cost?: CostInfo, quota?: QuotaData, events?: TraceEvent[], prompts?: SessionPrompt[]): CoachTip[] {
+export function generateTips(cost?: CostInfo, quota?: QuotaData, events?: TraceEvent[], prompts?: SessionPrompt[], source?: string): CoachTip[] {
   const tips: CoachTip[] = []
 
   // 1. Loops por bloque (desde eventos — más granular que cost.loops)
@@ -291,5 +292,5 @@ export function generateTips(cost?: CostInfo, quota?: QuotaData, events?: TraceE
     })
   }
 
-  return tips
+  return source ? tips.map(t => ({ ...t, source })) : tips
 }

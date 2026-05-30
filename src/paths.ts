@@ -146,6 +146,14 @@ export function getHomeSlug(): string {
 // ─── OpenCode data directory ───────────────────────────────────────────────────
 
 /**
+ * Returns the OpenCode config directory.
+ * Can be overridden via OPENCODE_CONFIG_DIR env var.
+ */
+export function getOpencodeDir(): string {
+  return process.env.OPENCODE_CONFIG_DIR ?? path.join(os.homedir(), '.config', 'opencode')
+}
+
+/**
  * Returns the OpenCode SQLite database path.
  * Can be overridden via OPENCODE_DB env var.
  */

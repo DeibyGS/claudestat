@@ -21,24 +21,25 @@ fs.mkdirSync(CLAUDESTAT_DIR, { recursive: true })
 
 const db = new DatabaseSync(DB_PATH)
 
-// Migraciones: añadir columnas nuevas sin romper instalaciones previas
-try { db.exec(`ALTER TABLE sessions ADD COLUMN project_path TEXT`) } catch { /* ya existe */ }
-try { db.exec(`ALTER TABLE sessions ADD COLUMN ai_summary   TEXT`) } catch { /* ya existe */ }
-try { db.exec(`
-  CREATE TABLE IF NOT EXISTS weekly_reports (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    date            TEXT    NOT NULL UNIQUE,
-    report_markdown TEXT    NOT NULL,
-    created_at      TEXT    DEFAULT (datetime('now'))
-  )
-`) } catch { /* ya existe */ }
+// ─── Tool response size cap ────────────────────────────────────────────────────
 
-try { db.exec(`
+export const TOOL_RESPONSE_MAX_BYTES = 8192
+
+export function capToolResponse(raw: string): string {
+  if (Buffer.byteLength(raw, 'utf8') <= TOOL_RESPONSE_MAX_BYTES) return raw
+  const buf = Buffer.from(raw, 'utf8').subarray(0, TOOL_RESPONSE_MAX_BYTES)
+  return buf.toString('utf8') + `…[truncated: ${raw.length} chars]`
+}
+
+// ─── Base tables (idempotent — safe on every start) ───────────────────────────
+
+// meta must exist before runMigrations reads schema_version
+db.exec(`
   CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   )
-`) } catch { /* ya existe */ }
+`)
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
@@ -72,16 +73,89 @@ db.exec(`
 `)
 
 // Índices para acelerar las subqueries de getRecentSessions (N+3 pattern)
-// Wrapped en try-catch para no romper instalaciones que ya los tienen
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_events_session_type ON events(session_id, type)`) } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_events_tool       ON events(session_id, tool_name)`) } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_started  ON sessions(started_at DESC)`) } catch {}
 try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_project  ON sessions(project_path)`) } catch {}
-try { db.exec(`ALTER TABLE sessions ADD COLUMN dominant_model TEXT`) } catch {}
-try { db.exec(`ALTER TABLE events ADD COLUMN skill_parent TEXT`) } catch {}
-try { db.exec(`ALTER TABLE sessions ADD COLUMN parent_session_id TEXT`) } catch {}
-try { db.exec(`ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'claude-code'`) } catch {}
-try { db.exec(`ALTER TABLE events ADD COLUMN source TEXT DEFAULT 'claude-code'`) } catch {}
+
+// ─── Schema migrations ─────────────────────────────────────────────────────────
+// Each migration runs exactly once, tracked by meta.schema_version.
+// try/catch per migration handles existing installs where columns already exist.
+
+const MIGRATIONS: Array<{ version: number; sql: string }> = [
+  { version: 1, sql: `ALTER TABLE sessions ADD COLUMN project_path TEXT` },
+  { version: 2, sql: `ALTER TABLE sessions ADD COLUMN ai_summary TEXT` },
+  { version: 3, sql: `CREATE TABLE IF NOT EXISTS weekly_reports (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    date            TEXT    NOT NULL UNIQUE,
+    report_markdown TEXT    NOT NULL,
+    created_at      TEXT    DEFAULT (datetime('now'))
+  )` },
+  { version: 4, sql: `ALTER TABLE sessions ADD COLUMN dominant_model TEXT` },
+  { version: 5, sql: `ALTER TABLE events ADD COLUMN skill_parent TEXT` },
+  { version: 6, sql: `ALTER TABLE sessions ADD COLUMN parent_session_id TEXT` },
+  { version: 7, sql: `ALTER TABLE sessions ADD COLUMN source TEXT DEFAULT 'claude-code'` },
+  { version: 8,  sql: `ALTER TABLE events ADD COLUMN source TEXT DEFAULT 'claude-code'` },
+  { version: 9,  sql: `ALTER TABLE sessions ADD COLUMN exact_retries INTEGER DEFAULT 0` },
+  { version: 10, sql: `ALTER TABLE sessions ADD COLUMN error_rate REAL DEFAULT 0` },
+  { version: 11, sql: `ALTER TABLE sessions ADD COLUMN file_churn_score REAL DEFAULT 0` },
+  { version: 12, sql: `ALTER TABLE sessions ADD COLUMN seq_cycle_count INTEGER DEFAULT 0` },
+  { version: 13, sql: `ALTER TABLE sessions ADD COLUMN avg_output_chars INTEGER DEFAULT 0` },
+  { version: 14, sql: `ALTER TABLE sessions ADD COLUMN error_block_count INTEGER DEFAULT 0` },
+  { version: 15, sql: `CREATE TABLE IF NOT EXISTS assistant_turns (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   TEXT    NOT NULL,
+    turn_index   INTEGER NOT NULL,
+    ts           INTEGER,
+    text_preview TEXT,
+    tool_calls   TEXT,
+    error_count  INTEGER DEFAULT 0,
+    output_chars INTEGER DEFAULT 0,
+    UNIQUE(session_id, turn_index) ON CONFLICT REPLACE
+  )` },
+  { version: 16, sql: `ALTER TABLE sessions ADD COLUMN semantic_loop_count INTEGER DEFAULT 0` },
+  { version: 17, sql: `ALTER TABLE assistant_turns ADD COLUMN context_used INTEGER DEFAULT 0` },
+  { version: 18, sql: `
+    CREATE TABLE IF NOT EXISTS file_intents (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      tool           TEXT    NOT NULL,
+      session_id     TEXT    NOT NULL,
+      task_desc      TEXT,
+      status         TEXT    NOT NULL DEFAULT 'active',
+      acquired_at    INTEGER NOT NULL,
+      released_at    INTEGER,
+      last_heartbeat INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_intents_status ON file_intents(status);
+  ` },
+  { version: 19, sql: `
+    CREATE TABLE IF NOT EXISTS file_intent_files (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      intent_id    INTEGER NOT NULL REFERENCES file_intents(id) ON DELETE CASCADE,
+      file_path    TEXT    NOT NULL,
+      operation    TEXT    NOT NULL DEFAULT 'write',
+      line_start   INTEGER,
+      line_end     INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_intent_files_path ON file_intent_files(file_path);
+  ` },
+  { version: 20, sql: `ALTER TABLE events ADD COLUMN external_id TEXT` },
+  { version: 21, sql: `CREATE UNIQUE INDEX IF NOT EXISTS idx_events_ext ON events(session_id, external_id) WHERE external_id IS NOT NULL` },
+]
+
+function runMigrations() {
+  const row = db.prepare(`SELECT value FROM meta WHERE key = 'schema_version'`).get() as { value: string } | undefined
+  const currentVersion = row ? parseInt(row.value, 10) : 0
+  const upsertVersion  = db.prepare(`INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+
+  for (const m of MIGRATIONS) {
+    if (m.version <= currentVersion) continue
+    try { db.exec(m.sql) } catch { /* column/table already exists on prior installs */ }
+    upsertVersion.run(String(m.version))
+  }
+}
+
+runMigrations()  // must run before stmts — some queries reference migrated columns
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -102,6 +176,23 @@ export interface SessionRow {
   dominant_model?: string
   parent_session_id?: string
   source?: string
+  exact_retries?: number
+  error_rate?: number
+  file_churn_score?: number
+  seq_cycle_count?: number
+  avg_output_chars?: number
+  error_block_count?: number
+  semantic_loop_count?: number
+}
+
+export interface AssistantTurnRow {
+  turn_index: number
+  ts?: number
+  text_preview?: string
+  tool_calls?: string[]
+  error_count: number
+  output_chars: number
+  context_used: number
 }
 
 export interface EventRow {
@@ -137,6 +228,7 @@ export interface CostUpdate {
   lastEntry?: BlockCostEntry  // costo desglosado del último request (para block_cost SSE)
   lastModel?: string          // modelo del último request (para mostrar en header)
   firstTs?: number            // timestamp ms del primer mensaje assistant (para detectar sub-agentes)
+  lastTs?: number             // timestamp ms del último mensaje assistant (para last_event_at de sub-agentes)
 }
 
 // ─── Prepared statements (se compilan una vez al iniciar) ─────────────────────
@@ -145,7 +237,14 @@ const stmts = {
   upsertSession: db.prepare(`
     INSERT INTO sessions (id, cwd, started_at, last_event_at, source)
     VALUES (?, ?, ?, ?, COALESCE(?, 'claude-code'))
-    ON CONFLICT(id) DO UPDATE SET last_event_at = excluded.last_event_at
+    ON CONFLICT(id) DO UPDATE SET
+      last_event_at = excluded.last_event_at,
+      source = COALESCE(excluded.source, source)
+  `),
+
+  insertSessionIfAbsent: db.prepare(`
+    INSERT OR IGNORE INTO sessions (id, cwd, started_at, last_event_at, source)
+    VALUES (?, ?, ?, ?, COALESCE(?, 'claude-code'))
   `),
 
   updateSessionCost: db.prepare(`
@@ -157,13 +256,22 @@ const stmts = {
       total_cache_creation = ?,
       efficiency_score     = ?,
       loops_detected       = ?,
-      dominant_model       = ?
+      dominant_model       = ?,
+      exact_retries        = ?,
+      error_rate           = ?,
+      file_churn_score     = ?,
+      seq_cycle_count      = ?
     WHERE id = ?
   `),
 
   insertEvent: db.prepare(`
     INSERT INTO events (session_id, type, tool_name, tool_input, ts, cwd, skill_parent, source)
     VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, 'claude-code'))
+  `),
+
+  insertOcEvent: db.prepare(`
+    INSERT OR IGNORE INTO events (session_id, type, tool_name, ts, duration_ms, external_id, source)
+    VALUES (?, 'Done', ?, ?, 0, ?, 'opencode')
   `),
 
   pairPost: db.prepare(`
@@ -201,7 +309,7 @@ const stmts = {
   `),
 
   updateSessionProject: db.prepare(`
-    UPDATE sessions SET project_path = ? WHERE id = ? AND project_path IS NULL
+    UPDATE sessions SET project_path = ? WHERE id = ?
   `),
 
   getRecentSessions: db.prepare(`
@@ -255,6 +363,14 @@ const stmts = {
     WHERE s.project_path = ? AND e.type = 'Done' AND e.tool_name IS NOT NULL
     GROUP BY e.tool_name
     ORDER BY count DESC
+  `),
+
+  getProjectCliHours: db.prepare(`
+    SELECT project_path, COALESCE(source, 'claude-code') as source,
+      SUM(last_event_at - started_at) as total_ms
+    FROM sessions
+    WHERE project_path IS NOT NULL AND last_event_at IS NOT NULL
+    GROUP BY project_path, COALESCE(source, 'claude-code')
   `),
 
   // Session-level aggregates for pattern analysis (cache, loops, cost, efficiency)
@@ -329,6 +445,7 @@ const stmts = {
   analyticsDaily: db.prepare(`
     SELECT
       date(started_at / 1000, 'unixepoch', 'localtime')          AS date,
+      COALESCE(source, 'claude-code')                             AS source,
       COUNT(*)                                                     AS sessions,
       COALESCE(SUM(total_cost_usd),       0)                      AS cost,
       COALESCE(SUM(total_input_tokens),   0)                      AS input_tokens,
@@ -338,7 +455,7 @@ const stmts = {
       COALESCE(AVG(CASE WHEN efficiency_score > 0 THEN efficiency_score END), 100) AS avg_efficiency
     FROM sessions
     WHERE started_at >= ?
-    GROUP BY date
+    GROUP BY date, COALESCE(source, 'claude-code')
     ORDER BY date ASC
   `),
 
@@ -346,25 +463,28 @@ const stmts = {
     SELECT
       date(started_at / 1000, 'unixepoch', 'localtime')                                AS date,
       COALESCE(dominant_model, 'claude-sonnet-4-6')                                     AS model,
+      COALESCE(source, 'claude-code')                                                   AS source,
       COALESCE(SUM(total_input_tokens + total_output_tokens + total_cache_read), 0)     AS tokens,
       COALESCE(SUM(total_cost_usd), 0)                                                  AS cost
     FROM sessions
     WHERE started_at >= ?
-    GROUP BY date, model
+      AND (dominant_model IS NULL OR dominant_model NOT LIKE '<%')
+    GROUP BY date, model, COALESCE(source, 'claude-code')
     ORDER BY date ASC
   `),
 
   analyticsProjectHours: db.prepare(`
     SELECT
       COALESCE(project_path, 'No project')                      AS project,
+      COALESCE(source, 'claude-code')                           AS source,
       COUNT(*)                                                  AS sessions,
       COALESCE(SUM(last_event_at - started_at), 0) / 3600000.0 AS hours,
       COALESCE(SUM(total_cost_usd), 0)                         AS cost
     FROM sessions
     WHERE started_at >= ?
-    GROUP BY project
+    GROUP BY project, COALESCE(source, 'claude-code')
     ORDER BY hours DESC
-    LIMIT 8
+    LIMIT 16
   `),
 
   getTopToolsByCost: db.prepare(`
@@ -382,6 +502,7 @@ const stmts = {
     )
     SELECT
       tps.tool_name,
+      COALESCE(s.source, 'claude-code')              AS source,
       SUM(tps.cnt)                                   AS count,
       SUM(tps.tool_dur)                              AS total_duration_ms,
       SUM(CASE WHEN st.total_done > 0
@@ -390,8 +511,8 @@ const stmts = {
     FROM tool_per_session tps
     JOIN session_totals st ON tps.session_id = st.session_id
     JOIN sessions s ON tps.session_id = s.id
-    WHERE s.total_cost_usd > 0
-    GROUP BY tps.tool_name
+    WHERE (? = 'all' OR COALESCE(s.source, 'claude-code') = ?)
+    GROUP BY tps.tool_name, COALESCE(s.source, 'claude-code')
     ORDER BY total_cost_usd DESC
     LIMIT ?
   `),
@@ -411,6 +532,7 @@ const stmts = {
     )
     SELECT
       tps.tool_name,
+      COALESCE(s.source, 'claude-code')              AS source,
       SUM(tps.cnt)                                   AS count,
       SUM(tps.tool_dur)                              AS total_duration_ms,
       SUM(CASE WHEN st.total_done > 0
@@ -419,8 +541,8 @@ const stmts = {
     FROM tool_per_session tps
     JOIN session_totals st ON tps.session_id = st.session_id
     JOIN sessions s ON tps.session_id = s.id
-    WHERE s.total_cost_usd > 0
-    GROUP BY tps.tool_name
+    WHERE (? = 'all' OR COALESCE(s.source, 'claude-code') = ?)
+    GROUP BY tps.tool_name, COALESCE(s.source, 'claude-code')
     ORDER BY count DESC
     LIMIT ?
   `),
@@ -440,6 +562,7 @@ const stmts = {
     )
     SELECT
       tps.tool_name,
+      COALESCE(s.source, 'claude-code')              AS source,
       SUM(tps.cnt)                                   AS count,
       SUM(tps.tool_dur)                              AS total_duration_ms,
       SUM(CASE WHEN st.total_done > 0
@@ -448,8 +571,8 @@ const stmts = {
     FROM tool_per_session tps
     JOIN session_totals st ON tps.session_id = st.session_id
     JOIN sessions s ON tps.session_id = s.id
-    WHERE s.total_cost_usd > 0
-    GROUP BY tps.tool_name
+    WHERE (? = 'all' OR COALESCE(s.source, 'claude-code') = ?)
+    GROUP BY tps.tool_name, COALESCE(s.source, 'claude-code')
     ORDER BY total_duration_ms DESC
     LIMIT ?
   `),
@@ -495,6 +618,15 @@ const stmts = {
     GROUP BY project_path
     ORDER BY total_cost DESC
     LIMIT 5
+  `),
+
+  updateSessionSemantic: db.prepare(`
+    UPDATE sessions SET avg_output_chars = ?, error_block_count = ?, semantic_loop_count = ? WHERE id = ?
+  `),
+
+  getAssistantTurns: db.prepare(`
+    SELECT turn_index, ts, text_preview, tool_calls, error_count, output_chars, context_used
+    FROM assistant_turns WHERE session_id = ? ORDER BY turn_index ASC
   `),
 
   getHourlyDistribution: db.prepare(`
@@ -554,6 +686,14 @@ export const dbOps = {
     return Number(res.lastInsertRowid)
   },
 
+  insertOcEvent(sessionId: string, toolName: string, ts: number, externalId: string): void {
+    stmts.insertOcEvent.run(sessionId, toolName, ts, externalId)
+  },
+
+  insertSessionIfAbsent(s: SessionRow): void {
+    stmts.insertSessionIfAbsent.run(s.id, s.cwd ?? null, s.started_at, s.last_event_at ?? s.started_at, s.source ?? null)
+  },
+
   /**
    * Al llegar PostToolUse, actualizamos el PreToolUse pendiente más reciente
    * del mismo tool para esta sesión. Esto convierte el par Pre+Post en
@@ -568,13 +708,22 @@ export const dbOps = {
     `).get(sessionId, toolName) as { id: number; ts: number } | undefined
 
     if (pending) {
-      stmts.pairPost.run(response, postTs - pending.ts, sessionId, toolName)
+      stmts.pairPost.run(capToolResponse(response), postTs - pending.ts, sessionId, toolName)
       return pending.id
     }
     return null
   },
 
-  updateSessionCost(sessionId: string, cost: CostUpdate, efficiencyScore: number, loopsDetected: number) {
+  updateSessionCost(
+    sessionId: string,
+    cost: CostUpdate,
+    efficiencyScore: number,
+    loopsDetected: number,
+    exactRetries = 0,
+    errorRate = 0,
+    fileChurnScore = 1,
+    seqCycleCount = 0,
+  ) {
     stmts.updateSessionCost.run(
       cost.cost_usd,
       cost.input_tokens,
@@ -584,7 +733,11 @@ export const dbOps = {
       efficiencyScore,
       loopsDetected,
       cost.lastModel ?? null,
-      sessionId
+      exactRetries,
+      errorRate,
+      fileChurnScore,
+      seqCycleCount,
+      sessionId,
     )
   },
 
@@ -613,6 +766,12 @@ export const dbOps = {
   },
 
   updateSessionProject(sessionId: string, projectPath: string) {
+    const existing = this.getSession(sessionId)
+    if (existing?.project_path) {
+      const cur = existing.project_path.endsWith('/')
+        ? existing.project_path : existing.project_path + '/'
+      if (!projectPath.startsWith(cur)) return
+    }
     stmts.updateSessionProject.run(projectPath, sessionId)
   },
 
@@ -631,6 +790,10 @@ export const dbOps = {
 
   getProjectSessionStats(projectPath: string): any {
     return stmts.getProjectSessionStats.get(projectPath)
+  },
+
+  getProjectCliHours(): { project_path: string; source: string; total_ms: number }[] {
+    return stmts.getProjectCliHours.all() as { project_path: string; source: string; total_ms: number }[]
   },
 
   updateSessionSummary(sessionId: string, summary: string) {
@@ -690,17 +853,33 @@ export const dbOps = {
   getAnalyticsByModel(since: number) { return stmts.analyticsByModel.all(since)       as any[] },
   getProjectHours(since: number)     { return stmts.analyticsProjectHours.all(since)  as any[] },
 
-  getTopTools(days = 30, by: 'cost' | 'count' | 'duration' = 'cost', limit = 10) {
+  getCoachEvents(sessionIds: string[]): { session_id: string; type: string; tool_name: string | null; tool_input: string | null; ts: number }[] {
+    if (sessionIds.length === 0) return []
+    const placeholders = sessionIds.map(() => '?').join(',')
+    const cutoff = Date.now() - 2 * 60 * 60_000
+    return db.prepare(`
+      SELECT session_id, type, tool_name, tool_input, ts
+      FROM events
+      WHERE session_id IN (${placeholders})
+        AND type IN ('PreToolUse', 'Done', 'Stop')
+        AND ts > ?
+      ORDER BY ts ASC
+    `).all(...sessionIds, cutoff) as any[]
+  },
+
+  getTopTools(days = 30, by: 'cost' | 'count' | 'duration' = 'cost', limit = 10, source: 'all' | 'claude-code' | 'opencode' = 'all') {
     const since = Date.now() - days * 86_400_000
     const stmt = by === 'count' ? stmts.getTopToolsByCount
       : by === 'duration' ? stmts.getTopToolsByDuration
       : stmts.getTopToolsByCost
-    const tools = stmt.all(since, since, limit) as Array<{
-      tool_name: string; count: number; total_duration_ms: number; total_cost_usd: number
+    const tools = stmt.all(since, since, source, source, limit) as Array<{
+      tool_name: string; source: string; count: number; total_duration_ms: number; total_cost_usd: number
     }>
-    const other = stmts.getUnattributedCost.get(since, since, since) as { other_cost_usd: number }
-    if (other.other_cost_usd > 0) {
-      tools.push({ tool_name: 'Other', count: 0, total_duration_ms: 0, total_cost_usd: other.other_cost_usd })
+    if (source === 'all') {
+      const other = stmts.getUnattributedCost.get(since, since, since) as { other_cost_usd: number }
+      if (other.other_cost_usd > 0) {
+        tools.push({ tool_name: 'Other', source: 'claude-code', count: 0, total_duration_ms: 0, total_cost_usd: other.other_cost_usd })
+      }
     }
     return tools
   },
@@ -741,6 +920,33 @@ export const dbOps = {
     return stmts.getHourlyDistribution.all(since) as { hour: number; session_count: number }[]
   },
 
+  updateSessionSemantic(sessionId: string, avgOutputChars: number, errorBlockCount: number, semanticLoopCount = 0) {
+    stmts.updateSessionSemantic.run(avgOutputChars, errorBlockCount, semanticLoopCount, sessionId)
+  },
+
+  upsertAssistantTurns(sessionId: string, turns: AssistantTurnRow[]) {
+    db.prepare(`DELETE FROM assistant_turns WHERE session_id = ?`).run(sessionId)
+    const insert = db.prepare(`
+      INSERT INTO assistant_turns (session_id, turn_index, ts, text_preview, tool_calls, error_count, output_chars, context_used)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    for (const t of turns) {
+      insert.run(sessionId, t.turn_index, t.ts ?? null, t.text_preview ?? null, JSON.stringify(t.tool_calls ?? []), t.error_count, t.output_chars, t.context_used)
+    }
+  },
+
+  getAssistantTurns(sessionId: string): AssistantTurnRow[] {
+    return (stmts.getAssistantTurns.all(sessionId) as any[]).map(r => ({
+      turn_index:   r.turn_index,
+      ts:           r.ts ?? undefined,
+      text_preview: r.text_preview ?? undefined,
+      tool_calls:   r.tool_calls ? JSON.parse(r.tool_calls) : [],
+      error_count:  r.error_count,
+      output_chars: r.output_chars,
+      context_used: r.context_used ?? 0,
+    }))
+  },
+
   getCacheReadByModel(days: number) {
     const since = Date.now() - days * 86_400_000
     return db.prepare(`
@@ -763,5 +969,112 @@ export const dbOps = {
       GROUP BY dominant_model
       ORDER BY total_cost DESC
     `).all(since) as { model: string; total_cost: number; session_count: number }[]
+  },
+
+  // ─── File intent coordination ──────────────────────────────────────────────
+
+  insertIntent(tool: string, sessionId: string, taskDesc: string | undefined): number {
+    const res = db.prepare(`
+      INSERT INTO file_intents (tool, session_id, task_desc, status, acquired_at, last_heartbeat)
+      VALUES (?, ?, ?, 'active', ?, ?)
+    `).run(tool, sessionId, taskDesc ?? null, Date.now(), Date.now())
+    return Number(res.lastInsertRowid)
+  },
+
+  insertIntentFile(intentId: number, filePath: string, operation: string, lineStart?: number, lineEnd?: number) {
+    db.prepare(`
+      INSERT INTO file_intent_files (intent_id, file_path, operation, line_start, line_end)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(intentId, filePath, operation, lineStart ?? null, lineEnd ?? null)
+  },
+
+  getWriteConflicts(filePaths: string[], excludeTool: string): { file_path: string; tool: string; session_id: string; task_desc: string | null; acquired_at: number }[] {
+    if (filePaths.length === 0) return []
+    const placeholders = filePaths.map(() => '?').join(',')
+    return db.prepare(`
+      SELECT f.file_path, i.tool, i.session_id, i.task_desc, i.acquired_at
+      FROM file_intent_files f
+      JOIN file_intents i ON i.id = f.intent_id
+      WHERE f.file_path IN (${placeholders})
+        AND f.operation = 'write'
+        AND i.status = 'active'
+        AND i.tool != ?
+    `).all(...filePaths, excludeTool) as { file_path: string; tool: string; session_id: string; task_desc: string | null; acquired_at: number }[]
+  },
+
+  getIntent(id: number): { tool: string; session_id: string; task_desc: string | null } | undefined {
+    return db.prepare(`SELECT tool, session_id, task_desc FROM file_intents WHERE id = ?`).get(id) as any
+  },
+
+  releaseIntent(id: number) {
+    db.prepare(`
+      UPDATE file_intents SET status = 'done', released_at = ? WHERE id = ?
+    `).run(Date.now(), id)
+  },
+
+  heartbeatIntent(id: number) {
+    db.prepare(`
+      UPDATE file_intents SET last_heartbeat = ? WHERE id = ? AND status = 'active'
+    `).run(Date.now(), id)
+  },
+
+  getIntentFiles(id: number): { file_path: string; operation: string }[] {
+    return db.prepare(`
+      SELECT file_path, operation FROM file_intent_files WHERE intent_id = ?
+    `).all(id) as { file_path: string; operation: string }[]
+  },
+
+  getActiveToolsInProject(projectPath: string, excludeTool: string): { source: string; last_event_at: number }[] {
+    const since = Date.now() - 10 * 60_000
+    return db.prepare(`
+      SELECT COALESCE(source, 'claude-code') AS source, MAX(last_event_at) AS last_event_at
+      FROM sessions
+      WHERE project_path = ?
+        AND COALESCE(source, 'claude-code') != ?
+        AND last_event_at >= ?
+      GROUP BY COALESCE(source, 'claude-code')
+    `).all(projectPath, excludeTool, since) as { source: string; last_event_at: number }[]
+  },
+
+  releaseOrphanedIntents(): void {
+    db.prepare(`UPDATE file_intents SET status = 'stale' WHERE status = 'active'`).run()
+    db.prepare(`DELETE FROM file_intents WHERE status IN ('done','stale')`).run()
+  },
+
+  markStaleIntents(): { id: number; tool: string; task_desc: string | null }[] {
+    const cutoff = Date.now() - 10 * 60_000
+    const stale = db.prepare(`
+      SELECT id, tool, task_desc FROM file_intents
+      WHERE status = 'active' AND (last_heartbeat IS NULL OR last_heartbeat < ?)
+    `).all(cutoff) as { id: number; tool: string; task_desc: string | null }[]
+    if (stale.length > 0) {
+      const ids = stale.map(s => s.id)
+      db.prepare(`UPDATE file_intents SET status = 'stale' WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids)
+    }
+    return stale
+  },
+
+  deleteOldStaleIntents() {
+    const cutoff = Date.now() - 60 * 60_000
+    db.prepare(`DELETE FROM file_intents WHERE status IN ('done','stale') AND COALESCE(released_at, acquired_at) < ?`).run(cutoff)
+  },
+
+  hasActiveIntent(tool: string, filePath: string): boolean {
+    const row = db.prepare(`
+      SELECT 1 FROM file_intents i
+      JOIN file_intent_files f ON f.intent_id = i.id
+      WHERE i.tool = ? AND f.file_path = ? AND i.status = 'active'
+      LIMIT 1
+    `).get(tool, filePath)
+    return !!row
+  },
+
+  getActiveIntents(): { id: number; tool: string; file_path: string }[] {
+    return db.prepare(`
+      SELECT i.id, i.tool, f.file_path
+      FROM file_intents i
+      JOIN file_intent_files f ON f.intent_id = i.id
+      WHERE i.status = 'active'
+    `).all() as { id: number; tool: string; file_path: string }[]
   },
 }

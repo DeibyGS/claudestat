@@ -8,6 +8,7 @@ export interface TraceEvent {
   session_id?:   string
   cwd?:          string
   skill_parent?: string
+  text_preview?: string
 }
 
 export interface LoopAlert {
@@ -28,6 +29,8 @@ export interface CostInfo {
   context_used?:    number
   context_window?:  number
   model?:           string
+  source?:          string
+  started_at?:      number
   projected_hourly_usd?: number
 }
 
@@ -74,11 +77,12 @@ export interface ActiveSource {
   output_tokens: number
   cache_read:    number
   cache_creation: number
+  project?:      string | null
 }
 
 // ─── Historial y proyectos ────────────────────────────────────────────────────
 
-export type SessionMode = 'directo' | 'agentes' | 'skills' | 'agentes+skills'
+export type SessionMode = 'directo' | 'agentes' | 'skills' | 'agentes+skills' | 'sub-agente'
 
 export interface SessionSummary {
   id:             string
@@ -100,6 +104,8 @@ export interface SessionSummary {
   git_dirty?:   boolean
   git_ahead?:   number
   git_behind?:  number
+  source?:      string
+  is_sub_agent?: boolean
 }
 
 export interface GitInfo {
@@ -162,6 +168,7 @@ export interface ProjectSummary {
   progress:       HandoffProgress
   model_usage?:   ModelUsage
   insights?:      PatternInsight[]
+  cli_hours?:     Record<string, number>
 }
 
 // ─── Meta-stats (KPIs de contexto) ────────────────────────────────────────────
@@ -242,4 +249,22 @@ export interface QuotaStats {
   p90Tokens:    number
   p90Cost:      number
   sessionCount: number
+}
+
+export interface AssistantTurnData {
+  turn_index:   number
+  ts?:          number
+  text_preview?: string
+  tool_calls:   string[]
+  error_count:  number
+  output_chars: number
+  context_used: number
+}
+
+export interface AgentNode {
+  id:             string
+  dominant_model?: string
+  total_cost_usd?: number
+  started_at:     number
+  children:       AgentNode[]
 }

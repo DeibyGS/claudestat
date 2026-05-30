@@ -63,13 +63,50 @@ opencodeReaderRouter.get('/api/opencode/session/:id', (req: Request, res: Respon
     const { id: sessionId } = req.params
     const db = openDb()
 
-    // Get all messages for this session ordered by time
+    // ── Find all related session IDs (OpenCode creates one session per prompt) ──
+    // Look up directory for this session
+    const sessionRow = db.prepare(`
+      SELECT directory, time_created FROM session WHERE id = ?
+    `).get(sessionId) as { directory: string | null; time_created: number } | undefined
+
+    let sessionIds = [sessionId]
+    if (sessionRow?.directory) {
+      // Find sessions with same directory, ordered by creation time
+      const sameDir = db.prepare(`
+        SELECT id, time_created FROM session
+        WHERE directory = ? AND time_archived IS NULL
+        ORDER BY time_created ASC
+      `).all(sessionRow.directory) as Array<{ id: string; time_created: number }>
+
+      if (sameDir.length > 1) {
+        // Locate our session in the sorted list
+        let idx = sameDir.findIndex(s => s.id === sessionId)
+        if (idx !== -1) {
+          // Expand forward: consecutive sessions with gap < 60s
+          let end = idx
+          for (let i = idx + 1; i < sameDir.length; i++) {
+            if (sameDir[i].time_created - sameDir[i - 1].time_created > 300_000) break
+            end = i
+          }
+          // Expand backward
+          let begin = idx
+          for (let i = idx - 1; i >= 0; i--) {
+            if (sameDir[begin].time_created - sameDir[i].time_created > 300_000) break
+            begin = i
+          }
+          sessionIds = sameDir.slice(begin, end + 1).map(s => s.id)
+        }
+      }
+    }
+
+    // ── Query messages from ALL sessions in the group ──
+    const placeholders = sessionIds.map(() => '?').join(',')
     const messages = db.prepare(`
       SELECT id, time_created, time_updated, data
       FROM message
-      WHERE session_id = ?
+      WHERE session_id IN (${placeholders})
       ORDER BY time_created ASC
-    `).all(sessionId) as Array<{
+    `).all(...sessionIds) as Array<{
       id: string
       time_created: number
       time_updated: number

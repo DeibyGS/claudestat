@@ -82,8 +82,12 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12, opacity: 0.25 }}>
             <Terminal size={36} />
           </div>
-          <div style={{ fontSize: 13, fontWeight: 500, color: '#6e7681', marginBottom: 4 }}>Esperando actividad…</div>
-          <div style={{ fontSize: 11 }}>Abre {cliLabel} y empieza a trabajar</div>
+          <div style={{ fontSize: 13, fontWeight: 500, color: '#6e7681', marginBottom: 4 }}>
+            {cost ? 'Waiting for next message…' : 'Waiting for activity…'}
+          </div>
+          <div style={{ fontSize: 11 }}>
+            {cost ? `${cliLabel} is ready — session active` : `Open ${cliLabel} and start working`}
+          </div>
         </div>
       </div>
     )
@@ -142,25 +146,42 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
       </div>
 
       {/* ── Right: block detail (full width) ── */}
-      <div style={{ flex: 1, overflow: 'hidden', background: '#0d1117' }}>
-        {selectedBlock
-          ? (
-            <BlockDetailPanel
-              key={selectedBlock.index}
-              block={selectedBlock}
-              startedAt={startedAt}
-              blockCost={blockCosts[selectedBlock.index - 1]}
-              sessionModel={cost?.model}
-              prompt={prompts.find(p => p.index === selectedBlock.index)?.text}
-              defaultActorLabel={actorLabel}
-            />
-          )
-          : (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#484f58', fontSize: 12 }}>
-              Select a block
-            </div>
-          )
-        }
+      <div style={{ flex: 1, overflow: 'hidden', background: '#0d1117', display: 'flex', flexDirection: 'column' }}>
+        {/* Source badge */}
+        <div style={{
+          flexShrink: 0, padding: '4px 14px', borderBottom: '1px solid #21262d',
+          display: 'flex', alignItems: 'center', gap: 5, fontSize: 10,
+          background: '#090d12', color: '#7d8590',
+        }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: '50%',
+            background: cliLabel === 'OpenCode' ? '#3fb950' : '#58a6ff',
+            display: 'inline-block', flexShrink: 0,
+          }} />
+          {cliLabel}
+          <span style={{ color: '#484f58' }}>·</span>
+          Block view
+        </div>
+        <div style={{ flex: 1, overflow: 'hidden' }}>
+          {selectedBlock
+            ? (
+              <BlockDetailPanel
+                key={selectedBlock.index}
+                block={selectedBlock}
+                startedAt={startedAt}
+                blockCost={blockCosts[selectedBlock.index - 1]}
+                sessionModel={cost?.model}
+                prompt={prompts.find(p => p.index === selectedBlock.index)?.text}
+                defaultActorLabel={actorLabel}
+              />
+            )
+            : (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#484f58', fontSize: 12 }}>
+                Select a block
+              </div>
+            )
+          }
+        </div>
       </div>
     </div>
   )

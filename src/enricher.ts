@@ -21,9 +21,10 @@ import './watchers/opencode'
 import './watchers/amp'
 import './watchers/droid'
 import './watchers/codebuff'
-import type { CostUpdate } from './db'
+import { dbOps, type CostUpdate } from './db'
 // Re-export Claude Code-specific utilities for routes/stream and routes/misc
-export { getAllBlockCostsForSession, getContextWindow, getSessionPrompts } from './watchers/claude-code'
+export { getAllBlockCostsForSession, getSessionPrompts } from './watchers/claude-code'
+export { getContextWindow } from './pricing'
 
 export type CostUpdateCallback     = (sessionId: string, cost: CostUpdate, source?: string) => void
 export type CompactDetectedCallback = (sessionId: string) => void
@@ -94,7 +95,7 @@ export function startEnricher(
 
   watcher = chokidar.watch(watchPaths, {
     persistent: true,
-    ignoreInitial: true,
+    ignoreInitial: false,
     awaitWriteFinish: {
       stabilityThreshold: 200,
       pollInterval: 100,
@@ -127,15 +128,17 @@ export function startEnricher(
 
   // ─── Poll-based adapters (e.g. OpenCode SQLite) ─────────────────────────────
   const POLL_INTERVAL_MS = 10_000
+  const POLL_LOOKBACK_MS = 7 * 24 * 60 * 60_000  // backfill 7 days on first start
   for (const adapter of adapters) {
     if (!isPollable(adapter)) continue
-    let lastPoll = Date.now()
+    let lastPoll = Date.now() - POLL_LOOKBACK_MS
     const interval = setInterval(async () => {
       const since = lastPoll
       lastPoll = Date.now()
       const sessions = await adapter.pollSessions(since)
-      for (const { sessionId, cost } of sessions) {
+      for (const { sessionId, cost, cwd } of sessions) {
         onUpdate(sessionId, cost, adapter.name)
+        if (cwd) dbOps.updateSessionProject(sessionId, cwd)
       }
     }, POLL_INTERVAL_MS)
     interval.unref()

@@ -894,6 +894,39 @@ export const dbOps = {
     }
   },
 
+  getPrevWeekInsight() {
+    const now      = Date.now()
+    const weekEnd  = now - 7 * 86_400_000
+    const weekStart = now - 14 * 86_400_000
+
+    const row = db.prepare(`
+      SELECT
+        COUNT(*)                               AS total_sessions,
+        COALESCE(SUM(total_cost_usd), 0)       AS total_cost,
+        COALESCE(SUM(total_input_tokens), 0)   AS input_tokens,
+        COALESCE(SUM(total_output_tokens), 0)  AS output_tokens,
+        COALESCE(SUM(total_cache_read), 0)     AS cache_read,
+        COALESCE(SUM(loops_detected), 0)       AS total_loops,
+        COALESCE(AVG(efficiency_score), 100)   AS avg_efficiency,
+        MIN(started_at)                        AS week_start,
+        MAX(started_at)                        AS week_end
+      FROM sessions
+      WHERE started_at >= ? AND started_at < ?
+    `).get(weekStart, weekEnd) as any
+
+    return {
+      total_sessions: row.total_sessions ?? 0,
+      total_cost:     row.total_cost     ?? 0,
+      input_tokens:   row.input_tokens   ?? 0,
+      output_tokens:  row.output_tokens  ?? 0,
+      cache_read:     row.cache_read     ?? 0,
+      total_loops:    row.total_loops    ?? 0,
+      avg_efficiency: row.avg_efficiency ?? 100,
+      week_start:     row.week_start     ?? weekStart,
+      week_end:       row.week_end       ?? null,
+    }
+  },
+
   setMeta(key: string, value: string) {
     stmts.upsertMeta.run(key, value)
   },

@@ -14,8 +14,19 @@
  */
 
 const eventType = process.argv[2] || 'Unknown'
-const DAEMON_URL     = 'http://localhost:7337/event'
-const KILL_SWITCH_URL = 'http://localhost:7337/kill-switch'
+const fs = require('fs')
+const os = require('os')
+
+// Read port from ~/.claudestat/port (written by daemon on startup). Fallback: 7337.
+let DAEMON_PORT = 7337
+try {
+  const portFile = require('path').join(os.homedir(), '.claudestat', 'port')
+  const raw = fs.readFileSync(portFile, 'utf8').trim()
+  const parsed = parseInt(raw, 10)
+  if (!isNaN(parsed) && parsed >= 1024 && parsed <= 65535) DAEMON_PORT = parsed
+} catch {}
+
+const DAEMON_URL     = `http://localhost:${DAEMON_PORT}/event`
 
 let rawData = ''
 process.stdin.on('data', chunk => { rawData += chunk })
@@ -29,36 +40,43 @@ process.stdin.on('end', () => {
     ...hookData
   }
 
-  // Para PreToolUse: enviamos el evento Y consultamos el kill-switch en paralelo.
-  // Si el daemon bloquea, salimos con exit(2) para cancelar la acción.
+  // Para PreToolUse: enviamos el evento Y leemos el archivo de pausa local.
+  // Si existe pause.signal, mostramos warning y salimos según killSwitchForce.
   if (eventType === 'PreToolUse') {
-    Promise.all([
-      // 1. Registrar el evento (fire-and-forget, no nos importa el resultado)
-      fetch(DAEMON_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(1500),
-      }).catch(() => null),
+    fetch(DAEMON_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(1500),
+    }).catch(() => null)
 
-      // 2. Consultar el kill-switch con timeout corto para no retrasar a Claude
-      fetch(KILL_SWITCH_URL, {
-        signal: AbortSignal.timeout(1500),
-      })
-        .then(r => r.json())
-        .catch(() => ({ blocked: false })),  // daemon no disponible → fail-open
-    ])
-    .then(([_, ks]) => {
-      if (ks && ks.blocked) {
-        process.stderr.write(`\n🚫 claudestat — kill switch active\n`)
-        process.stderr.write(`   ${ks.reason ?? 'Usage quota exceeded.'}\n`)
-        process.stderr.write(`   To disable: claudestat config --kill-switch false\n\n`)
+    // Check pause signal file (written by daemon when quota threshold reached)
+    const signalFile = require('path').join(os.homedir(), '.claudestat', 'pause.signal')
+    let signalMsg = null
+    try { signalMsg = fs.readFileSync(signalFile, 'utf8').trim() } catch {}
+
+    if (signalMsg) {
+      process.stderr.write(`\n⚠️  claudestat — quota warning\n`)
+      process.stderr.write(`   ${signalMsg}\n`)
+
+      // Read config to check killSwitchForce
+      let forceBlock = false
+      try {
+        const cfgPath = require('path').join(os.homedir(), '.claudestat', 'config.json')
+        const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'))
+        forceBlock = cfg.killSwitchForce === true
+      } catch {}
+
+      if (forceBlock) {
+        process.stderr.write(`   Blocked (killSwitchForce is enabled). Run: claudestat resume\n\n`)
         process.exit(2)
       } else {
+        process.stderr.write(`   Continuing. To pause manually: claudestat resume (removes signal)\n\n`)
         process.exit(0)
       }
-    })
-    .catch(() => process.exit(0))  // cualquier error → no bloquear
+    } else {
+      process.exit(0)
+    }
 
   } else {
     // Para todos los demás tipos (SessionStart, PostToolUse, Stop):

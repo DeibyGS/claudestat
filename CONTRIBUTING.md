@@ -18,7 +18,7 @@ If you're unsure whether your idea fits, open an issue first and describe what y
 
 ## Setup
 
-**Requirements:** Node.js >= 18 (Node 22 recommended), Claude Code installed locally.
+**Requirements:** Node.js >= 22, Claude Code installed locally.
 
 ```bash
 # 1. Fork the repo on GitHub, then clone your fork
@@ -53,21 +53,33 @@ claudestat/
 │   ├── index.ts            # CLI entry point (commander)
 │   ├── daemon.ts           # Express server + event loop
 │   ├── db.ts               # SQLite operations (node:sqlite)
-│   ├── pattern-analyzer.ts # Usage pattern detection
+│   ├── intelligence.ts     # Loop detection, pattern analysis, weekly insights
+│   ├── insights.ts         # Usage insights and recommendations
 │   ├── enricher.ts         # Correlates hook events with JSONL token data
-│   ├── intelligence.ts     # AI-generated insights and reports
-│   ├── quota-tracker.ts    # 5h cycle + weekly limit tracking
+│   ├── notifier.ts         # Webhook + desktop notifications
+│   ├── export.ts           # Data export (JSON, markdown, CSV)
+│   ├── logger.ts           # Structured logging with log levels
 │   ├── install.ts          # Hook installer / uninstaller
-│   └── config.ts           # Config read/write
+│   ├── config.ts           # Config read/write/validate
+│   ├── paths.ts            # Resolved paths for data, hooks, logs
+│   ├── service.ts          # System service management (launchd/systemd)
+│   └── routes/             # Express route handlers
+│       ├── projects.ts
+│       ├── helpers.ts
+│       └── misc.ts
 ├── dashboard/              # Frontend — React + Vite + Recharts
 │   └── src/
 │       └── components/     # One file per view/component
 ├── hooks/
 │   └── event.js            # Hook script copied to ~/.claudestat/hooks/
 ├── tests/
-│   ├── index.ts            # Test entry point
-│   ├── pattern-analyzer.test.ts  # 26 unit tests
-│   └── db.test.ts          # 18 integration tests (in-memory SQLite)
+│   ├── index.ts            # Test entry point — registers all test files
+│   ├── db.test.ts          # DB integration tests (in-memory SQLite)
+│   ├── intelligence.test.ts
+│   ├── config.test.ts
+│   ├── export.test.ts
+│   ├── helpers.test.ts
+│   └── ...                 # 25+ test files total
 └── package.json
 ```
 
@@ -93,7 +105,7 @@ refactor/what-you-simplified
 
 ### Adding a pattern to the analyzer
 
-Open `src/pattern-analyzer.ts`. Each pattern is a self-contained block that pushes to the `insights` array. Follow the existing structure:
+Open `src/intelligence.ts` or `src/insights.ts`. Each pattern is a self-contained block that returns or pushes to the insights array. Follow the existing structure:
 
 ```typescript
 // 1. Compute the metric
@@ -110,7 +122,7 @@ if (myRatio >= THRESHOLD) {
 }
 ```
 
-Then add a test in `tests/pattern-analyzer.test.ts` covering at least: triggered case, non-triggered case, and any edge case (e.g. division by zero).
+Then add a test in `tests/intelligence.test.ts` covering at least: triggered case, non-triggered case, and any edge case (e.g. division by zero).
 
 ---
 
@@ -122,12 +134,15 @@ All tests use `node:test` (built-in, zero extra deps) with `tsx/cjs` for TypeScr
 npm test
 ```
 
-Expected output: **214 tests passing** (as of v1.1.1). All tests must pass before opening a PR.
+Expected output: **271 tests passing** (as of v1.8.0). All tests must pass before opening a PR.
 
-- `tests/pattern-analyzer.test.ts` — pure unit tests, no DB, no side effects
 - `tests/db.test.ts` — integration tests against an in-memory SQLite DB
+- `tests/intelligence.test.ts` — loop detection, pattern analysis
+- `tests/config.test.ts` — config validation
+- `tests/export.test.ts` — export formats and file output
+- `tests/helpers.test.ts` — `findGitRoot`, `findProjectCwdForFile`
 
-If you add a new `dbOps` function, add a test in `db.test.ts`. If you modify `analyzePatterns`, add a test in `pattern-analyzer.test.ts`.
+If you add a new `dbOps` function, add a test in `db.test.ts`. If you modify `intelligence.ts`, add a test in `tests/intelligence.test.ts`.
 
 ---
 

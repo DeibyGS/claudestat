@@ -22,7 +22,7 @@ import { dbOps }                                                    from './db'
 import { startEnricher, stopEnricher }                                        from './enricher'
 import { readConfig, getWarnLevel }                                 from './config'
 import { computeQuota }                                              from './quota-tracker'
-import { sendDesktopNotification }                                   from './notifier'
+import { sendDesktopNotification, sendWebhookAlert } from './notifier'
 import { eventsRouter, onCostUpdate, onCompactDetected }            from './routes/events'
 import { streamRouter, getSseClientsSize, broadcast }               from './routes/stream'
 import { projectsRouter, inferProjectCwd }                          from './routes/projects'
@@ -36,9 +36,10 @@ import { intentsRouter }                                             from './rou
 import { getProjectsCached, invalidateProjectsCache }               from './cache/projects-cache'
 import { stopRateLimiter }                                            from './middleware/rate-limiter'
 import { summarizeSession }                                         from './summarizer'
-import { getPidFile, getClaudestatDir, getDashboardDir, portCheckCmd }            from './paths'
+import { getPidFile, getClaudestatDir, getDashboardDir, portCheckCmd, writePortFile, getPauseSignalFile }            from './paths'
+import { logger } from './logger'
 
-const PORT = 7337
+const PORT = readConfig().port
 const app  = express()
 app.use(express.json())
 
@@ -103,7 +104,7 @@ function migrateSessionProjects() {
       tagged++
     }
   }
-  if (tagged > 0) console.log(`[daemon] ${tagged} sessions tagged with project`)
+  if (tagged > 0) logger.info(`${tagged} sessions tagged with project`)
 }
 
 /**
@@ -122,9 +123,9 @@ async function migrateSessionSummaries(limit = 5) {
       const summary     = await summarizeSession(events, s.total_cost_usd ?? 0, projectName)
       if (summary) {
         dbOps.updateSessionSummary(s.id, summary)
-        console.log(`[daemon] Summary generated for session ${s.id.slice(0, 8)}: "${summary}"`)
+        logger.info(`Summary generated for session ${s.id.slice(0, 8)}: "${summary}"`)
       }
-    } catch (err) { console.error('[daemon] Error generating summary:', err) }
+    } catch (err) { logger.error(`Error generating summary: ${err}`) }
   }
 }
 
@@ -174,6 +175,7 @@ function checkAlertLevel(
   const prevRank = lastLevel ? LEVEL_RANK[lastLevel as keyof typeof LEVEL_RANK] ?? 0 : 0
   const currRank = LEVEL_RANK[level]
   if (currRank > prevRank) {
+    logger.warn(logMsg)
     process.stderr.write(`${LEVEL_COLOR[level]}${logMsg}\x1b[0m\n`)
     sendDesktopNotification(notifTitle, notifBody)
   }
@@ -189,8 +191,22 @@ function startAlertPolling() {
       const resetMins = Math.ceil(data.cycleResetMs / 60_000)
 
       // ── Cycle 5h alerts ──────────────────────────────────────────────────────
+      const cycleLevel = getWarnLevel(data.cyclePct, cfg.warnThresholds)
+      if (cycleLevel && cycleLevel !== _lastCycleAlertLevel) {
+        const webhookUrl = readConfig().webhookUrl
+        if (webhookUrl) {
+          sendWebhookAlert(webhookUrl, {
+            title: 'claudestat — 5h cycle alert',
+            body: `${data.cyclePct}% of cycle used · resets in ${resetMins}m`,
+            level: cycleLevel,
+            cyclePct: data.cyclePct,
+            resetInMins: resetMins,
+            burnRate: data.burnRateTokensPerMin,
+          })
+        }
+      }
       _lastCycleAlertLevel = checkAlertLevel(
-        getWarnLevel(data.cyclePct, cfg.warnThresholds),
+        cycleLevel,
         _lastCycleAlertLevel,
         `[claudestat] ⚠️  5h cycle at ${data.cyclePct}% (${data.cyclePrompts}/${data.cycleLimit} prompts)`,
         'claudestat — 5h cycle alert',
@@ -198,8 +214,22 @@ function startAlertPolling() {
       )
 
       // ── Weekly alerts ────────────────────────────────────────────────────────
+      const weeklyLevel = getWarnLevel(data.weeklyPctAll, cfg.weeklyWarnThresholds)
+      if (weeklyLevel && weeklyLevel !== _lastWeeklyAlertLevel) {
+        const webhookUrl = readConfig().webhookUrl
+        if (webhookUrl) {
+          sendWebhookAlert(webhookUrl, {
+            title: 'claudestat — Weekly usage alert',
+            body: `${data.weeklyPctAll}% of weekly quota used`,
+            level: weeklyLevel,
+            cyclePct: data.cyclePct,
+            weeklyPct: data.weeklyPctAll,
+            resetInMins: resetMins,
+          })
+        }
+      }
       _lastWeeklyAlertLevel = checkAlertLevel(
-        getWarnLevel(data.weeklyPctAll, cfg.weeklyWarnThresholds),
+        weeklyLevel,
         _lastWeeklyAlertLevel,
         `[claudestat] ⚠️  Weekly usage at ${data.weeklyPctAll}%`,
         'claudestat — Weekly usage alert',
@@ -213,6 +243,7 @@ function startAlertPolling() {
           _resetReminderFired = false  // cycle reset happened — arm reminder again
         } else if (data.cycleResetMs <= reminderMs && data.cycleResetMs > 0 && !_resetReminderFired) {
           const mins = Math.ceil(data.cycleResetMs / 60_000)
+          logger.info(`Quota resets in ${mins}m — good time to wrap up`)
           process.stderr.write(`\x1b[36m[claudestat] ⏰  Quota resets in ${mins}m — good time to wrap up\x1b[0m\n`)
           sendDesktopNotification(
             'claudestat — Quota reset soon',
@@ -220,6 +251,16 @@ function startAlertPolling() {
           )
           _resetReminderFired = true
         }
+      }
+
+      // Write or remove pause signal file based on kill switch state
+      const signalFile = getPauseSignalFile()
+      if (cfg.killSwitchEnabled && data.cyclePct >= cfg.killSwitchThreshold) {
+        const msg = `Quota at ${data.cyclePct}% — threshold is ${cfg.killSwitchThreshold}%. Resets in ${Math.ceil(data.cycleResetMs / 60_000)}m.`
+        try { fs.writeFileSync(signalFile, msg) } catch {}
+        broadcast({ type: 'kill_switch', payload: { blocked: true, reason: msg } })
+      } else {
+        try { fs.unlinkSync(signalFile) } catch {}
       }
     } catch {
       // quota read failed — ignore
@@ -248,6 +289,7 @@ function cleanPid() {
 export function startDaemon() {
   _server = app.listen(PORT, '127.0.0.1', () => {
     writePid()
+    writePortFile(PORT)
     process.on('exit', cleanPid)
     process.on('SIGTERM', () => { if (_server) shutdown(_server); process.exit(0) })
     process.on('SIGINT',  () => { if (_server) shutdown(_server); process.exit(0) })
@@ -275,7 +317,7 @@ export function startDaemon() {
     // Se ejecuta en background para no retrasar el inicio del servidor
     setImmediate(() => {
       const projects = getProjectsCached()
-      console.log(`[daemon] ${projects?.length ?? 0} projects scanned`)
+      logger.info(`${projects?.length ?? 0} projects scanned`)
     })
 
     // Refresh automático del cache de proyectos cada 2 minutos
@@ -297,7 +339,7 @@ export function startDaemon() {
       if (dbOps.getWeeklyReportByDate(dateLabel)) return   // ya existe
       const markdown = generateReport(dateLabel, cfg)
       dbOps.insertWeeklyReport(dateLabel, markdown)
-      console.log(`[daemon] Report auto-generated: ${dateLabel}`)
+      logger.info(`Report auto-generated: ${dateLabel}`)
     }, 60_000)
 
     // Al arrancar: liberar intents activos de sesiones anteriores (ya no hay nadie que los use)

@@ -1,42 +1,76 @@
 # claudestat
-> Real-time token monitoring and cost dashboard for Claude Code
+> Real-time token monitoring, cost intelligence, and quota guard for Claude Code & OpenCode
 
-claudestat is an open-source CLI tool that provides observability for Claude Code sessions.
-It tracks token usage, API costs, quota consumption, and detects inefficiency patterns
-like loops and excessive context usage.
+claudestat is an open-source CLI tool that provides observability for Claude Code and OpenCode sessions.
+It tracks token usage, API costs, quota consumption, detects inefficiency patterns,
+and integrates directly into both tools via lifecycle hooks.
 
 ## Installation
 npm install -g @statforge/claudestat
 
 ## Quick start
-claudestat install   # wire hooks into Claude Code
-claudestat start     # start background daemon
-open http://localhost:7337  # live dashboard
+claudestat setup      # interactive wizard: plan → port → threshold → hooks → doctor
+claudestat start      # start background daemon
+claudestat watch      # live terminal trace
+claudestat logs       # view structured daemon logs (--follow, --level)
+claudestat weekly     # weekly usage summary with week-over-week comparison
+claudestat top        # rank tools by cost, count, or duration (--json)
 
 ## Key capabilities
-- Real-time token cost tracking per tool call
-- Quota guard with configurable kill switch (block new sessions at X%)
-- Loop detection and pattern analysis
+- Real-time token cost tracking per tool call (via Claude Code / OpenCode hooks)
+- Configurable daemon port (default: 7337, `claudestat config --port`)
+- Structured daemon logging with rotation (`claudestat logs --level warn --follow`)
+- Quota guard with configurable kill switch (pause.signal file, hard-block or warn-only)
+- Loop detection, context overuse, and inefficiency pattern analysis
 - Per-session cost breakdown with cache savings
-- Claude Code rate limit alerts (desktop notifications at 70%, 85%, 95%)
-- CLI commands: start, stop, watch, status, top, export, doctor
+- Rate limit alerts (desktop notifications at escalation levels)
+- Week-over-week usage comparison (`claudestat weekly`)
+- NVM-compatible daemon service (launchd/systemd with explicit Node path)
+- CLI commands: setup, start, stop, restart, watch, logs, update, status, top, weekly, insights, project, export, doctor, config, resume, roast
 - Export session data to JSON or CSV
+- Self-update via `claudestat update` (checks npm registry, shows changelog, reinstalls hooks)
 
 ## Use cases
-- Monitor Claude Code token usage in real time
-- Track AI coding costs per session and project
-- Get alerted before hitting quota limits
-- Detect inefficient patterns (loops, context overuse, Bash overuse)
-- Export usage data for reporting or analysis
-- Kill switch: automatically block new sessions when quota is exceeded
+- Monitor Claude Code / OpenCode token usage in real time
+- Track AI coding costs per session, per project, and week-over-week (both tools)
+- Get alerted before hitting quota limits (desktop notifications)
+- Detect inefficient patterns (loops, context overuse, Bash overuse, excessive Write vs Edit)
+- Block runaway sessions automatically with kill-switch (pause.signal)
+- Export usage data for reporting or financial analysis
+- Compare current week vs previous week cost and session volume
+- Diagnose installation health with `claudestat doctor`
 
 ## Compatibility
 - Claude Pro, Max 5, Max 20
-- macOS, Linux, Windows
-- Node.js >= 22
+- OpenCode (all tiers)
+- macOS (launchd), Linux (systemd), Windows
+- Node.js >= 22 (node:sqlite experimental)
+- NVM and other Node version managers (auto-detected)
+
+## CLI Commands
+| Command | Description |
+|---------|-------------|
+| `setup` | Interactive install wizard (port, threshold, hooks, MCP, doctor) |
+| `setup --reset` | Reinstall from scratch (keeps SQLite history) |
+| `start` | Start daemon (auto-starts dashboard on PORT) |
+| `stop` | Stop daemon via HTTP /shutdown or SIGTERM |
+| `restart` | Stop + start daemon |
+| `watch` | Live terminal trace (SSE) |
+| `logs` | View daemon log (--follow, --level, -n) |
+| `update` | Check npm registry and self-update (--dry-run) |
+| `config` | View/edit all options (port, log-level, plan, alerts, kill-switch) |
+| `weekly` | 7-day summary with vs-last-week delta (--json) |
+| `top` | Rank tools by cost/count/duration (--json, avg/call) |
+| `insights` | Cost breakdown, cache savings, efficiency, peak hours |
+| `project` | Cost projection with linear regression |
+| `export` | Export sessions to JSON or CSV |
+| `doctor` | Health check: Node, hooks, service, ports, NVM, db |
+| `resume` | Re-arm kill-switch after it triggered |
+| `roast` | Roast your Claude Code usage habits |
+| `version` | Show current version and check for updates |
 
 ## Keywords
-claude code monitoring, token tracking, AI cost analytics, quota management,
-claude code dashboard, ai observability, claude code hooks, rate limit detection,
-llm cost tracker, claude code token usage, ai agent observability,
-claude code cost tracking, agentic workflow monitoring
+claude code monitoring, opencode monitoring, token tracking, AI cost analytics, quota management,
+claude code dashboard, opencode dashboard, ai observability, claude code hooks, rate limit detection,
+llm cost tracker, claude code token usage, opencode token usage, ai agent observability,
+claude code cost tracking, opencode cost tracking, agentic workflow monitoring, claude code kill switch

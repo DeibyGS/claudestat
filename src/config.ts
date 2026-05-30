@@ -38,6 +38,13 @@ export interface ClaudestatConfig {
   reportDay:            number          // 0=Sun … 6=Sat
   reportTime:           string          // HH:MM
   alertsEnabled:        boolean         // master switch: cycle + weekly + reset + MCP alerts
+  killSwitchForce:      boolean         // if true, blocks instead of just warning (default: false)
+  logLevel:             'debug' | 'info' | 'warn' | 'error'
+  port:                 number          // puerto del daemon (default: 7337)
+  loopThreshold:        number          // calls del mismo tool en ventana para considerar loop
+  loopWindowSecs:       number          // tamaño de la ventana en segundos
+  projectAliases:       Record<string, string>   // { "/path/to/repo": "MyApp" }
+  webhookUrl:           string | null   // URL para alertas externas (null = desactivado)
 }
 
 const CONFIG_PATH = path.join(getClaudestatDir(), 'config.json')
@@ -55,6 +62,13 @@ const DEFAULTS: ClaudestatConfig = {
   reportDay:            1,
   reportTime:           '09:00',
   alertsEnabled:        true,
+  killSwitchForce:      false,
+  logLevel:             'info',
+  port:                 7337,
+  loopThreshold:        8,
+  loopWindowSecs:       120,
+  projectAliases:       {},
+  webhookUrl:           null,
 }
 
 /** Lee la config del disco. Valores ausentes se rellenan con defaults. */
@@ -123,6 +137,33 @@ export function validateConfig(raw: unknown): string | null {
   if ('alertsEnabled' in cfg && typeof cfg.alertsEnabled !== 'boolean')
     return 'alertsEnabled debe ser boolean'
 
+  if ('killSwitchForce' in cfg && typeof cfg.killSwitchForce !== 'boolean')
+    return 'killSwitchForce must be boolean'
+
+  if ('logLevel' in cfg && !['debug', 'info', 'warn', 'error'].includes(cfg.logLevel as string))
+    return 'logLevel must be: debug, info, warn, error'
+
+  if ('loopThreshold' in cfg) {
+    const v = cfg.loopThreshold
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 2 || v > 50)
+      return 'loopThreshold must be an integer between 2 and 50'
+  }
+  if ('loopWindowSecs' in cfg) {
+    const v = cfg.loopWindowSecs
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 10 || v > 600)
+      return 'loopWindowSecs must be an integer between 10 and 600'
+  }
+  if ('projectAliases' in cfg) {
+    const v = cfg.projectAliases
+    if (typeof v !== 'object' || v === null || Array.isArray(v))
+      return 'projectAliases must be an object { "/path": "Alias" }'
+  }
+  if ('webhookUrl' in cfg) {
+    const v = cfg.webhookUrl
+    if (v !== null && (typeof v !== 'string' || (!v.startsWith('http://') && !v.startsWith('https://'))))
+      return 'webhookUrl must be null or a valid http/https URL'
+  }
+
   if ('reportsEnabled' in cfg && typeof cfg.reportsEnabled !== 'boolean')
     return 'reportsEnabled debe ser boolean'
 
@@ -138,6 +179,12 @@ export function validateConfig(raw: unknown): string | null {
   if ('reportTime' in cfg) {
     if (typeof cfg.reportTime !== 'string' || !/^\d{2}:\d{2}$/.test(cfg.reportTime as string))
       return 'reportTime debe tener formato HH:MM'
+  }
+
+  if ('port' in cfg) {
+    const v = cfg.port
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 1024 || v > 65535)
+      return 'port must be an integer between 1024 and 65535'
   }
 
   return null

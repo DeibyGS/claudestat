@@ -282,7 +282,7 @@ Claude Code event
 ## Troubleshooting
 
 **`claudestat start` hangs for ~5 seconds**
-Normal — `require('express')` takes a few seconds on first load.
+Normal — `require('express')` takes a few seconds on first load. The daemon is running; wait for the "Daemon started" confirmation.
 
 **Hooks are not firing / dashboard shows no events**
 Run `claudestat doctor` — it checks every component and prints the exact fix command.
@@ -302,7 +302,38 @@ The daemon polls quota every 60s and logs warnings at 70%, 85%, and 95%. Check a
 **Working with multiple projects**
 claudestat tracks every project automatically. The Projects tab groups sessions by working directory.
 
----
+**Dashboard shows 0 cost / $0.00 for all sessions**
+Token data comes from Claude Code's JSONL files, not from hook events. Make sure Claude Code is writing JSONL logs — check `~/.claude/projects/` for `.jsonl` files. If the directory is empty, Claude Code may not have logging enabled.
+
+**Daemon stops after terminal closes**
+The daemon must be started with `nohup` to persist beyond the shell session:
+```bash
+nohup claudestat start &
+```
+Or use `claudestat setup` which installs a system service (launchd on macOS, systemd on Linux).
+
+**`claudestat export` produces empty output**
+If no sessions appear, the daemon may not have been running during your Claude Code sessions. Check `claudestat status` and restart with `claudestat start`. For historical data only (without a running daemon), export still reads from the local SQLite database — so past sessions captured while the daemon was running are always available.
+
+**Loop detector fires too often / not enough**
+Adjust the threshold and window:
+```bash
+claudestat config --loop-threshold 5   # default: 8 calls
+claudestat config --loop-window 90     # default: 120 seconds
+```
+
+**MCP server not responding**
+Restart the daemon (`claudestat restart`) and verify it's registered:
+```bash
+claude mcp list
+```
+If not listed, re-run: `claude mcp add claudestat -s user -- claudestat-mcp`
+
+**OpenCode sessions not appearing**
+claudestat reads OpenCode data from `~/.local/share/opencode/opencode.db`. If the file does not exist, OpenCode has not run yet or uses a different data path on your system. Run `opencode` at least once to initialize it.
+
+**Node.js experimental SQLite warning on startup**
+Expected — `node:sqlite` is experimental in Node 22. The warning is suppressed automatically. If you see it repeatedly, ensure you are running Node.js 22 or later (`node --version`).
 
 ## FAQ
 

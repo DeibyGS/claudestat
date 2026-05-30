@@ -14,6 +14,7 @@ import readline from 'readline'
 import { execSync, spawnSync } from 'child_process'
 import { getClaudeDir, getClaudestatDir, isWindows } from './paths'
 import { readConfig, writeConfig } from './config'
+import { runDoctor } from './doctor'
 
 const CLAUDESTAT_DIR = getClaudestatDir()
 const CLAUDE_SETTINGS = path.join(getClaudeDir(), 'settings.json')
@@ -152,9 +153,35 @@ export async function runWizard(): Promise<void> {
     }
     console.log(`✓ Plan: ${plan}`)
 
+    // Paso 3b: puerto
+    let port = 7337
+    if (!nonInteractive) {
+      const portInput = await new Promise<string>(resolve =>
+        rl.question(`Port for daemon [default: 7337]: `, resolve)
+      )
+      const parsed = parseInt(portInput.trim(), 10)
+      if (!isNaN(parsed) && parsed >= 1024 && parsed <= 65535) {
+        port = parsed
+      }
+    }
+    console.log(`✓ Port: ${port}`)
+
+    // Paso 3c: kill-switch threshold
+    let threshold = 95
+    if (!nonInteractive) {
+      const tInput = await new Promise<string>(resolve =>
+        rl.question(`Quota threshold for kill-switch warning [default: 95%]: `, resolve)
+      )
+      const parsed = parseInt(tInput.trim(), 10)
+      if (!isNaN(parsed) && parsed >= 50 && parsed <= 100) {
+        threshold = parsed
+      }
+    }
+    console.log(`✓ Kill-switch threshold: ${threshold}%`)
+
     // Paso 4: crear config inicial
     const cfg = readConfig()
-    writeConfig({ ...cfg, plan: plan as any })
+    writeConfig({ ...cfg, plan: plan as any, port, killSwitchThreshold: threshold })
     console.log(`✓ Config created → ${CONFIG_PATH}\n`)
   } finally {
     rl.close()
@@ -165,6 +192,12 @@ export async function runWizard(): Promise<void> {
 
   // Paso 6: registrar MCP server en Claude Code
   installMcp()
+
+  // Paso final: doctor
+  console.log('\n🩺 Running doctor to verify installation...\n')
+  try {
+    await runDoctor()
+  } catch {}
 }
 
 function installMcp(): void {

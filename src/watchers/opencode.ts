@@ -215,6 +215,7 @@ export const opencodeAdapter: PollableAdapter = {
             context_window: getContextWindow(modelId),
             lastModel: modelId,
             firstTs: row.time_created,
+            lastTs:  row.time_updated,
           } satisfies CostUpdate,
         }
       })

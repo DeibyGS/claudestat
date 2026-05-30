@@ -541,17 +541,31 @@ function ModesSection({ dist }: { dist: SystemConfig['modeDistribution'] }) {
 
 function ActiveToolsSection({ config }: { config?: SystemConfig }) {
   const [intents, setIntents] = useState<Array<{ tool: string; file_path: string }>>([])
+  const [open, setOpen] = useState(true)
+
+  function fetchIntents() {
+    fetch('/api/intent/active').then(r => r.json()).then(d => setIntents(d.intents ?? [])).catch(() => {})
+  }
 
   useEffect(() => {
-    const id = setInterval(() => {
-      fetch('/api/intent/active').then(r => r.json()).then(d => setIntents(d.intents ?? [])).catch(() => {})
-    }, 5_000)
+    fetchIntents()
+    const id = setInterval(fetchIntents, 5_000)
     return () => clearInterval(id)
   }, [])
 
   const hasOC = !!config?.opencode
   const activeTools = hasOC ? 2 : 1
-  const hasConflict = intents.some(i => i.tool === 'opencode')
+  const hasConflict = (() => {
+    const filesByTool = new Map<string, Set<string>>()
+    for (const i of intents) {
+      if (!filesByTool.has(i.tool)) filesByTool.set(i.tool, new Set())
+      filesByTool.get(i.tool)!.add(i.file_path)
+    }
+    const ccFiles = filesByTool.get('claude-code')
+    const ocFiles = filesByTool.get('opencode')
+    if (!ccFiles || !ocFiles) return false
+    return [...ccFiles].some(f => ocFiles.has(f))
+  })()
 
   return (
     <Card>
@@ -560,7 +574,7 @@ function ActiveToolsSection({ config }: { config?: SystemConfig }) {
         badge={<span style={{ fontSize: 10, fontWeight: 600, color: '#3fb950', background: '#3fb95018', border: '1px solid #3fb95035', borderRadius: 4, padding: '1px 6px' }}>
           {activeTools} tool{activeTools > 1 ? 's' : ''}
         </span>}
-        open={true} onToggle={() => {}}
+        open={open} onToggle={() => setOpen(v => !v)}
       />
       <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
         <div style={{ flex: 1, background: '#0d1117', borderRadius: 6, padding: '10px 12px', border: '1px solid #21262d' }}>
@@ -611,6 +625,7 @@ function ActiveToolsSection({ config }: { config?: SystemConfig }) {
 function OpenCodeConfigSection({ oc }: { oc: NonNullable<SystemConfig['opencode']> }) {
   const [open, setOpen] = useState(true)
   const model = (oc.config?.small_model as string) ?? (oc.config?.model as string) ?? 'unknown'
+  const largeModel = oc.config?.large_model as string | undefined
 
   return (
     <Card>
@@ -629,6 +644,16 @@ function OpenCodeConfigSection({ oc }: { oc: NonNullable<SystemConfig['opencode'
           }>
             <TreeRow label="Model" value={<span style={{ color: '#bc8cff', fontSize: 10 }}>{model}</span>} />
           </Tip>
+          {largeModel && (
+            <Tip position="top" align="left" content={
+              <div>
+                <div style={{ color: '#bc8cff', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>Large model</div>
+                <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>large_model from opencode.json</div>
+              </div>
+            }>
+              <TreeRow label="Large model" value={<span style={{ color: '#bc8cff', fontSize: 10 }}>{largeModel}</span>} />
+            </Tip>
+          )}
           <Tip position="top" align="left" content={
             <div>
               <div style={{ color: '#bc8cff', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>AGENTS.md</div>
@@ -745,7 +770,7 @@ function OpenCodeAgentsSection({ agents }: { agents: string[] }) {
 
 function ClaudestatSection({ cfg }: { cfg: SystemConfig['claudestatConfig'] }) {
   const [open, setOpen] = useState(true)
-  const plan = cfg.plan ?? 'pro'
+  const plan = cfg.plan ?? null
   const ks   = cfg.killSwitchEnabled ?? true
   const [warnYellow, warnOrange, warnRed] = cfg.warnThresholds ?? [70, 85, 95]
 
@@ -760,7 +785,7 @@ function ClaudestatSection({ cfg }: { cfg: SystemConfig['claudestatConfig'] }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
           <TreeRow
             label="Plan"
-            value={<Badge text={PLAN_LABEL[plan] ?? plan} color="#58a6ff" />}
+            value={plan ? <Badge text={PLAN_LABEL[plan] ?? plan} color="#58a6ff" /> : <span style={{ color: '#484f58' }}>—</span>}
             tip="Claude Max plan that determines weekly hour limits per model."
           />
           <Tip position="top" align="left" content={
@@ -790,7 +815,7 @@ function ClaudestatSection({ cfg }: { cfg: SystemConfig['claudestatConfig'] }) {
               <div style={{ color: '#58a6ff', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>Quota alert thresholds</div>
               <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
                 Percentage of the 5h quota that triggers each SSE alert level.<br />
-                🟡 warning → 🟠 orange → 🔴 red (kill switch)
+                yellow warning → orange → red (kill switch)
               </div>
             </div>
           }>

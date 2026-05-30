@@ -287,7 +287,7 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
 export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
   // Ensure session row exists — sub-agent JSONLs arrive from the enricher without a
   // prior hook event (Claude Code does not fire hooks for sub-agent sessions).
-  dbOps.insertSessionIfAbsent({ id: sessionId, cwd: undefined, started_at: cost.firstTs ?? Date.now(), last_event_at: cost.lastTs ?? cost.firstTs ?? Date.now(), source })
+  dbOps.upsertSession({ id: sessionId, cwd: undefined, started_at: cost.firstTs ?? Date.now(), last_event_at: cost.lastTs ?? cost.firstTs ?? Date.now(), source })
   let sessionRow = dbOps.getSession(sessionId)
 
   // Sub-agent detection: first time we see a session, check if its firstTs falls after

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Wrench, DollarSign, Clock, Hash, HelpCircle, type LucideIcon } from 'lucide-react'
 import { Tip } from './Tip'
+import { sourceColor, sourceLabel } from './shared'
 
 interface TopTool {
   tool:             string
@@ -68,7 +69,7 @@ function FilterButton<T extends string | number>({ value, options, onChange }: F
   )
 }
 
-function fmtCost(n: number): string {
+function fmtCostPrecise(n: number): string {
   if (n < 0.001) return '$0'
   if (n < 0.01) return `$${n.toFixed(4)}`
   if (n < 1) return `$${n.toFixed(3)}`
@@ -92,22 +93,27 @@ export function TopView() {
   const [sortBy, setSortBy] = useState<SortBy>('cost')
   const [days, setDays] = useState(30)
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
+    setLoading(true)
     fetch(`/api/top?by=${sortBy}&limit=10&days=${days}&source=${sourceFilter}`)
       .then(r => r.ok ? r.json() : undefined)
-      .then(d => d && setData(d))
-      .catch(() => {})
+      .then(d => { if (d) setData(d); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [sortBy, days, sourceFilter])
 
+  useEffect(() => {
     fetch('/cost-projection')
       .then(r => r.ok ? r.json() : undefined)
       .then(d => d && setProjection(d))
       .catch(() => {})
-  }, [sortBy, days, sourceFilter])
+  }, [])
 
   const tools = data?.tools ?? []
   const maxCost = Math.max(...tools.map(t => t.estimatedCostUsd), 0.001)
   const maxCount = Math.max(...tools.map(t => t.count), 1)
+  const maxDuration = Math.max(...tools.map(t => t.totalDurationMs), 1)
 
   return (
     <div style={{ height: '100%', overflow: 'auto', padding: '20px 24px' }}>
@@ -167,10 +173,11 @@ export function TopView() {
       {/* Tool table */}
       {tools.length === 0 ? (
         <div style={{ color: '#8b949e', fontSize: 13, textAlign: 'center', marginTop: 40 }}>
-          No tool usage data for this period.
+          {loading ? 'Loading…' : 'No tool usage data for this period.'}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {loading && <div style={{ fontSize: 10, color: '#484f58', marginBottom: 6 }}>Refreshing…</div>}
           {/* Table header */}
           <div style={{
             display: 'grid', gridTemplateColumns: '32px 200px 70px 80px 80px',
@@ -208,9 +215,9 @@ export function TopView() {
           {tools.map((t, i) => {
             const barWidth = sortBy === 'cost' ? t.estimatedCostUsd / maxCost
               : sortBy === 'count' ? t.count / maxCount
-              : t.totalDurationMs / (Math.max(...tools.map(x => x.totalDurationMs), 1))
+              : t.totalDurationMs / maxDuration
             return (
-              <div key={t.tool} style={{
+              <div key={`${t.tool}-${t.source}`} style={{
                 display: 'grid', gridTemplateColumns: '32px 200px 70px 80px 80px',
                 gap: 8, padding: '8px', fontSize: 12, color: '#e6edf3',
                 background: '#161b22', border: '1px solid #21262d', borderRadius: 6,
@@ -243,36 +250,33 @@ export function TopView() {
                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.tool}>
                         {t.tool}
                       </span>
-                      {sourceFilter === 'all' && (() => {
-                        const isOC = t.source === 'opencode'
-                        return (
-                          <Tip position="top" align="left" content={
-                            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
-                              <div style={{ fontWeight: 700, color: isOC ? '#3fb950' : '#58a6ff', marginBottom: 4 }}>
-                                {isOC ? 'OpenCode' : 'Claude Code'}
-                              </div>
-                              <div style={{ color: '#7d8590' }}>This tool was invoked by {isOC ? 'OpenCode' : 'Claude Code'}</div>
+                      {sourceFilter === 'all' && (
+                        <Tip position="top" align="left" content={
+                          <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                            <div style={{ fontWeight: 700, color: sourceColor(t.source), marginBottom: 4 }}>
+                              {sourceLabel(t.source)}
                             </div>
-                          }>
-                            <span style={{
-                              fontSize: 9, fontWeight: 700, letterSpacing: '0.04em',
-                              padding: '1px 5px', borderRadius: 3,
-                              background: isOC ? '#0d1f10' : '#0d1e33',
-                              border: `1px solid ${isOC ? '#3fb95060' : '#58a6ff60'}`,
-                              color: isOC ? '#3fb950' : '#58a6ff',
-                              cursor: 'default', whiteSpace: 'nowrap',
-                            }}>
-                              {isOC ? 'OpenCode' : 'Claude Code'}
-                            </span>
-                          </Tip>
-                        )
-                      })()}
+                            <div style={{ color: '#7d8590' }}>This tool was invoked by {sourceLabel(t.source)}</div>
+                          </div>
+                        }>
+                          <span style={{
+                            fontSize: 9, fontWeight: 700, letterSpacing: '0.04em',
+                            padding: '1px 5px', borderRadius: 3,
+                            background: t.source === 'opencode' ? '#0d1f10' : '#0d1e33',
+                            border: `1px solid ${sourceColor(t.source)}60`,
+                            color: sourceColor(t.source),
+                            cursor: 'default', whiteSpace: 'nowrap',
+                          }}>
+                            {sourceLabel(t.source)}
+                          </span>
+                        </Tip>
+                      )}
                     </>
                   )}
                 </span>
                  <span style={{ textAlign: 'right', color: '#8b949e', position: 'relative' }}>{t.tool === 'Other' ? '—' : t.count.toLocaleString()}</span>
                  <span style={{ textAlign: 'right', color: '#8b949e', position: 'relative' }}>{t.tool === 'Other' || t.totalDurationMs === 0 ? '—' : fmtDur(t.totalDurationMs)}</span>
-                <span style={{ textAlign: 'right', fontWeight: 600, color: COLORS[i % COLORS.length], position: 'relative' }}>{fmtCost(t.estimatedCostUsd)}</span>
+                <span style={{ textAlign: 'right', fontWeight: 600, color: COLORS[i % COLORS.length], position: 'relative' }}>{fmtCostPrecise(t.estimatedCostUsd)}</span>
               </div>
             )
           })}
@@ -293,7 +297,7 @@ export function TopView() {
                 <span style={{ color: '#8b949e', fontWeight: 600, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.5px', alignSelf: 'center' }}>Total shown</span>
                 <span style={{ textAlign: 'right', color: '#e6edf3', fontWeight: 600 }}>{totalCalls.toLocaleString()}</span>
                 <span style={{ textAlign: 'right', color: '#e6edf3', fontWeight: 600 }}>{fmtDur(totalDuration)}</span>
-                <span style={{ textAlign: 'right', color: '#e6edf3', fontWeight: 700 }}>{fmtCost(totalCost)}</span>
+                <span style={{ textAlign: 'right', color: '#e6edf3', fontWeight: 700 }}>{fmtCostPrecise(totalCost)}</span>
               </div>
             )
           })()}
@@ -320,7 +324,7 @@ function ProjectionCard({ label, tooltip, costSoFar, projected, daysWithData }: 
         <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 8, cursor: 'default' }}>{label}</div>
       </Tip>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
-        <span style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3' }}>{fmtCost(projected)}</span>
+        <span style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3' }}>{fmtCostPrecise(projected)}</span>
         <Tip position="top" align="left" content={
           <div style={{ fontSize: 11, lineHeight: 1.7 }}>
             <div style={{ fontWeight: 700, color: '#58a6ff', marginBottom: 4 }}>Projected spend</div>
@@ -331,7 +335,7 @@ function ProjectionCard({ label, tooltip, costSoFar, projected, daysWithData }: 
         </Tip>
       </div>
       <div style={{ fontSize: 11, color: '#484f58' }}>
-        {fmtCost(costSoFar)} spent over {daysWithData.toFixed(1)} days
+        {fmtCostPrecise(costSoFar)} spent over {daysWithData.toFixed(1)} days
       </div>
     </div>
   )

@@ -126,7 +126,7 @@ function PromptScoreCard({ prompt }: { prompt: string }) {
               }}
             >
               {expanded ? <ChevronsDownUp size={9} /> : <ChevronsUpDown size={9} />}
-              {expanded ? 'colapsar' : 'ver todo'}
+              {expanded ? 'collapse' : 'view all'}
             </button>
           </div>
           {/* Recommendations */}
@@ -202,12 +202,13 @@ export function BlockDetailPanel({
     } catch {}
   }
 
-  // Bash commands (first 4)
-  const bashCalls = block.tools
+  // Bash commands (first 4, expandable)
+  const allBashCalls = block.tools
     .filter(t => t.tool_name === 'Bash' && t.tool_input)
-    .slice(0, 4)
     .map(t => { try { return JSON.parse(t.tool_input!).command || '' } catch { return '' } })
     .filter(Boolean)
+  const [bashShowAll, setBashShowAll] = useState(false)
+  const bashCalls = bashShowAll ? allBashCalls : allBashCalls.slice(0, 4)
 
   // block.tools es inmutable por bloque — memoizar evita recomputo en cada render
   const { toolTypeCount, realLoopKeys, realLoopCount } = useMemo(() => {
@@ -386,7 +387,15 @@ export function BlockDetailPanel({
           <div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: bashOpen ? 8 : 0 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: '#484f58', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-                Commands ({bashCalls.length})
+                Commands ({allBashCalls.length})
+                {allBashCalls.length > 4 && (
+                  <span
+                    onClick={() => setBashShowAll(v => !v)}
+                    style={{ cursor: 'pointer', marginLeft: 8, color: '#58a6ff', fontWeight: 400, textTransform: 'none' }}
+                  >
+                    {bashShowAll ? 'show less' : `show all (${allBashCalls.length})`}
+                  </span>
+                )}
               </div>
               <button
                 onClick={() => setBashOpen(v => !v)}
@@ -416,7 +425,7 @@ export function BlockDetailPanel({
         {/* ── Cost breakdown ── */}
         {blockCost && totalCost > 0 && (
           <div>
-            <SectionLabel>Costo</SectionLabel>
+            <SectionLabel>Cost</SectionLabel>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               <div style={{ background: '#0c1520', border: '1px solid #58a6ff22', borderRadius: 7, padding: '10px 14px' }}>
                 <div style={{ fontSize: 10, color: '#58a6ff', display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>

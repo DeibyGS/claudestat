@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import {
   LineChart, Line, BarChart, Bar, ComposedChart,
   XAxis, YAxis, Tooltip,
@@ -11,6 +11,7 @@ import {
 import { Tip } from './Tip'
 import type { QuotaData, CostInfo, TraceEvent, ClaudeStatsData } from '../types'
 import { UsageView } from './UsageView'
+import { fmtCost, fmtTok, fmtHours } from './shared'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -58,16 +59,7 @@ function shortModel(m: string): string {
   return m.replace(/^claude-/, '').replace(/-\d{8}$/, '').replace(/^opencode-go\//, '')
 }
 
-function fmtCost(v: number)  { return v >= 10 ? `$${v.toFixed(2)}` : `$${v.toFixed(3)}` }
-function fmtTok(n: number) {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) {
-    const k = Math.round(n / 1_000)
-    return k >= 1000 ? `${(k / 1000).toFixed(1)}M` : `${k}K`
-  }
-  return String(n)
-}
-function fmtHours(h: number) { return h < 1 ? `${Math.round(h * 60)}m` : `${h.toFixed(1)}h` }
+
 function projectName(p: string) {
   if (p === 'No project') return p
   return p.split('/').filter(Boolean).pop() ?? p
@@ -75,7 +67,6 @@ function projectName(p: string) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function modelKey(m: string) { return m }
 
 function pivotByModel(rows: ModelRow[]): Array<Record<string, string | number>> {
   const map = new Map<string, Record<string, string | number>>()
@@ -155,8 +146,8 @@ function MarkdownView({ content }: { content: string }) {
         if (line.startsWith('# '))   return <h1 key={i} style={{ fontSize: 18, fontWeight: 700, color: '#e6edf3', margin: '20px 0 8px', borderBottom: '1px solid #21262d', paddingBottom: 6 }}>{line.slice(2)}</h1>
         if (line.startsWith('## '))  return <h2 key={i} style={{ fontSize: 15, fontWeight: 600, color: '#e6edf3', margin: '16px 0 6px' }}>{line.slice(3)}</h2>
         if (line.startsWith('### ')) return <h3 key={i} style={{ fontSize: 13, fontWeight: 600, color: '#8b949e', margin: '12px 0 4px' }}>{line.slice(4)}</h3>
-        if (line.startsWith('- [x] ')) return <div key={i} style={{ display: 'flex', gap: 8, margin: '3px 0', color: '#3fb950', fontSize: 12 }}>✅ <span style={{ textDecoration: 'line-through', color: '#6e7681' }}>{line.slice(6)}</span></div>
-        if (line.startsWith('- [ ] ')) return <div key={i} style={{ display: 'flex', gap: 8, margin: '3px 0', fontSize: 12 }}>⬜ <span>{line.slice(6)}</span></div>
+        if (line.startsWith('- [x] ')) return <div key={i} style={{ display: 'flex', gap: 8, margin: '3px 0', fontSize: 12, color: '#3fb950' }}><span style={{ width: 14, height: 14, borderRadius: 3, background: '#3fb950', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: '#0d1117', flexShrink: 0 }}>✓</span><span style={{ textDecoration: 'line-through', color: '#6e7681' }}>{line.slice(6)}</span></div>
+        if (line.startsWith('- [ ] ')) return <div key={i} style={{ display: 'flex', gap: 8, margin: '3px 0', fontSize: 12 }}><span style={{ width: 14, height: 14, borderRadius: 3, border: '1.5px solid #484f58', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }} /><span>{line.slice(6)}</span></div>
         if (line.startsWith('- '))   return <div key={i} style={{ margin: '3px 0', paddingLeft: 16, fontSize: 12 }}>· {line.slice(2)}</div>
         if (line.startsWith('> '))   return <blockquote key={i} style={{ margin: '8px 0', paddingLeft: 12, borderLeft: '3px solid #30363d', color: '#8b949e', fontSize: 12 }}>{line.slice(2)}</blockquote>
         if (line.startsWith('---'))  return <hr key={i} style={{ border: 'none', borderTop: '1px solid #21262d', margin: '14px 0' }} />
@@ -186,7 +177,7 @@ function ReportsPanel() {
     setGenerating(true); setMsg(null)
     try {
       const d = await fetch('/api/weekly-reports/generate-now', { method: 'POST' }).then(r => r.json())
-      setMsg(d.skipped ? `Ya existe: ${d.date}` : `Generado: ${d.date}`)
+      setMsg(d.skipped ? `Already exists: ${d.date}` : `Generated: ${d.date}`)
       if (!d.skipped) fetchReports()
     } catch { setMsg('Error generating') }
     setGenerating(false)
@@ -297,7 +288,7 @@ function ReportsPanel() {
             <div style={{ padding: '12px 16px', borderBottom: '1px solid #21262d', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <FileText size={13} color="#58a6ff" />
-                <span style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3' }}>Informe semanal — {selected.date}</span>
+                <span style={{ fontSize: 13, fontWeight: 600, color: '#e6edf3' }}>Weekly report — {selected.date}</span>
               </div>
               <button onClick={() => setSelected(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#6e7681', padding: 4 }}>
                 <X size={16} />
@@ -317,7 +308,6 @@ function ReportsPanel() {
 
 export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Props) {
   const [period,        setPeriod]        = useState<Period>('30')
-  const [projectPeriod, setProjectPeriod] = useState<Period>('30')
   const [sourceFilter,  setSourceFilter]  = useState<SourceFilter>('all')
   const [daily,         setDaily]         = useState<DayData[]>([])
   const [byModel,       setByModel]       = useState<ModelRow[]>([])
@@ -327,7 +317,7 @@ export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Pro
 
   useEffect(() => {
     setLoading(true)
-    fetch(`/api/analytics?days=${period}&project_days=${projectPeriod}`)
+    fetch(`/api/analytics?days=${period}&project_days=${period}`)
       .then(r => r.json())
       .then(d => {
         setDaily(d.daily ?? [])
@@ -337,7 +327,7 @@ export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Pro
       })
       .catch(() => {})
       .finally(() => setLoading(false))
-  }, [period, projectPeriod])
+  }, [period])
 
   const filteredDaily        = sourceFilter === 'all' ? daily        : daily.filter(d => d.source === sourceFilter)
   const filteredByModel      = sourceFilter === 'all' ? byModel      : byModel.filter(r => r.source === sourceFilter)
@@ -358,9 +348,10 @@ export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Pro
     sessions: d.sessions,
   }))
 
-  const now7ms  = Date.now() - 7  * 86_400_000
-  const now30ms = Date.now() - 30 * 86_400_000
-  const filteredKpis = sourceFilter !== 'all' && kpis ? (() => {
+  const filteredKpis = useMemo(() => {
+    if (sourceFilter === 'all' || !kpis) return kpis
+    const now7ms  = Date.now() - 7  * 86_400_000
+    const now30ms = Date.now() - 30 * 86_400_000
     const filt7d  = filteredDaily.filter(d => new Date(d.date + 'T12:00:00').getTime() >= now7ms)
     const filt30d = filteredDaily.filter(d => new Date(d.date + 'T12:00:00').getTime() >= now30ms)
     return {
@@ -371,7 +362,7 @@ export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Pro
       week_loops:     filt7d.reduce((a, d) => a + d.loops, 0),
       avg_efficiency: filt7d.length ? Math.round(filt7d.reduce((a, d) => a + d.avg_efficiency, 0) / filt7d.length) : 0,
     }
-  })() : kpis
+  }, [sourceFilter, kpis, filteredDaily])
 
   return (
     <div style={{ height: '100%', overflowY: 'auto', background: '#0d1117' }}>
@@ -551,19 +542,6 @@ export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Pro
                     </div>
                   )}
                   <div style={{ flex: 1 }} />
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    {(['7', '30', '90'] as Period[]).map(p => (
-                      <button key={p} onClick={() => setProjectPeriod(p)} style={{
-                        padding: '2px 7px', borderRadius: 4, fontSize: 10, cursor: 'pointer',
-                        background: projectPeriod === p ? '#1f6feb' : 'none',
-                        border: `1px solid ${projectPeriod === p ? '#1f6feb' : '#30363d'}`,
-                        color: projectPeriod === p ? '#fff' : '#8b949e',
-                        transition: 'all 0.15s',
-                      }}>
-                        {PERIOD_LABELS[p]}
-                      </button>
-                    ))}
-                  </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {projectSegments.map(p => {

@@ -2,6 +2,7 @@ import { memo } from 'react'
 import { FolderOpen, TriangleAlert, Sparkles, GitBranch, Check, Play } from 'lucide-react'
 import type { SessionSummary } from '../types'
 import { Tip } from './Tip'
+import { fmtDuration, fmtTok, MODE_COLOR, MODE_LABEL, MODE_TOOLTIP, sourceColor, sourceLabel } from './shared'
 
 interface Props {
   session:     SessionSummary
@@ -19,36 +20,8 @@ const TOOL_COLORS: Record<string, string> = {
   Task: '#8b949e', default: '#6e7681',
 }
 
-const MODE_LABEL: Record<string, string> = {
-  directo: 'direct', agentes: 'agents', skills: 'skills', 'agentes+skills': 'agents+skills',
-  'sub-agente': 'sub-agent',
-}
-const MODE_COLOR: Record<string, string> = {
-  directo: '#7d8590', agentes: '#d29922', skills: '#58a6ff', 'agentes+skills': '#d29922',
-  'sub-agente': '#8b949e',
-}
-const MODE_TOOLTIP: Record<string, string> = {
-  directo:          'Claude responded directly, without launching sub-agents or invoking skills',
-  agentes:          'Sub-agents (Agent tool) were launched during the session',
-  skills:           'Skills (Skill tool) were invoked during the session',
-  'agentes+skills': 'Both sub-agents and skills were used in this session',
-  'sub-agente':     'Background sub-agent spawned by the parent session — no tool events recorded separately',
-}
-
 function fmtTime(ts: number) {
   return new Date(ts).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' })
-}
-function fmtDuration(ms: number) {
-  const h = Math.floor(ms / 3_600_000)
-  const m = Math.floor((ms % 3_600_000) / 60_000)
-  if (h > 0) return `${h}h ${m}m`
-  if (m > 0) return `${m}m`
-  return '<1m'
-}
-function fmtTok(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000)     return `${Math.round(n / 1_000)}K`
-  return String(n)
 }
 
 const S = {
@@ -145,8 +118,8 @@ function SessionCardInner({ session: s, isActive, selectable, selected = false, 
           </Tip>
         )}
         {s.source && (
-          <span style={S.badge('#8b949e')}>
-            {s.source === 'claude-code' ? 'Claude Code' : s.source === 'opencode' ? 'OpenCode' : s.source}
+          <span style={S.badge(sourceColor(s.source))}>
+            {sourceLabel(s.source)}
           </span>
         )}
         <Tip position="top" align="right" content={

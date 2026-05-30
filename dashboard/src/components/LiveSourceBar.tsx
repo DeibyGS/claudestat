@@ -46,7 +46,7 @@ export function LiveSourceBar({ sources, active, onSelect }: Props) {
           >
             <span style={{
               width: 6, height: 6, borderRadius: '50%',
-              background: '#3fb950', display: 'inline-block', flexShrink: 0,
+              background: s.source === 'opencode' ? '#3fb950' : s.source === 'claude-code' ? '#58a6ff' : '#8b949e', display: 'inline-block', flexShrink: 0,
             }} />
             <span style={{ fontWeight: isActive ? 600 : 400 }}>
               {SOURCE_LABELS[s.source] ?? s.source}

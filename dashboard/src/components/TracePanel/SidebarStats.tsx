@@ -194,7 +194,7 @@ export function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [
             <span style={{ fontSize: 9, color: '#484f58' }}>lost in loops</span>
           </div>
           <div style={{ fontSize: 9, color: '#3d444d' }}>
-            {hiddenCost.total_loops} loop{hiddenCost.total_loops > 1 ? 's' : ''} · {hiddenCost.loop_sessions}/{hiddenCost.total_sessions} sesiones
+            {hiddenCost.total_loops} loop{hiddenCost.total_loops > 1 ? 's' : ''} · {hiddenCost.loop_sessions}/{hiddenCost.total_sessions} sessions
           </div>
         </div>
       )}
@@ -204,7 +204,7 @@ export function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [
         <div style={{ borderTop: '1px solid #21262d', paddingTop: 6, marginTop: 2, display: 'flex', flexDirection: 'column', gap: 3 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <Bot size={9} color="#bc8cff" />
-            <span style={{ fontSize: 9, color: '#7d8590', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Sub-agentes</span>
+            <span style={{ fontSize: 9, color: '#7d8590', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Sub-agents</span>
           </div>
           {subAgentSessions.map(s => {
             const m = s.dominant_model
@@ -225,7 +225,7 @@ export function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [
           })}
           {subAgentSessions.length > 1 && (
             <div style={{ fontSize: 9, color: '#484f58' }}>
-              total sub-agentes {fmtUsd(subAgentSessions.reduce((s, a) => s + (a.total_cost_usd ?? 0), 0))}
+              total sub-agents {fmtUsd(subAgentSessions.reduce((s, a) => s + (a.total_cost_usd ?? 0), 0))}
             </div>
           )}
         </div>

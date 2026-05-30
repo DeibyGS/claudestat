@@ -4,10 +4,7 @@ import type { DaySessions, SessionSummary } from '../types'
 import { SessionCard } from './SessionCard'
 import { Tip } from './Tip'
 import { ReplayModal } from './ReplayModal'
-
-const MODE_COLOR_MAP: Record<string, string> = {
-  directo: '#7d8590', agentes: '#d29922', skills: '#58a6ff', 'agentes+skills': '#d29922',
-}
+import { fmtDuration, fmtTok, MODE_COLOR as MODE_COLOR_MAP } from './shared'
 
 interface Props { days: DaySessions[]; activeSessionId?: string }
 
@@ -18,17 +15,6 @@ function fmtDate(dateStr: string) {
   if (dateStr === today)     return 'Today'
   if (dateStr === yesterday) return 'Yesterday'
   return d.toLocaleDateString('en', { weekday: 'long', day: 'numeric', month: 'long' })
-}
-function fmtDuration(ms: number) {
-  const h = Math.floor(ms / 3_600_000)
-  const m = Math.floor((ms % 3_600_000) / 60_000)
-  if (h > 0) return `${h}h ${m}m`
-  return `${m}m`
-}
-function fmtTok(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000)     return `${Math.round(n / 1_000)}K`
-  return String(n)
 }
 
 // ─── Comparison Panel ─────────────────────────────────────────────────────────
@@ -158,8 +144,12 @@ function ComparePanel({ a, b, onClose }: { a: SessionSummary; b: SessionSummary;
           borderBottom: '1px solid #21262d',
         }}>
           <span style={{ color: '#484f58', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Metric</span>
-          <span style={{ color: '#58a6ff', fontSize: 10, fontWeight: 700 }}>{nameA}</span>
-          <span style={{ color: '#bc8cff', fontSize: 10, fontWeight: 700 }}>{nameB}</span>
+          <span style={{ color: '#58a6ff', fontSize: 10, fontWeight: 700 }}>
+            {nameA} · {new Date(a.started_at).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' })}
+          </span>
+          <span style={{ color: '#bc8cff', fontSize: 10, fontWeight: 700 }}>
+            {nameB} · {new Date(b.started_at).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit' })}
+          </span>
         </div>
 
         {rows.map((row, i) => (
@@ -263,7 +253,6 @@ const S = {
 function TimelineView({ days, activeSessionId }: { days: DaySessions[]; activeSessionId?: string }) {
   return (
     <div style={{ paddingLeft: 8 }}>
-      <style>{`@keyframes livePulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(1.5)} }`}</style>
       {days.map(day => (
         <div key={day.date} style={{ marginBottom: 28 }}>
           {/* Day marker */}
@@ -272,7 +261,7 @@ function TimelineView({ days, activeSessionId }: { days: DaySessions[]; activeSe
             <div style={{ height: 1, width: 12, background: '#21262d' }} />
             <span style={{ color: '#8b949e', fontSize: 12, fontWeight: 700 }}>{fmtDate(day.date)}</span>
             <span style={{ color: '#484f58', fontSize: 11 }}>
-              {day.sessions.length} ses. · ${day.total_cost.toFixed(3)} · {fmtTok(day.total_tokens)}
+              {day.sessions.length} sess. · ${day.total_cost.toFixed(3)} · {fmtTok(day.total_tokens)}
             </span>
           </div>
           {/* Sessions on timeline */}
@@ -424,6 +413,7 @@ export function HistoryView({ days, activeSessionId }: Props) {
 
   return (
     <div style={S.wrap}>
+      <style>{`@keyframes livePulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(1.5)} }`}</style>
       {/* Barra de búsqueda */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
@@ -459,7 +449,7 @@ export function HistoryView({ days, activeSessionId }: Props) {
             return (
               <Tip key={i} position="bottom" align="left" content={
                 <div>
-                  <div style={{ color: '#3fb950', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Filtro: {f.label}</div>
+                  <div style={{ color: '#3fb950', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Filter: {f.label}</div>
                   <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>{tipText}</div>
                 </div>
               }>

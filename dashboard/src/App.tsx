@@ -233,23 +233,39 @@ export default function App() {
   }, [])
 
   // ── OpenCode events polling (10s when active) ───────────────────────────────
+  // OC creates one session per prompt. We poll directly from OC's SQLite via
+  // opencode-reader which groups sessions by directory (60s gap threshold raised to 5min).
+  // Dep: ocSessionId — only restarts when the actual session changes, not on every
+  // activeSources array reference update (which would cancel in-flight fetches every 10s).
+  const ocSessionId = activeSources.find(s => s.source === activeLiveSource)?.sessionId
   useEffect(() => {
-    const src = activeSources.find(s => s.source === activeLiveSource)
-    if (!src || activeLiveSource === 'claude-code') return
+    if (!ocSessionId || activeLiveSource === 'claude-code') return
+    // Clear stale events from previous session
+    setOpencodeEvents([])
+    setOpencodePrompts([])
     let cancelled = false
     function fetchEvents() {
-      fetch(`/api/opencode/session/${src!.sessionId}`)
+      fetch(`/api/opencode/session/${ocSessionId}`)
         .then(r => r.ok ? r.json() : null)
         .then(d => {
-          if (!cancelled && d?.events) setOpencodeEvents(d.events)
-          if (!cancelled && d?.prompts) setOpencodePrompts(d.prompts)
+          if (cancelled) return
+          if (d?.events) {
+            setOpencodeEvents(() => {
+              // Replace entirely each poll — reader returns the full session group
+              const events = (d.events as TraceEvent[]).slice(-MAX_EVENTS)
+              return events
+            })
+          }
+          if (d?.prompts) {
+            setOpencodePrompts(() => d.prompts)
+          }
         })
         .catch(() => {})
     }
     fetchEvents()
-    const t = setInterval(fetchEvents, 10_000)
+    const t = setInterval(fetchEvents, 5_000)
     return () => { cancelled = true; clearInterval(t) }
-  }, [activeLiveSource, activeSources])
+  }, [ocSessionId, activeLiveSource])
 
   // ── Claude Code events polling (10s when active) ────────────────────────────
   useEffect(() => {
@@ -352,10 +368,9 @@ export default function App() {
                 output_tokens:    activeSource.output_tokens,
                 cache_read:       activeSource.cache_read,
                 cache_creation:   activeSource.cache_creation,
-                efficiency_score: 100,
+                efficiency_score: isClaudeCode ? (state.cost?.efficiency_score ?? 100) : 0,
                 model:            activeSource.model,
                 loops:            [],
-                // For non-CC sources: use input_tokens as context_used proxy
                 context_used:     isClaudeCode ? undefined : activeSource.input_tokens,
               } : undefined
               // Fallback to SSE state.events while polling hasn't loaded claudeCodeEvents yet
@@ -371,9 +386,9 @@ export default function App() {
               return (
                 <TracePanel
                   events={isClaudeCode ? ccEvents : opencodeEvents}
-                  startedAt={isClaudeCode ? (ccEvents[0]?.ts ?? activeSource?.last_seen_ms ?? Date.now()) : activeSource?.last_seen_ms ?? Date.now()}
+                  startedAt={isClaudeCode ? (ccEvents[0]?.ts ?? activeSource?.last_seen_ms ?? Date.now()) : (opencodeEvents[0]?.ts ?? activeSource?.last_seen_ms ?? Date.now())}
                   cost={sourceCost}
-                  blockCosts={[]}
+                  blockCosts={isClaudeCode ? state.blockCosts : []}
                   meta={isClaudeCode ? metaStats : undefined}
                   quota={isClaudeCode ? quota : undefined}
                   sessionState={isClaudeCode ? ccState : ocState}

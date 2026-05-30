@@ -2,23 +2,9 @@ import { useState, memo } from 'react'
 import { ChevronDown, ChevronUp, Lightbulb, TriangleAlert, CheckCircle2, FolderOpen } from 'lucide-react'
 import type { ProjectSummary, ModelUsage, PatternInsight, InsightLevel } from '../types'
 import { Tip } from './Tip'
+import { fmtTok, fmtHours, fmtCost } from './shared'
 
 interface Props { project: ProjectSummary; isActive?: boolean }
-
-function fmtHours(h: number): string {
-  if (h < 1/60) return '<1m'
-  if (h < 1) return `${Math.round(h * 60)}m`
-  return `${h.toFixed(1)}h`
-}
-function fmtTok(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000)     return `${Math.round(n / 1_000)}K`
-  return String(n)
-}
-function fmtCost(usd: number): string {
-  if (usd > 0 && usd < 0.01) return '<$0.01'
-  return `$${usd.toFixed(2)}`
-}
 /** Returns the label of the model that consumed the most tokens, or null if tied/empty */
 function dominantModel(usage: ModelUsage | undefined): { label: string; color: string } | null {
   if (!usage) return null
@@ -365,7 +351,7 @@ function ProjectCardInner({ project: p, isActive }: Props) {
         <Tip position="top" align="left" content={
           <div>
             <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Sessions</div>
-            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>Total recorded sessions, including those before claudestat was installed (read from Claude Code JSONL files).</div>
+            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>Total recorded sessions, including those before claudestat was installed (recorded from tool activity).</div>
           </div>
         }>
           <div style={S.stat}>

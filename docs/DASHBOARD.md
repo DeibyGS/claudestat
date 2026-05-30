@@ -30,10 +30,11 @@ Grid of every project you've worked on. Shows last active date, total sessions, 
 
 ### Analytics
 
-- 6 KPIs: total cost, tokens, cache savings, hidden loop waste, avg efficiency, session count
-- Token/cost trend charts (7 / 30 / 90 days)
-- Hours by project
-- AI-generated weekly reports (auto-scheduled or on demand)
+- **6 KPIs**: Real spend 7d, Real spend 30d, Tokens (period), Hours (period), Loops 7d, Avg efficiency
+- **Source filter** — All / Claude Code / OpenCode; applies to every KPI and chart
+- **Charts**: token/cost trend, model breakdown, tokens-per-day fluctuation (7 / 30 / 90 days)
+- **Project hours** — bar chart synced to the same period selector as charts
+- **Weekly reports** — AI-generated Markdown with CSS-styled checkboxes; auto-scheduled or on demand
 
 ![Analytics KPIs](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225605/My%20portfolio%7D/analitycsOne_yx9tcp.png)
 
@@ -51,6 +52,17 @@ Tool rankings across all your sessions. Sortable by estimated cost, call count, 
 
 ### System
 
-Daemon health, DB size, Node version, config file paths, and memory context.
+Full configuration map for Claude Code and OpenCode:
+
+- **Active tools** — live CC/OC status with real collision detection (same file edited by both tools)
+- **Hooks** — SessionStart, PreToolUse, PostToolUse, Stop with command preview and tooltips
+- **Agents** — list from `~/.claude/agents/` with descriptions
+- **Skills** — CC skills from `~/.claude/commands/` and OC skills from `~/.config/opencode/skills/` with line-count warnings (limit: 500 ln)
+- **Workflows** — pipeline definitions from `~/.claude/agents/workflows/`
+- **Context files** — CLAUDE.md, MEMORY.md, settings.json with size/line usage vs recommended limits
+- **Work modes** — Direct / Mini-pipeline / Full pipeline distribution (last 7 days)
+- **OpenCode config** — model, large_model (if set), AGENTS.md stats, registered projects, plugins
+- **Memory system** — Engram files in `~/.claude/projects/…/memory/`
+- **claudestat config** — plan, kill switch status, quota alert thresholds
 
 ![System tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225606/My%20portfolio%7D/system_ixurjb.png)

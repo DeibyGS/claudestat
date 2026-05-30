@@ -160,6 +160,33 @@ describe('validateConfig', () => {
     const result = validateConfig({ reportTime: '9:00' })
     assert.ok(typeof result === 'string' && result.length > 0)
   })
+
+  test('loopThreshold validates range 2-50', () => {
+    assert.equal(validateConfig({ loopThreshold: 1 }), 'loopThreshold must be an integer between 2 and 50')
+    assert.equal(validateConfig({ loopThreshold: 51 }), 'loopThreshold must be an integer between 2 and 50')
+    assert.equal(validateConfig({ loopThreshold: 1.5 }), 'loopThreshold must be an integer between 2 and 50')
+    assert.equal(validateConfig({ loopThreshold: 8 }), null)
+  })
+
+  test('loopWindowSecs validates range 10-600', () => {
+    assert.equal(validateConfig({ loopWindowSecs: 5 }), 'loopWindowSecs must be an integer between 10 and 600')
+    assert.equal(validateConfig({ loopWindowSecs: 601 }), 'loopWindowSecs must be an integer between 10 and 600')
+    assert.equal(validateConfig({ loopWindowSecs: 120 }), null)
+  })
+
+  test('webhookUrl validates http/https or null', () => {
+    assert.ok(validateConfig({ webhookUrl: 'ftp://bad' }) !== null, 'should reject non-http URL')
+    assert.equal(validateConfig({ webhookUrl: null }), null)
+    assert.equal(validateConfig({ webhookUrl: 'https://hooks.slack.com/test' }), null)
+    assert.equal(validateConfig({ webhookUrl: 'http://localhost/webhook' }), null)
+  })
+
+  test('projectAliases validates object shape', () => {
+    assert.ok(validateConfig({ projectAliases: 'bad' }) !== null, 'should reject string')
+    assert.ok(validateConfig({ projectAliases: [] }) !== null, 'should reject array')
+    assert.equal(validateConfig({ projectAliases: {} }), null)
+    assert.equal(validateConfig({ projectAliases: { '/path/to/repo': 'MyApp' } }), null)
+  })
 })
 
 // ─── getWarnLevel ─────────────────────────────────────────────────────────────

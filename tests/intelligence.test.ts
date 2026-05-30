@@ -48,4 +48,41 @@ describe('analyzeSession', () => {
     assert.equal(result.efficiencyScore, 100)
     assert.equal(result.loops.length, 0)
   })
+
+  test('detectLoops respects custom threshold', () => {
+    const events: any[] = []
+    const base = Date.now()
+    // 5 calls within window — below default threshold (8) but above custom (3)
+    for (let i = 0; i < 5; i++) {
+      events.push({ type: 'Done', tool_name: 'Read', ts: base + i * 5000, duration_ms: 100 })
+    }
+    // With custom threshold=3, should detect loop
+    const resultLow = analyzeSession(events, 0.10, 3, 120_000)
+    assert.ok(resultLow.loops.length > 0, 'should detect with threshold=3')
+
+    // With default threshold=8, should NOT detect loop (only 5 calls)
+    const resultHigh = analyzeSession(events, 0.10, 8, 120_000)
+    assert.equal(resultHigh.loops.length, 0, 'should not detect with threshold=8')
+  })
+
+  test('loop alert has context field', () => {
+    const events: any[] = []
+    const base = Date.now()
+    for (let i = 0; i < 10; i++) {
+      events.push({
+        type: 'Done',
+        tool_name: 'Read',
+        ts: base + i * 5000,
+        duration_ms: 100,
+        tool_input: JSON.stringify({ file_path: `/path/to/file${i % 3}.ts` }),
+      })
+    }
+    const result = analyzeSession(events, 0.50)
+    assert.ok(result.loops.length > 0, 'should detect loops')
+    const loop = result.loops[0]
+    assert.ok('context' in loop, 'loop should have context field')
+    assert.ok(Array.isArray(loop.context.repeatedFiles), 'context.repeatedFiles should be array')
+    assert.ok(Array.isArray(loop.context.repeatedCommands), 'context.repeatedCommands should be array')
+    assert.ok(typeof loop.context.estimatedCostUsd === 'number', 'context.estimatedCostUsd should be number')
+  })
 })

@@ -6,6 +6,7 @@ import { dbOps, type EventRow }  from '../db'
 import { getProjectsCached }     from '../cache/projects-cache'
 import { analyzePatterns }       from '../pattern-analyzer'
 import { findProjectCwdForFile } from './helpers'
+import { readConfig } from '../config'
 
 export const projectsRouter = Router()
 
@@ -134,6 +135,7 @@ projectsRouter.get('/projects', (_req: Request, res: Response) => {
   }
 
   // Attach pattern insights per project (only if DB has enough data)
+  const cfg = readConfig()
   const projects = [...projectMap.values()].map(p => {
     const toolCounts  = dbOps.getProjectToolCounts(p.path)
     const sessionStats = dbOps.getProjectSessionStats(p.path)
@@ -141,7 +143,14 @@ projectsRouter.get('/projects', (_req: Request, res: Response) => {
       ? analyzePatterns(toolCounts, sessionStats)
       : []
     const cli_hours = cliHoursMap.get(p.path)
-    return { ...p, insights, ...(cli_hours ? { cli_hours } : {}) }
+    const aliasName = cfg.projectAliases[p.path]
+    return {
+      ...p,
+      name: aliasName ?? p.name,
+      alias: aliasName ?? null,
+      insights,
+      ...(cli_hours ? { cli_hours } : {}),
+    }
   })
     .sort((a, b) => (b.last_active ?? 0) - (a.last_active ?? 0))
 

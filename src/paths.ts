@@ -193,6 +193,39 @@ export function portCheckCmd(port: number): string {
 }
 
 /**
+ * Returns the port file path. The daemon writes the active port here on startup
+ * so the hook script (vanilla JS, no imports) can read it without parsing config.
+ */
+export function getPortFile(): string {
+  return path.join(getClaudestatDir(), 'port')
+}
+
+/**
+ * Writes the active port to disk. Called by the daemon after successful bind.
+ */
+export function writePortFile(port: number): void {
+  try {
+    fs.mkdirSync(getClaudestatDir(), { recursive: true })
+    fs.writeFileSync(getPortFile(), String(port))
+  } catch {}
+}
+
+/**
+ * Returns the path of the pause signal file.
+ * When this file exists, the hook shows a warning instead of blocking.
+ */
+export function getPauseSignalFile(): string {
+  return path.join(getClaudestatDir(), 'pause.signal')
+}
+
+/**
+ * Returns the daemon log file path.
+ */
+export function getDaemonLogFile(): string {
+  return path.join(getClaudestatDir(), 'daemon.log')
+}
+
+/**
  * Returns true if running on Windows.
  */
 export const isWindows = isWin

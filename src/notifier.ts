@@ -33,3 +33,40 @@ export function sendDesktopNotification(title: string, body: string): void {
     // notification unavailable — silent fallback
   }
 }
+
+export interface AlertPayload {
+  title:       string
+  body:        string
+  level:       'yellow' | 'orange' | 'red'
+  cyclePct:    number
+  weeklyPct?:  number
+  burnRate?:   number
+  resetInMins: number
+}
+
+/**
+ * Sends an alert to a webhook URL (Slack, Discord, n8n, etc.).
+ * Payload format is compatible with Slack incoming webhooks and Discord webhooks.
+ * Fire-and-forget: errors are silently ignored.
+ */
+export function sendWebhookAlert(url: string, payload: AlertPayload): void {
+  const emoji  = payload.level === 'red' ? '🔴' : payload.level === 'orange' ? '🟠' : '🟡'
+  const body   = JSON.stringify({
+    text: `${emoji} *${payload.title}*\n${payload.body}`,
+    attachments: [{
+      color:  payload.level === 'red' ? '#ff0000' : payload.level === 'orange' ? '#ff8800' : '#ffcc00',
+      fields: [
+        { title: '5h cycle',    value: `${payload.cyclePct}%`,          short: true },
+        { title: 'Resets in',   value: `${payload.resetInMins}m`,       short: true },
+        ...(payload.burnRate ? [{ title: 'Burn rate', value: `${payload.burnRate.toLocaleString()} tok/min`, short: true }] : []),
+      ],
+    }],
+  })
+
+  fetch(url, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+    signal:  AbortSignal.timeout(5000),
+  }).catch(() => {})
+}

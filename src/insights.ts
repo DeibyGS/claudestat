@@ -303,3 +303,30 @@ export function renderWeeklyInsight(d: WeeklyInsightData): string {
 
   return lines.join('\n')
 }
+
+export function getPrevWeekInsightData(): WeeklyInsightData {
+  const agg = dbOps.getPrevWeekInsight()
+  const topTools = dbOps.getTopTools(14, 'cost', 1)
+  const topTool = topTools[0]
+  const totalInputWithCache = agg.input_tokens + agg.cache_read
+  const cacheHitPct = totalInputWithCache > 0
+    ? Math.min(100, Math.round(agg.cache_read / totalInputWithCache * 100))
+    : 0
+
+  return {
+    total_sessions: agg.total_sessions,
+    total_cost: agg.total_cost,
+    input_tokens: agg.input_tokens,
+    output_tokens: agg.output_tokens,
+    cache_read: agg.cache_read,
+    cache_hit_pct: cacheHitPct,
+    total_loops: agg.total_loops,
+    avg_efficiency: Math.round(agg.avg_efficiency),
+    top_tool: topTool?.tool_name ?? 'Unknown',
+    top_tool_cost_pct: agg.total_cost > 0
+      ? Math.round((topTool?.total_cost_usd ?? 0) / agg.total_cost * 100)
+      : 0,
+    week_start: agg.week_start,
+    week_end: agg.week_end ?? agg.week_start,
+  }
+}

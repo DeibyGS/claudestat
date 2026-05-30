@@ -1,15 +1,17 @@
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
 import { dbOps, type SessionRow } from './db'
 
 export interface ExportOpts {
-  format:  'json' | 'csv'
+  format:  'json' | 'csv' | 'markdown'
   from?:   string
   to?:     string
+  since?:  string   // NUEVO: "7d", "30d", etc.
   project?: string
-  output?: string
+  output?: string   // si undefined → stdout
 }
+
+const MD_HEADERS = ['Date', 'Project', 'Cost (USD)', 'Input tokens', 'Output tokens', 'Efficiency', 'Loops']
 
 function parseDate(str: string, endOfDay = false): number {
   const ms = Date.parse(str)
@@ -27,6 +29,24 @@ const CSV_HEADERS = [
   'total_cost_usd', 'total_input_tokens', 'total_output_tokens',
   'efficiency_score', 'loops_detected',
 ]
+
+function parseSince(since: string): number {
+  const match = since.match(/^(\d+)d$/)
+  if (!match) throw new Error(`Invalid --since format: "${since}" — use e.g. "7d" or "30d"`)
+  return Date.now() - parseInt(match[1], 10) * 86_400_000
+}
+
+function toMarkdownRow(r: Record<string, unknown>): string {
+  return [
+    String(r.started_at).slice(0, 10),
+    r.project_path ? String(r.project_path).split('/').pop() ?? '—' : '—',
+    `$${Number(r.total_cost_usd).toFixed(4)}`,
+    String(r.total_input_tokens),
+    String(r.total_output_tokens),
+    `${r.efficiency_score}/100`,
+    String(r.loops_detected),
+  ].map(v => v.replace(/\|/g, '\\|')).join(' | ')
+}
 
 function toRow(s: SessionRow): Record<string, unknown> {
   return {
@@ -47,6 +67,10 @@ export function runExport(opts: ExportOpts): void {
   let toMs:   number | undefined
 
   try {
+    if (opts.since && !opts.from) {
+      const sinceMs = parseSince(opts.since)
+      opts.from = new Date(sinceMs).toISOString().slice(0, 10)
+    }
     if (opts.from) fromMs = parseDate(opts.from)
     if (opts.to)   toMs   = parseDate(opts.to, true)
   } catch (err: any) {
@@ -73,13 +97,25 @@ export function runExport(opts: ExportOpts): void {
       ...rows.map(r => CSV_HEADERS.map(h => csvField(r[h])).join(',')),
     ]
     output = lines.join('\n') + '\n'
+  } else if (opts.format === 'markdown') {
+    const separator = MD_HEADERS.map(() => '---').join(' | ')
+    const lines = [
+      MD_HEADERS.join(' | '),
+      separator,
+      ...rows.map(toMarkdownRow),
+    ]
+    output = lines.join('\n') + '\n'
   } else {
     output = JSON.stringify(rows, null, 2) + '\n'
   }
 
-  const date = new Date().toISOString().slice(0, 10)
-  const dest = path.resolve(opts.output ?? path.join(os.homedir(), 'Downloads', `claudestat-export-${date}.${opts.format}`))
-  fs.mkdirSync(path.dirname(dest), { recursive: true })
-  fs.writeFileSync(dest, output)
-  console.log(`✓ Exported ${rows.length} session(s) → ${dest}`)
+  if (!opts.output) {
+    process.stdout.write(output)
+    console.error(`✓ Exported ${rows.length} session(s)`)   // stderr para no contaminar stdout
+  } else {
+    const dest = path.resolve(opts.output)
+    fs.mkdirSync(path.dirname(dest), { recursive: true })
+    fs.writeFileSync(dest, output)
+    console.log(`✓ Exported ${rows.length} session(s) → ${dest}`)
+  }
 }

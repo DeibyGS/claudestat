@@ -1,7 +1,9 @@
 import fs            from 'fs'
-import path from 'path'
+import path          from 'path'
+import os            from 'os'
 import { execSync, spawnSync }  from 'child_process'
 import { getClaudeDir, getClaudestatDir, whichCmd, whichAllCmd, isWindows } from './paths'
+import { readConfig } from './config'
 
 interface Check {
   label: string
@@ -73,9 +75,10 @@ export async function runDoctor(): Promise<void> {
   })
 
   // 6. Daemon reachable
-  const daemonOk = await (async () => { try { const res = await fetch('http://localhost:7337/health'); return res.ok } catch { return false } })()
+  const cfgPort = readConfig().port
+  const daemonOk = await (async () => { try { const res = await fetch(`http://localhost:${cfgPort}/health`); return res.ok } catch { return false } })()
   checks.push({
-    label: 'Daemon running (localhost:7337)',
+    label: 'Daemon running (localhost:' + cfgPort + ')',
     ok:    daemonOk,
     fix:   daemonOk ? undefined : 'claudestat start',
   })
@@ -161,6 +164,26 @@ export async function runDoctor(): Promise<void> {
       fix:   nvmOk ? undefined :
         `nvm use default && npm install -g @statforge/claudestat\n       Then restart terminal`,
     })
+  }
+
+  // 12. Daemon service node matches current node (only if service file exists)
+  if (process.platform === 'darwin') {
+    const plistPath = path.join(
+      process.env.HOME ?? os.homedir(),
+      'Library', 'LaunchAgents',
+      'com.statforge.claudestat.plist'
+    )
+    if (fs.existsSync(plistPath)) {
+      const plistContent = fs.readFileSync(plistPath, 'utf8')
+      const currentNode  = process.execPath
+      const nodeOk       = plistContent.includes(currentNode)
+      checks.push({
+        label: 'Daemon service uses current Node binary',
+        ok:    nodeOk,
+        note:  nodeOk ? undefined : `Service file uses a different node than ${currentNode}`,
+        fix:   nodeOk ? undefined : 'claudestat setup --uninstall && claudestat setup',
+      })
+    }
   }
 
   // 11. MCP server registered in Claude Code

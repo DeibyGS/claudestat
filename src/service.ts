@@ -2,6 +2,14 @@ import fs   from 'fs'
 import path from 'path'
 import { execSync } from 'child_process'
 
+function buildEnvPath(): string {
+  const current = process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'
+  const nvmDir  = process.env.NVM_DIR
+  if (!nvmDir) return current
+  const nvmBin = path.join(nvmDir, 'versions', 'node', `v${process.versions.node}`, 'bin')
+  return current.includes(nvmBin) ? current : `${nvmBin}:${current}`
+}
+
 const PLIST_LABEL = 'com.statforge.claudestat'
 const PLIST_PATH  = path.join(
   process.env.HOME ?? '~',
@@ -37,6 +45,8 @@ function makePlist(): string {
   <dict>
     <key>CLAUDESTAT_DAEMON</key>
     <string>1</string>
+    <key>PATH</key>
+    <string>${buildEnvPath()}</string>
   </dict>
   <key>StandardOutPath</key>
   <string>/tmp/claudestat-daemon.log</string>
@@ -57,6 +67,7 @@ ExecStart=${serviceCommand()} start
 Restart=on-failure
 RestartSec=5
 Environment=CLAUDESTAT_DAEMON=1
+Environment=PATH=${buildEnvPath()}
 
 [Install]
 WantedBy=default.target`

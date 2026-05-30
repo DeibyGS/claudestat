@@ -16,7 +16,7 @@ import { getCachedGitInfo, getCachedPRStatus } from '../cache/projects-cache'
 import { inferProjectCwd }      from './projects'
 import { deriveSessionState }   from '../session-state'
 import { sessionLastEvent, broadcast } from './stream'
-import { getClaudeDir, getClaudestatDir, getOpencodeDir, getHomeSlug } from '../paths'
+import { getClaudeDir, getClaudestatDir, getOpencodeDir, getHomeSlug, getDaemonLogFile } from '../paths'
 import { isSessionArchived } from '../watchers/opencode'
 import { computeProjection }    from '../cost-projector'
 
@@ -61,7 +61,8 @@ miscRouter.get('/intelligence/:sessionId', (req: Request, res: Response) => {
   if (!session) { res.status(404).json({ error: 'Session not found' }); return }
 
   const events = dbOps.getSessionEvents(sessionId)
-  const report = analyzeSession(events, session.total_cost_usd ?? 0)
+  const cfg    = readConfig()
+  const report = analyzeSession(events, session.total_cost_usd ?? 0, cfg.loopThreshold, cfg.loopWindowSecs * 1000)
   res.json({ sessionId, ...report })
 })
 
@@ -446,5 +447,21 @@ miscRouter.post('/tool-status', (req: Request, res: Response) => {
 
   broadcast({ type: 'tool_status_changed', payload: { tool, status, last_task: last_task ?? null, finished_at, session_id: session_id ?? null, waiting_for: waiting_for ?? null } })
   res.json({ ok: true })
+})
+
+// ─── GET /api/logs — últimos N líneas del daemon log ──────────────────────────
+
+miscRouter.get('/api/logs', (req: Request, res: Response) => {
+  const n = Math.min(parseInt(req.query.n as string, 10) || 50, 500)
+  const logFile = getDaemonLogFile()
+
+  try {
+    if (!fs.existsSync(logFile)) { res.json({ lines: [] }); return }
+    const content = fs.readFileSync(logFile, 'utf8')
+    const lines   = content.split('\n').filter(Boolean)
+    res.json({ lines: lines.slice(-n) })
+  } catch {
+    res.json({ lines: [] })
+  }
 })
 

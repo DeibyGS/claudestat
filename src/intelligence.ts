@@ -15,6 +15,13 @@ export interface LoopAlert {
   count: number       // cuántas veces se llamó en la ventana
   windowMs: number    // tamaño de la ventana temporal
   ts: number          // timestamp del último call del loop
+  context: LoopContext
+}
+
+export interface LoopContext {
+  repeatedFiles:    string[]   // archivos leídos/escritos durante el loop (deduplicados)
+  repeatedCommands: string[]   // comandos Bash repetidos (primeros 80 chars, deduplicados)
+  estimatedCostUsd: number     // coste estimado de los tool calls del loop
 }
 
 export interface IntelligenceReport {
@@ -29,38 +36,69 @@ export interface IntelligenceReport {
 
 // ─── Detección de loops ───────────────────────────────────────────────────────
 
-const LOOP_THRESHOLD   = 8          // calls para considerar loop
-const LOOP_WINDOW_MS   = 120_000    // ventana de tiempo: 2 minutos (antes 60s → demasiados falsos positivos en coding)
-const LOOP_COOLDOWN_MS = 120_000    // cooldown entre alertas del mismo tool: 2 min (antes 15s → re-alertaba constantemente)
+const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep'])
 
 /**
- * Detecta loops: cuando el mismo tool se llama ≥ LOOP_THRESHOLD veces
- * dentro de LOOP_WINDOW_MS. Evita alertas duplicadas con LOOP_COOLDOWN_MS.
+ * Detecta loops: cuando el mismo tool se llama ≥ threshold veces
+ * dentro de windowMs. Evita alertas duplicadas con COOLDOWN_MS = windowMs.
  *
  * Algoritmo: ventana deslizante sobre eventos ordenados por timestamp.
+ * Captura contexto (archivos repetidos, comandos Bash repetidos) para cada alerta.
  */
-export function detectLoops(events: EventRow[]): LoopAlert[] {
+export function detectLoops(
+  events: EventRow[],
+  threshold = 8,
+  windowMs  = 120_000,
+): LoopAlert[] {
+  const COOLDOWN_MS = windowMs   // cooldown = mismo tamaño que la ventana
+
   const alerts: LoopAlert[]            = []
-  const windowsByTool = new Map<string, number[]>()  // toolName → timestamps en ventana
+  const windowsByTool = new Map<string, number[]>()
 
   for (const ev of events) {
-    // Solo contamos tool calls (PreToolUse o Done — uno de los dos)
     if (ev.type !== 'Done' && ev.type !== 'PreToolUse') continue
     if (!ev.tool_name) continue
 
     const toolName = ev.tool_name
     const ts       = ev.ts
-
-    // Mantener solo los timestamps dentro de la ventana deslizante
-    const window = (windowsByTool.get(toolName) || []).filter(t => t >= ts - LOOP_WINDOW_MS)
+    const window   = (windowsByTool.get(toolName) || []).filter(t => t >= ts - windowMs)
     window.push(ts)
     windowsByTool.set(toolName, window)
 
-    if (window.length >= LOOP_THRESHOLD) {
-      // Verificar cooldown: no alertar si ya alertamos recientemente para este tool
+    if (window.length >= threshold) {
       const lastAlert = [...alerts].reverse().find(a => a.toolName === toolName)
-      if (!lastAlert || ts - lastAlert.ts >= LOOP_COOLDOWN_MS) {
-        alerts.push({ toolName, count: window.length, windowMs: LOOP_WINDOW_MS, ts })
+      if (!lastAlert || ts - lastAlert.ts >= COOLDOWN_MS) {
+        const windowStart = ts - windowMs
+        const loopEvents  = events.filter(e => e.ts >= windowStart && e.ts <= ts && e.type === 'Done')
+
+        const repeatedFiles    = new Set<string>()
+        const repeatedCommands = new Set<string>()
+
+        for (const le of loopEvents) {
+          if (!le.tool_input) continue
+          try {
+            const inp = JSON.parse(le.tool_input)
+            if (FILE_TOOLS.has(le.tool_name ?? '')) {
+              const fp = inp.file_path ?? inp.path ?? inp.pattern
+              if (typeof fp === 'string') repeatedFiles.add(fp)
+            }
+            if (le.tool_name === 'Bash' && typeof inp.command === 'string') {
+              repeatedCommands.add(inp.command.slice(0, 80))
+            }
+          } catch {}
+        }
+
+        alerts.push({
+          toolName,
+          count:   window.length,
+          windowMs,
+          ts,
+          context: {
+            repeatedFiles:    [...repeatedFiles].slice(0, 10),
+            repeatedCommands: [...repeatedCommands].slice(0, 5),
+            estimatedCostUsd: 0,
+          },
+        })
       }
     }
   }
@@ -109,8 +147,6 @@ export function calcEfficiencyScore(
 }
 
 // ─── Semantic metrics ─────────────────────────────────────────────────────────
-
-const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep'])
 
 const ERROR_PATTERN = /error:|ENOENT|EACCES|EPERM|permission denied|failed|No such file/i
 
@@ -298,8 +334,13 @@ export function predictSaturation(
 /**
  * Genera el reporte completo de inteligencia para una sesión.
  */
-export function analyzeSession(events: EventRow[], costUsd: number): IntelligenceReport {
-  const loops           = detectLoops(events)
+export function analyzeSession(
+  events:    EventRow[],
+  costUsd:   number,
+  threshold?: number,
+  windowMs?:  number,
+): IntelligenceReport {
+  const loops           = detectLoops(events, threshold, windowMs)
   const efficiencyScore = calcEfficiencyScore(events, loops, costUsd)
   const exactRetries    = detectExactRetries(events)
   const errorRate       = computeErrorRate(events)

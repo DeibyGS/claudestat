@@ -4,7 +4,7 @@ import type {
   AppState, TraceEvent, CostInfo, BlockCost,
   MetaStats, MetaSnapshot, DaySessions, ProjectSummary,
   QuotaData, SessionState, ClaudeStatsData, QuotaStats, SubAgentSession,
-  ActiveSource
+  ActiveSource, ToolStatus
 } from './types'
 import type { SystemConfig } from './components/SystemView'
 import { type Tab, Header }    from './components/Header'
@@ -57,6 +57,7 @@ export default function App() {
   const [quotaStats,   setQuotaStats]  = useState<QuotaStats | undefined>()
   const [activeSources,    setActiveSources]    = useState<ActiveSource[]>([])
   const [activeLiveSource, setActiveLiveSource] = useState<string>('claude-code')
+  const [toolStatus,       setToolStatus]       = useState<ToolStatus>({})
   const [opencodeEvents,   setOpencodeEvents]   = useState<TraceEvent[]>([])
   const [opencodePrompts,  setOpencodePrompts]  = useState<Array<{ index: number; ts: number; text: string }>>([])
   const [claudeCodeEvents,  setClaudeCodeEvents]  = useState<TraceEvent[]>([])
@@ -210,6 +211,19 @@ export default function App() {
     return () => clearInterval(t)
   }, [])
 
+  // ── Tool-status polling (5s) — estado real del orquestrador CC+OC ───────────
+  useEffect(() => {
+    function fetchToolStatus() {
+      fetch('/tool-status')
+        .then(r => r.ok ? r.json() : null)
+        .then(d => d && setToolStatus(d))
+        .catch(() => {})
+    }
+    fetchToolStatus()
+    const t = setInterval(fetchToolStatus, 5_000)
+    return () => clearInterval(t)
+  }, [])
+
   // ── Active sources polling (10s) ────────────────────────────────────────────
   useEffect(() => {
     function fetchSources() {
@@ -357,6 +371,7 @@ export default function App() {
             sources={activeSources}
             active={activeLiveSource}
             onSelect={setActiveLiveSource}
+            toolStatus={toolStatus}
           />
           <div style={liveLayout}>
             {(() => {
@@ -379,7 +394,9 @@ export default function App() {
               const ccState: SessionState = !ccLast ? 'idle'
                 : Date.now() - ccLast.ts > 120_000 ? 'idle'
                 : ccLast.type === 'PreToolUse' ? 'working' : 'waiting_for_input'
+              const ocToolStatus = toolStatus[activeLiveSource]
               const ocState: SessionState = !activeSource ? 'idle'
+                : ocToolStatus?.status === 'working' ? 'working'
                 : (Date.now() - activeSource.last_seen_ms) < 30_000 ? 'working'
                 : (Date.now() - activeSource.last_seen_ms) < 60_000 ? 'waiting_for_input'
                 : 'idle'

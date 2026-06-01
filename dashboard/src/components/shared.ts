@@ -34,14 +34,16 @@ export function fmtCost(usd: number): string {
 // ── Source helpers ──
 
 export function sourceColor(source?: string): string {
-  if (source === 'opencode')    return '#3fb950'
-  if (source === 'claude-code') return '#58a6ff'
+  if (source === 'opencode')              return '#3fb950'
+  if (source === 'claude-code')           return '#58a6ff'
+  if (source === 'opencode & claude-code') return '#bc8cff'
   return '#8b949e'
 }
 
 export function sourceLabel(source?: string): string {
-  if (source === 'claude-code') return 'Claude Code'
-  if (source === 'opencode')    return 'OpenCode'
+  if (source === 'claude-code')           return 'Claude Code'
+  if (source === 'opencode')              return 'OpenCode'
+  if (source === 'opencode & claude-code') return 'OC + CC'
   return source ?? '—'
 }
 

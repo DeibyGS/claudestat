@@ -11,26 +11,7 @@ import { getOpencodeDb } from '../paths'
 
 export const opencodeReaderRouter = Router()
 
-// OpenCode tool names → claudestat canonical names
-const TOOL_NAME_MAP: Record<string, string> = {
-  glob: 'Glob', read: 'Read', write: 'Write', edit: 'Edit', bash: 'Bash',
-  grep: 'Grep', webfetch: 'WebFetch', websearch: 'WebSearch',
-  skill: 'Skill', agent: 'Agent', task: 'Task',
-}
-
-interface MessageData {
-  role: string
-  path?: { cwd?: string }
-}
-
-interface PartData {
-  type:   string
-  tool?:  string
-  text?:  string
-  state?: { status?: string; input?: unknown; output?: string }
-}
-
-interface TraceEvent {
+export interface TraceEvent {
   type: string
   tool_name?: string
   tool_input?: string
@@ -39,39 +20,27 @@ interface TraceEvent {
   cwd?: string
 }
 
-interface PromptItem {
+export interface PromptItem {
   index: number
   ts:    number
   text:  string
 }
 
-function mapToolName(raw: string): string {
-  return TOOL_NAME_MAP[raw.toLowerCase()] ?? (raw.charAt(0).toUpperCase() + raw.slice(1))
-}
-
-function openDb() {
-  const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
-  return new DatabaseSync(getOpencodeDb(), { open: true })
-}
-
-opencodeReaderRouter.get('/api/opencode/session/:id', (req: Request, res: Response) => {
+export function getOpencodeEvents(sessionId: string): { events: TraceEvent[]; totalParts: number; prompts: PromptItem[] } {
   if (!fs.existsSync(getOpencodeDb())) {
-    res.status(404).json({ error: 'OpenCode DB not found' }); return
+    throw new Error('OpenCode DB not found')
   }
 
-  try {
-    const { id: sessionId } = req.params
-    const db = openDb()
+  const db = openDb()
 
+  try {
     // ── Find all related session IDs (OpenCode creates one session per prompt) ──
-    // Look up directory for this session
     const sessionRow = db.prepare(`
       SELECT directory, time_created FROM session WHERE id = ?
     `).get(sessionId) as { directory: string | null; time_created: number } | undefined
 
     let sessionIds = [sessionId]
     if (sessionRow?.directory) {
-      // Find sessions with same directory, ordered by creation time
       const sameDir = db.prepare(`
         SELECT id, time_created FROM session
         WHERE directory = ? AND time_archived IS NULL
@@ -79,16 +48,13 @@ opencodeReaderRouter.get('/api/opencode/session/:id', (req: Request, res: Respon
       `).all(sessionRow.directory) as Array<{ id: string; time_created: number }>
 
       if (sameDir.length > 1) {
-        // Locate our session in the sorted list
         let idx = sameDir.findIndex(s => s.id === sessionId)
         if (idx !== -1) {
-          // Expand forward: consecutive sessions with gap < 60s
           let end = idx
           for (let i = idx + 1; i < sameDir.length; i++) {
             if (sameDir[i].time_created - sameDir[i - 1].time_created > 300_000) break
             end = i
           }
-          // Expand backward
           let begin = idx
           for (let i = idx - 1; i >= 0; i--) {
             if (sameDir[begin].time_created - sameDir[i].time_created > 300_000) break
@@ -99,7 +65,6 @@ opencodeReaderRouter.get('/api/opencode/session/:id', (req: Request, res: Respon
       }
     }
 
-    // ── Query messages from ALL sessions in the group ──
     const placeholders = sessionIds.map(() => '?').join(',')
     const messages = db.prepare(`
       SELECT id, time_created, time_updated, data
@@ -119,7 +84,6 @@ opencodeReaderRouter.get('/api/opencode/session/:id', (req: Request, res: Respon
     let totalParts    = 0
     let blockIndex    = 0
     let pendingPrompt: { ts: number; text: string } | null = null
-    // Accumulated state for the current assistant turn (may span multiple messages)
     let turnHasTools  = false
     let turnEndTs     = 0
     let turnCwd: string | undefined = undefined
@@ -141,7 +105,6 @@ opencodeReaderRouter.get('/api/opencode/session/:id', (req: Request, res: Respon
       const msgData = JSON.parse(msg.data) as MessageData
 
       if (msgData.role === 'user') {
-        // Close previous assistant turn before processing user message
         closeTurn()
 
         const parts = db.prepare(`
@@ -196,11 +159,46 @@ opencodeReaderRouter.get('/api/opencode/session/:id', (req: Request, res: Respon
       }
     }
 
-    // Close the last assistant turn (no trailing user message)
     closeTurn()
 
+    return { events, totalParts, prompts }
+  } finally {
     db.close()
-    res.json({ events, totalParts, prompts })
+  }
+}
+
+// OpenCode tool names → claudestat canonical names
+const TOOL_NAME_MAP: Record<string, string> = {
+  glob: 'Glob', read: 'Read', write: 'Write', edit: 'Edit', bash: 'Bash',
+  grep: 'Grep', webfetch: 'WebFetch', websearch: 'WebSearch',
+  skill: 'Skill', agent: 'Agent', task: 'Task',
+}
+
+interface MessageData {
+  role: string
+  path?: { cwd?: string }
+}
+
+interface PartData {
+  type:   string
+  tool?:  string
+  text?:  string
+  state?: { status?: string; input?: unknown; output?: string }
+}
+
+function mapToolName(raw: string): string {
+  return TOOL_NAME_MAP[raw.toLowerCase()] ?? (raw.charAt(0).toUpperCase() + raw.slice(1))
+}
+
+function openDb() {
+  const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
+  return new DatabaseSync(getOpencodeDb(), { open: true })
+}
+
+opencodeReaderRouter.get('/api/opencode/session/:id', (req: Request, res: Response) => {
+  try {
+    const result = getOpencodeEvents(req.params.id)
+    res.json(result)
   } catch (err) {
     res.status(500).json({ error: String(err) })
   }

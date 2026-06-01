@@ -56,6 +56,7 @@ export function ReplayModal({ sessionId, onClose }: Props) {
   const [replay,    setReplay]    = useState<ReplayData | null>(null)
   const [agentTree, setAgentTree] = useState<AgentNode | null>(null)
   const [loading,   setLoading]   = useState(true)
+  const [error,     setError]     = useState<string | null>(null)
 
   useEffect(() => {
     Promise.all([
@@ -65,7 +66,10 @@ export function ReplayModal({ sessionId, onClose }: Props) {
       setReplay(rd)
       setAgentTree(tree)
       setLoading(false)
-    }).catch(() => setLoading(false))
+    }).catch((err) => {
+      setError(String(err))
+      setLoading(false)
+    })
   }, [sessionId])
 
   const chartData = (replay?.turns ?? []).map(t => ({
@@ -113,6 +117,12 @@ export function ReplayModal({ sessionId, onClose }: Props) {
         {loading && (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#7d8590', fontSize: 12 }}>
             Loading…
+          </div>
+        )}
+
+        {!loading && !replay && error && (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f85149', fontSize: 12, padding: 24, textAlign: 'center' }}>
+            Failed to load replay data: {error}
           </div>
         )}
 

@@ -323,6 +323,7 @@ const stmts = {
       (SELECT COUNT(*) FROM events WHERE session_id = s.id AND tool_name = 'Skill')  as skill_count
     FROM sessions s
     WHERE s.started_at >= ?
+      AND s.id NOT LIKE 'test-%'
     ORDER BY s.started_at DESC
   `),
 

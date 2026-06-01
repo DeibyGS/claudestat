@@ -67,10 +67,17 @@ function SessionCardInner({ session: s, isActive, selectable, selected = false, 
           </div>
         )}
         {isActive && (
-          <span style={{ color: '#3fb950', fontSize: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3fb950', animation: 'livePulse 1.2s ease-in-out infinite', display: 'inline-block' }} />
-            LIVE
-          </span>
+          <Tip position="top" align="left" content={
+            <div>
+              <div style={{ color: '#3fb950', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Live Session</div>
+              <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>This session is currently active — tool events are being recorded in real time</div>
+            </div>
+          }>
+            <span style={{ color: '#3fb950', fontSize: 10, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#3fb950', animation: 'livePulse 1.2s ease-in-out infinite', display: 'inline-block' }} />
+              LIVE
+            </span>
+          </Tip>
         )}
         <Tip position="top" align="left" content={
           <div>
@@ -92,9 +99,19 @@ function SessionCardInner({ session: s, isActive, selectable, selected = false, 
         {s.project_name && (
           <>
             <span style={S.sep}>│</span>
-            <span style={{ color: '#79c0ff', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-              <FolderOpen size={10} /> {s.project_name}
-            </span>
+            <Tip position="top" align="left" content={
+              <div>
+                <div style={{ color: '#79c0ff', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Project</div>
+                <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>
+                  Directory: <span style={{ fontFamily: 'monospace', color: '#c9d1d9', wordBreak: 'break-all' }}>{s.project_path}</span>
+                </div>
+                <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5, marginTop: 4 }}>Git or npm project this session worked on</div>
+              </div>
+            }>
+              <span style={{ color: '#79c0ff', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                <FolderOpen size={10} /> {s.project_name}
+              </span>
+            </Tip>
           </>
         )}
         <div style={{ flex: 1 }} />
@@ -118,9 +135,29 @@ function SessionCardInner({ session: s, isActive, selectable, selected = false, 
           </Tip>
         )}
         {s.source && (
-          <span style={S.badge(sourceColor(s.source))}>
-            {sourceLabel(s.source)}
-          </span>
+          <Tip position="top" align="right" content={
+            s.source === 'opencode & claude-code' ? (
+              <div>
+                <div style={{ color: '#bc8cff', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Merged session</div>
+                <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>
+                  This group combines consecutive sessions from both Claude Code and OpenCode working on the same project
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div style={{ color: sourceColor(s.source), fontWeight: 700, fontSize: 12, marginBottom: 4 }}>{sourceLabel(s.source)}</div>
+                <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>
+                  {s.source === 'claude-code'
+                    ? 'Sessions recorded via Claude Code hooks (JSONL-based tracking)'
+                    : 'Sessions recorded directly from OpenCode\'s SQLite database'}
+                </div>
+              </div>
+            )
+          }>
+            <span style={S.badge(sourceColor(s.source))}>
+              {sourceLabel(s.source)}
+            </span>
+          </Tip>
         )}
         <Tip position="top" align="right" content={
           <div>
@@ -207,17 +244,22 @@ function SessionCardInner({ session: s, isActive, selectable, selected = false, 
         </Tip>
       </div>
 
-      {/* Tool fingerprint — colored bar per tool (C.11) */}
+      {/* Tool fingerprint — colored bar per tool */}
       {s.top_tools.length > 0 && (
         <Tip position="top" align="left" content={
           <div>
-            <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 6 }}>Most used tools</div>
+            <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 6 }}>
+              Most used tools
+              {s.done_count > 0 && <span style={{ color: '#484f58', fontWeight: 400 }}> ({s.done_count} total calls)</span>}
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               {s.top_tools.map((tool, i) => (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ width: 8, height: 8, borderRadius: 2, background: TOOL_COLORS[tool] ?? TOOL_COLORS.default, flexShrink: 0 }} />
                   <span style={{ color: '#c9d1d9', fontSize: 10 }}>{tool}</span>
-                  {i === 0 && <span style={{ color: '#484f58', fontSize: 9 }}>— most frequent</span>}
+                  {i === 0 && <span style={{ color: '#8b949e', fontSize: 9 }}>top</span>}
+                  {i === 1 && <span style={{ color: '#484f58', fontSize: 9 }}>2nd</span>}
+                  {i === 2 && <span style={{ color: '#484f58', fontSize: 9 }}>3rd</span>}
                 </div>
               ))}
             </div>

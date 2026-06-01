@@ -268,3 +268,13 @@ export interface AgentNode {
   started_at:     number
   children:       AgentNode[]
 }
+
+export interface ToolStatusEntry {
+  status:      'working' | 'idle' | 'unknown'
+  last_task:   string | null
+  finished_at: number | null
+  session_id?: string | null
+  waiting_for?: string | null
+}
+
+export type ToolStatus = Record<string, ToolStatusEntry>

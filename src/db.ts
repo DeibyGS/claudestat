@@ -251,6 +251,18 @@ export interface DailyActivity {
   tool_calls:   number
 }
 
+export interface DailySummary {
+  today_cost: number
+  today_sessions: number
+  today_tokens: number
+  today_top_tool: string
+  today_top_tool_pct: number
+  vs_yesterday_cost_pct: number | null
+  vs_yesterday_sessions_delta: number | null
+  vs_7d_avg_cost_pct: number | null
+  weekly_pace_cost: number
+}
+
 // ─── Prepared statements (se compilan una vez al iniciar) ─────────────────────
 
 const stmts = {
@@ -1238,6 +1250,68 @@ export const dbOps = {
       sizeKb,
       oldestEventAt: oldest?.v ?? null,
       totalEvents: total?.v ?? 0,
+    }
+  },
+
+  getDailySummary(): DailySummary {
+    const todayMidnight = new Date()
+    todayMidnight.setHours(0, 0, 0, 0)
+    const todayStart = todayMidnight.getTime()
+    const yesterdayStart = todayStart - 86_400_000
+
+    const todayRow = db.prepare(`
+      SELECT COALESCE(SUM(total_cost_usd),0) as cost,
+             COUNT(*) as sessions,
+             COALESCE(SUM(total_input_tokens + total_output_tokens),0) as tokens
+      FROM sessions WHERE started_at >= ?
+    `).get(todayStart) as { cost: number; sessions: number; tokens: number }
+
+    const yesterdayRow = db.prepare(`
+      SELECT COALESCE(SUM(total_cost_usd),0) as cost, COUNT(*) as sessions
+      FROM sessions WHERE started_at >= ? AND started_at < ?
+    `).get(yesterdayStart, todayStart) as { cost: number; sessions: number }
+
+    const topToolRow = db.prepare(`
+      SELECT tool_name, COUNT(*) as cnt
+      FROM events WHERE type = 'Done' AND ts >= ? AND tool_name IS NOT NULL
+      GROUP BY tool_name ORDER BY cnt DESC LIMIT 1
+    `).get(todayStart) as { tool_name: string; cnt: number } | undefined
+
+    const totalDoneToday = (db.prepare(`
+      SELECT COUNT(*) as cnt FROM events WHERE type = 'Done' AND ts >= ?
+    `).get(todayStart) as { cnt: number }).cnt
+
+    const sevenDayRow = db.prepare(`
+      SELECT COALESCE(SUM(total_cost_usd),0) as cost
+      FROM sessions WHERE started_at >= ? AND started_at < ?
+    `).get(todayStart - 7 * 86_400_000, todayStart) as { cost: number }
+
+    const weekDayOfWeek = new Date(todayStart).getDay()
+    const daysFromMonday = (weekDayOfWeek + 6) % 7
+    const weekStart = todayStart - daysFromMonday * 86_400_000
+    const weekCostRow = db.prepare(`
+      SELECT COALESCE(SUM(total_cost_usd),0) as cost FROM sessions WHERE started_at >= ?
+    `).get(weekStart) as { cost: number }
+
+    const daysElapsed = Math.max(1, daysFromMonday + 1)
+    const avg7d = sevenDayRow.cost / 7
+
+    return {
+      today_cost: todayRow.cost,
+      today_sessions: todayRow.sessions,
+      today_tokens: todayRow.tokens,
+      today_top_tool: topToolRow?.tool_name ?? '',
+      today_top_tool_pct: topToolRow && totalDoneToday > 0
+        ? Math.round(topToolRow.cnt / totalDoneToday * 100)
+        : 0,
+      vs_yesterday_cost_pct: yesterdayRow.cost > 0
+        ? Math.round((todayRow.cost - yesterdayRow.cost) / yesterdayRow.cost * 100)
+        : null,
+      vs_yesterday_sessions_delta: todayRow.sessions - yesterdayRow.sessions,
+      vs_7d_avg_cost_pct: avg7d > 0
+        ? Math.round((todayRow.cost - avg7d) / avg7d * 100)
+        : null,
+      weekly_pace_cost: (weekCostRow.cost / daysElapsed) * 7,
     }
   },
 }

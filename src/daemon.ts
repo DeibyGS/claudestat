@@ -23,7 +23,7 @@ import { startEnricher, stopEnricher }                                        fr
 import { readConfig, getWarnLevel }                                 from './config'
 import { computeQuota }                                              from './quota-tracker'
 import { sendDesktopNotification, sendWebhookAlert } from './notifier'
-import { eventsRouter, onCostUpdate, onCompactDetected }            from './routes/events'
+import { eventsRouter, onCostUpdate, onCompactDetected, setSessionStopCallback }            from './routes/events'
 import { streamRouter, getSseClientsSize, broadcast }               from './routes/stream'
 import { projectsRouter, inferProjectCwd }                          from './routes/projects'
 import { historyRouter }                                            from './routes/history'
@@ -163,6 +163,8 @@ const LEVEL_COLOR = {
 let _lastCycleAlertLevel:  string | null = null
 let _lastWeeklyAlertLevel: string | null = null
 let _resetReminderFired = false
+let _weeklyThresholdsFired = new Set<number>()
+let _lastWeeklyPctSeen = 0
 let _contextThresholdsFired = new Set<number>()
 let _lastContextSessionId = ''
 const CONTEXT_THRESHOLDS = [50, 75, 90]
@@ -238,6 +240,32 @@ function startAlertPolling() {
         'claudestat — Weekly usage alert',
         `${data.weeklyPctAll}% of weekly quota used`
       )
+
+      // ── Weekly plan threshold alerts (25/50/75/90/100%) ────────────────────────
+      const weeklyPct = data.weeklyPctAll
+      if (weeklyPct < _lastWeeklyPctSeen) {
+        _weeklyThresholdsFired.clear()
+      }
+      _lastWeeklyPctSeen = weeklyPct
+      const WEEKLY_THRESHOLDS = [25, 50, 75, 90, 100] as const
+      for (const th of WEEKLY_THRESHOLDS) {
+        if (weeklyPct >= th && !_weeklyThresholdsFired.has(th)) {
+          _weeklyThresholdsFired.add(th)
+          const daysLeft = parseFloat((7 * (100 - weeklyPct) / 100).toFixed(1))
+          const weekInsight = dbOps.getWeeklyInsight(7)
+          const dailyBurn = weekInsight ? weekInsight.total_cost / 7 : 0
+          const planLabel = data.detectedPlan === 'pro' ? 'Pro'
+            : data.detectedPlan === 'free' ? 'Free'
+            : data.detectedPlan === 'max5' ? 'Max5'
+            : data.detectedPlan === 'max20' ? 'Max20'
+            : data.detectedPlan
+          const burnStr = dailyBurn < 0.005 ? '$0.00' : `$${dailyBurn.toFixed(2)}`
+          sendDesktopNotification(
+            'claudestat — Weekly plan usage',
+            `Plan ${planLabel} · ${weeklyPct}% weekly · ~${daysLeft} days left · burn: ${burnStr}/day`
+          )
+        }
+      }
 
       // ── Reset reminder ───────────────────────────────────────────────────────
       const reminderMs = (cfg.resetReminderMins ?? 10) * 60_000
@@ -367,6 +395,26 @@ export function startDaemon() {
 
     // Iniciar el watcher de JSONL para enriquecimiento de coste
     startEnricher(onCostUpdate, onCompactDetected)
+
+    setSessionStopCallback((sessionId: string) => {
+      try {
+        const cfg = readConfig()
+        if (!cfg.alertsEnabled) return
+        const s = dbOps.getSession(sessionId)
+        if (!s) return
+        const cost = s.total_cost_usd ?? 0
+        const totalTok = (s.total_input_tokens ?? 0) + (s.total_output_tokens ?? 0)
+        const eff = s.efficiency_score ?? 100
+        const loops = s.loops_detected ?? 0
+        const costStr = cost < 0.005 ? '< $0.01' : `$${cost.toFixed(2)}`
+        const tokStr = totalTok >= 1_000_000
+          ? `${(totalTok / 1_000_000).toFixed(1)}M`
+          : totalTok >= 1_000 ? `${Math.round(totalTok / 1_000)}K` : `${totalTok}`
+        let body = `Session closed · ${costStr} · ${tokStr} tokens · efficiency ${eff}%`
+        if (loops >= 5) body += ` · ${loops} loops — add context to CLAUDE.md`
+        sendDesktopNotification('claudestat — Session closed', body)
+      } catch {}
+    })
 
     // Scheduler de informes automáticos — corre cada minuto
     reportInterval = setInterval(() => {

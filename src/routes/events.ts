@@ -31,16 +31,14 @@ const SATURATION_WARN_MINUTES = 30
 const SATURATION_COOLDOWN_MS  = 15 * 60_000
 const CONTEXT_SAMPLES_MAX     = 20
 
-// ─── Loop alert cooldown (toolName:sessionId → last alert ts) ─────────────────
-const loopAlertCooldown = new Map<string, number>()
-const LOOP_ALERT_COOLDOWN_MS = 120_000  // coincide con LOOP_COOLDOWN_MS en intelligence.ts
-
 // ─── Context threshold tracking: qué thresholds ya se notificaron por sesión ──
 const contextThresholdsFired = new Map<string, Set<number>>()
 const CONTEXT_THRESHOLDS = [50, 75, 90] as const
 
 // ─── Session cost alert: sesiones que ya recibieron notificación ───────────────
 const sessionCostAlertFired = new Set<string>()
+
+let _sessionStopCallback: ((sessionId: string) => void) | null = null
 
 // ─── Memory leak bounds ────────────────────────────────────────────────────────
 const AGENT_CWD_TTL_MS   = 30 * 60_000  // entries older than 30min can't be valid parents
@@ -185,6 +183,7 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
     if (type === 'Stop') {
       activeSkillBySession.delete(session_id)
       cleanupSession(session_id)
+      if (_sessionStopCallback) _sessionStopCallback(session_id)
     }
 
     // Registrar Agent PreToolUse para detección de sub-sesiones
@@ -410,22 +409,6 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
     )
   }
 
-  // ─── Loop alert: notificación de escritorio si hay loops activos ─────────────
-  if (cfg.alertsEnabled && report.loops.length > 0) {
-    const now = Date.now()
-    for (const loop of report.loops) {
-      const key      = `${loop.toolName}:${sessionId}`
-      const lastSent = loopAlertCooldown.get(key) ?? 0
-      if (now - lastSent >= LOOP_ALERT_COOLDOWN_MS) {
-        loopAlertCooldown.set(key, now)
-        sendDesktopNotification(
-          'claudestat — Loop detected',
-          `${loop.toolName} called ${loop.count}× in 2min — session may be stuck`
-        )
-      }
-    }
-  }
-
   // Emitir desglose de costo del último bloque (input vs output) para el TracePanel
   if (cost.lastEntry) {
     broadcast({
@@ -466,6 +449,10 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
 export const onCompactDetected: CompactDetectedCallback = (sessionId) => {
   broadcast({ type: 'compact_detected', payload: { session_id: sessionId, ts: Date.now() } })
   console.log(`[daemon] Auto-compact detected for session ${sessionId.slice(0, 8)}`)
+}
+
+export function setSessionStopCallback(fn: (sessionId: string) => void): void {
+  _sessionStopCallback = fn
 }
 
 // Exponer callback para que stream.ts pueda inyectarlo en processLatestForSession

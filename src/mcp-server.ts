@@ -47,6 +47,10 @@ let _mcpLastContextSessionId = ''
 const MCP_CONTEXT_THRESHOLDS = [50, 75, 90] as const
 const MCP_CONTEXT_POLL_MS = 30_000
 
+let _mcpWeeklyThresholdsFired = new Set<number>()
+let _mcpLastWeeklyPct = 0
+const MCP_WEEKLY_THRESHOLDS = [25, 50, 75, 90, 100] as const
+
 type JsonRpcRequest = { jsonrpc: '2.0'; id?: number | string; method: string; params?: Record<string, unknown> }
 type JsonRpcResponse = { jsonrpc: '2.0'; id?: number | string; result?: unknown; error?: { code: number; message: string } }
 
@@ -146,6 +150,15 @@ const TOOLS = [
   {
     name: 'get_context_status',
     description: 'Get current context window usage for the latest session: used tokens, window size, percentage, and model',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'get_daily_summary',
+    description: "Get today's usage summary vs yesterday and 7-day personal average: cost, sessions, tokens, top tool, and weekly pace",
     inputSchema: {
       type: 'object',
       properties: {},
@@ -401,6 +414,32 @@ function toolGetContextStatus(): string {
   ].join('\n')
 }
 
+function toolGetDailySummary(): string {
+  const s = dbOps.getDailySummary()
+
+  const fmtDelta = (pct: number | null): string => {
+    if (pct === null) return 'no prior data'
+    if (pct === 0) return 'same'
+    return pct > 0 ? `+${pct}%` : `${pct}%`
+  }
+
+  const topToolLine = s.today_top_tool
+    ? `Top tool today: ${s.today_top_tool} (${s.today_top_tool_pct}% of calls)`
+    : `Top tool today: —`
+
+  const sessionsDelta = s.vs_yesterday_sessions_delta !== null && s.vs_yesterday_sessions_delta !== 0
+    ? ` · ${s.vs_yesterday_sessions_delta > 0 ? '+' : ''}${s.vs_yesterday_sessions_delta} sessions`
+    : ''
+
+  return [
+    `Today: ${fmtDollar(s.today_cost)} · ${s.today_sessions} session${s.today_sessions !== 1 ? 's' : ''} · ${fmtTok(s.today_tokens)} tokens`,
+    `vs yesterday: ${fmtDelta(s.vs_yesterday_cost_pct)} cost${sessionsDelta}`,
+    `vs 7d avg: ${fmtDelta(s.vs_7d_avg_cost_pct)} your normal`,
+    topToolLine,
+    `Weekly pace: on track for ~${fmtDollar(s.weekly_pace_cost)} this week`,
+  ].join('\n')
+}
+
 function toolGetWeeklyInsight(days: number): string {
   const d = Math.max(1, Math.min(90, Math.floor(days || 7)))
   const data = getWeeklyInsightData(d)
@@ -446,6 +485,7 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
       typeof args.days === 'number' ? args.days : 7
     )
     case 'get_context_status': return warning + toolGetContextStatus()
+    case 'get_daily_summary': return warning + toolGetDailySummary()
     default: return `Unknown tool: ${name}`
   }
 }
@@ -523,6 +563,31 @@ function startContextPolling() {
             const msg = `claudestat — Context at ${th}% (${contextUsed.toLocaleString()} / ${contextWindow.toLocaleString()} tokens)`
             process.stderr.write(`\x1b[33m[MCP] ${msg}\x1b[0m\n`)
             // Send JSON-RPC notification to MCP client (no 'id' field)
+            const notif = JSON.stringify({
+              jsonrpc: '2.0',
+              method: 'notifications/message',
+              params: { level: 'warning', message: msg }
+            })
+            process.stdout.write(notif + '\n')
+          }
+        }
+      }
+
+      const q = computeQuota()
+      const weeklyPct = q.weeklyPctAll
+      if (weeklyPct < _mcpLastWeeklyPct) {
+        _mcpWeeklyThresholdsFired.clear()
+      }
+      _mcpLastWeeklyPct = weeklyPct
+      if (weeklyPct > 0) {
+        const todayDow = new Date().getDay()
+        const daysFromMonday = Math.max(1, (todayDow + 6) % 7)
+        for (const th of MCP_WEEKLY_THRESHOLDS) {
+          if (weeklyPct >= th && !_mcpWeeklyThresholdsFired.has(th)) {
+            _mcpWeeklyThresholdsFired.add(th)
+            const daysLeft = ((100 - weeklyPct) / weeklyPct * daysFromMonday).toFixed(1)
+            const msg = `Weekly plan at ${th}% — ~${daysLeft} days remaining at current burn rate`
+            process.stderr.write(`\x1b[33m[MCP] ${msg}\x1b[0m\n`)
             const notif = JSON.stringify({
               jsonrpc: '2.0',
               method: 'notifications/message',

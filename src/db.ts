@@ -1215,4 +1215,29 @@ export const dbOps = {
       ORDER BY date ASC
     `).all(since) as DailyActivity[]
   },
+
+  getToolSparklines(tools: string[], days: number): Record<string, { day: string; calls: number; cost: number }[]> {
+    const since = Date.now() - days * 86_400_000
+    const stmt = db.prepare(`
+      SELECT date(ts/1000,'unixepoch') as day, COUNT(*) as calls, 0 as cost
+      FROM events WHERE tool_name = ? AND ts >= ? AND type = 'Done' GROUP BY day ORDER BY day
+    `)
+    const result: Record<string, { day: string; calls: number; cost: number }[]> = {}
+    for (const tool of tools) {
+      result[tool] = stmt.all(tool, since) as { day: string; calls: number; cost: number }[]
+    }
+    return result
+  },
+
+  getDbStats(): { sizeKb: number; oldestEventAt: number | null; totalEvents: number } {
+    let sizeKb = 0
+    try { sizeKb = Math.round(fs.statSync(DB_PATH).size / 1024) } catch {}
+    const oldest = db.prepare('SELECT MIN(ts) as v FROM events').get() as any
+    const total = db.prepare('SELECT COUNT(*) as v FROM events').get() as any
+    return {
+      sizeKb,
+      oldestEventAt: oldest?.v ?? null,
+      totalEvents: total?.v ?? 0,
+    }
+  },
 }

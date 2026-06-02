@@ -87,6 +87,19 @@ const COLORS = [
   '#58a6ff', '#3fb950', '#d29922', '#f0883e', '#bc8cff',
   '#f778ba', '#79c0ff', '#56d364', '#e3b341', '#ff7b72',
 ]
+const GRID_COLS = '32px 200px 70px 60px 80px 80px'
+
+function Sparkline({ data, color }: { data: number[]; color: string }) {
+  const w = 60, h = 16, pad = 2
+  if (!data.length) return <svg width={w} height={h}><line x1={0} y1={h/2} x2={w} y2={h/2} stroke={color} strokeWidth={1} opacity={0.3} /></svg>
+  const max = Math.max(...data, 1)
+  const pts = data.map((v, i) => {
+    const x = data.length === 1 ? w/2 : (i / (data.length - 1)) * (w - pad*2) + pad
+    const y = h - pad - ((v / max) * (h - pad*2))
+    return `${x},${y}`
+  }).join(' ')
+  return <svg width={w} height={h}><polyline points={pts} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" /></svg>
+}
 
 export function TopView() {
   const [data, setData] = useState<TopData | undefined>()
@@ -98,6 +111,7 @@ export function TopView() {
   const [otherTools, setOtherTools] = useState<TopTool[]>([])
   const [otherExpanded, setOtherExpanded] = useState(false)
   const [otherLoading, setOtherLoading] = useState(false)
+  const [sparklines, setSparklines] = useState<Record<string,{day:string;calls:number;cost:number}[]>>({})
 
   const fetchOther = useCallback(() => {
     if (otherExpanded) { setOtherExpanded(false); return }
@@ -118,6 +132,16 @@ export function TopView() {
       .then(d => { if (d) setData(d); setLoading(false) })
       .catch(() => setLoading(false))
   }, [sortBy, days, sourceFilter])
+
+  useEffect(() => {
+    if (!data?.tools?.length) return
+    const toolNames = data.tools.filter(t => t.tool !== 'Other').map(t => t.tool)
+    if (!toolNames.length) return
+    fetch(`/api/top-sparklines?days=7&tools=${toolNames.join(',')}`)
+      .then(r => r.ok ? r.json() : undefined)
+      .then(d => d && setSparklines(d.sparklines ?? {}))
+      .catch(() => {})
+  }, [data])
 
   useEffect(() => {
     fetch('/cost-projection')
@@ -196,7 +220,7 @@ export function TopView() {
           {loading && <div style={{ fontSize: 10, color: '#484f58', marginBottom: 6 }}>Refreshing…</div>}
           {/* Table header */}
           <div style={{
-            display: 'grid', gridTemplateColumns: '32px 200px 70px 80px 80px',
+            display: 'grid', gridTemplateColumns: GRID_COLS,
             gap: 8, padding: '0 8px', fontSize: 10, fontWeight: 600, color: '#8b949e',
             textTransform: 'uppercase', letterSpacing: '0.5px',
           }}>
@@ -218,6 +242,7 @@ export function TopView() {
                 </div>
               }>Duration</Tip>
             </span>
+            <span>Trend</span>
             <span style={{ textAlign: 'right' }}>
               <Tip position="bottom" align="right" content={
                 <div style={{ fontSize: 11, lineHeight: 1.7 }}>
@@ -234,7 +259,7 @@ export function TopView() {
               : t.totalDurationMs / maxDuration
             return (
               <div key={`${t.tool}-${t.source}`} style={{
-                display: 'grid', gridTemplateColumns: '32px 200px 70px 80px 80px',
+                display: 'grid', gridTemplateColumns: GRID_COLS,
                 gap: 8, padding: '8px', fontSize: 12, color: '#e6edf3',
                 background: '#161b22', border: '1px solid #21262d', borderRadius: 6,
                 position: 'relative', overflow: 'hidden',
@@ -291,6 +316,11 @@ export function TopView() {
                 </span>
                  <span style={{ textAlign: 'right', color: '#8b949e', position: 'relative' }}>{t.tool === 'Other' ? '—' : t.count.toLocaleString()}</span>
                  <span style={{ textAlign: 'right', color: '#8b949e', position: 'relative' }}>{t.tool === 'Other' || t.totalDurationMs === 0 ? '—' : fmtDur(t.totalDurationMs)}</span>
+                {t.tool === 'Other' ? <span /> : (
+                  <span style={{ display: 'flex', alignItems: 'center' }}>
+                    <Sparkline data={(sparklines[t.tool] ?? []).map(d => d.calls)} color={COLORS[i % COLORS.length]} />
+                  </span>
+                )}
                 <span style={{ textAlign: 'right', fontWeight: 600, color: COLORS[i % COLORS.length], position: 'relative' }}>{fmtCostPrecise(t.estimatedCostUsd)}</span>
               </div>
             )
@@ -301,7 +331,7 @@ export function TopView() {
             <div style={{ marginLeft: 16, borderLeft: '2px solid #30363d', paddingLeft: 8, display: 'flex', flexDirection: 'column', gap: 3 }}>
               {otherTools.map((t, i) => (
                 <div key={`${t.tool}-${t.source}-other`} style={{
-                  display: 'grid', gridTemplateColumns: '32px 200px 70px 80px 80px',
+                  display: 'grid', gridTemplateColumns: GRID_COLS,
                   gap: 8, padding: '5px 8px', fontSize: 11, color: '#8b949e',
                   background: '#0d1117', border: '1px solid #161b22', borderRadius: 4,
                 }}>
@@ -312,6 +342,7 @@ export function TopView() {
                   </span>
                   <span style={{ textAlign: 'right' }}>{t.count.toLocaleString()}</span>
                   <span style={{ textAlign: 'right' }}>{t.totalDurationMs > 0 ? fmtDur(t.totalDurationMs) : '—'}</span>
+                  <span />
                   <span style={{ textAlign: 'right', fontWeight: 600 }}>{fmtCostPrecise(t.estimatedCostUsd)}</span>
                 </div>
               ))}
@@ -329,7 +360,7 @@ export function TopView() {
             const totalCost     = tools.reduce((s, t) => s + t.estimatedCostUsd, 0)
             return (
               <div style={{
-                display: 'grid', gridTemplateColumns: '32px 200px 70px 80px 80px',
+                display: 'grid', gridTemplateColumns: GRID_COLS,
                 gap: 8, padding: '8px', fontSize: 12,
                 borderTop: '1px solid #30363d', marginTop: 2,
               }}>
@@ -337,6 +368,7 @@ export function TopView() {
                 <span style={{ color: '#8b949e', fontWeight: 600, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.5px', alignSelf: 'center' }}>Total shown</span>
                 <span style={{ textAlign: 'right', color: '#e6edf3', fontWeight: 600 }}>{totalCalls.toLocaleString()}</span>
                 <span style={{ textAlign: 'right', color: '#e6edf3', fontWeight: 600 }}>{fmtDur(totalDuration)}</span>
+                <span />
                 <span style={{ textAlign: 'right', color: '#e6edf3', fontWeight: 700 }}>{fmtCostPrecise(totalCost)}</span>
               </div>
             )

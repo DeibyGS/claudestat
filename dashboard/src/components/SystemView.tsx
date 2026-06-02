@@ -20,6 +20,7 @@ export interface SystemConfig {
     warnThresholds?:     number[]   // [yellow, orange, red]
     plan?:               string | null
   }
+  dbStats?: { sizeKb: number; oldestEventAt: number | null; totalEvents: number }
   opencode?: {
     config:     Record<string, unknown> | null
     agentsMd:   { lines: number; sizeKb: number } | null
@@ -963,6 +964,20 @@ export function SystemView({ config, error, onRetry }: { config?: SystemConfig; 
 
         <ContextSection files={config.contextFiles} />
         <ClaudestatSection cfg={config.claudestatConfig} />
+        {config.dbStats && (() => {
+          const { sizeKb, oldestEventAt, totalEvents } = config.dbStats
+          const mb = (sizeKb / 1024).toFixed(1)
+          const since = oldestEventAt ? new Date(oldestEventAt).toLocaleDateString('en', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
+          const isYellow = sizeKb > 500_000 || (oldestEventAt ? Date.now() - oldestEventAt > 365 * 86_400_000 : false)
+          const isRed = sizeKb > 1_000_000
+          const warnColor = isRed ? '#f85149' : '#d29922'
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', fontSize: 11, color: '#6e7681' }}>
+              {(isRed || isYellow) && <TriangleAlert size={12} color={warnColor} />}
+              <span>Data since: <span style={{ color: '#c9d1d9' }}>{since}</span> · <span style={{ color: '#c9d1d9' }}>{totalEvents.toLocaleString()}</span> events · <span style={{ color: isRed ? warnColor : isYellow ? warnColor : '#c9d1d9' }}>{mb} MB</span></span>
+            </div>
+          )
+        })()}
 
         <div style={{ gridColumn: '1 / -1' }}>
           <MemorySection memoryFiles={config.memoryFiles} memoryMdLines={config.memoryMdLines} />

@@ -1,6 +1,9 @@
-import { test, describe } from 'node:test'
+import { test, describe, before, after } from 'node:test'
 import assert from 'node:assert/strict'
+import http from 'http'
+import express from 'express'
 import { dbOps } from '../src/db'
+import { topRouter } from '../src/routes/top'
 
 process.env.CLAUDESTAT_DB_PATH ??= ':memory:'
 process.env.CLAUDESTAT_DATA_DIR ??= require('os').tmpdir()
@@ -55,5 +58,22 @@ describe('getCostProjection', () => {
   test('does not throw with valid input', () => {
     assert.doesNotThrow(() => dbOps.getCostProjection(30))
     assert.doesNotThrow(() => dbOps.getCostProjection(1))
+  })
+})
+
+describe('GET /api/top-sparklines', () => {
+  const app = express()
+  app.use(topRouter)
+  const server = http.createServer(app)
+  let PORT = 0
+
+  before((_, done) => { server.listen(0, () => { PORT = (server.address() as any).port; done() }) })
+  after((_, done) => { server.close(() => done()) })
+
+  test('GET /api/top-sparklines returns sparklines object', async () => {
+    const res = await fetch(`http://localhost:${PORT}/api/top-sparklines?days=7&tools=Bash,Read`)
+    assert.strictEqual(res.status, 200)
+    const data = await res.json()
+    assert.ok(typeof data.sparklines === 'object')
   })
 })

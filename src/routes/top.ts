@@ -64,3 +64,12 @@ topRouter.get('/api/top', (req: Request, res: Response) => {
     })),
   })
 })
+
+topRouter.get('/api/top-sparklines', (req: Request, res: Response) => {
+  const days = Math.max(1, Math.min(parseInt(req.query.days as string, 10) || 7, 90))
+  const tools = req.query.tools as string
+  if (!tools) { res.status(400).json({ error: 'tools required' }); return }
+  const toolList = tools.split(',').map(t => t.trim()).filter(Boolean).slice(0, 20)
+  const result = dbOps.getToolSparklines(toolList, days)
+  res.json({ sparklines: result })
+})

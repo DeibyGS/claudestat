@@ -354,6 +354,7 @@ miscRouter.get('/system-config', (_req: Request, res: Response) => {
     _systemConfigCache = {
       hooks, agents, workflows, skills, contextFiles, memoryFiles, memoryMdLines,
       modeDistribution, claudestatConfig,
+      dbStats: dbOps.getDbStats(),
       opencode: {
         config: opencodeConfig,
         agentsMd: opencodeAgentsMd,

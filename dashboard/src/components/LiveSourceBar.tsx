@@ -24,6 +24,8 @@ export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Pr
   if (sources.length === 0) return null
 
   return (
+    <>
+    <style>{`@keyframes pulse-dot { 0%,100% { opacity: 1; transform: scale(1) } 50% { opacity: 0.6; transform: scale(1.5) } }`}</style>
     <div style={{
       display: 'flex', alignItems: 'center', gap: 6,
       padding: '6px 16px', borderBottom: '1px solid #21262d',
@@ -53,6 +55,7 @@ export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Pr
               <span style={{
                 width: 6, height: 6, borderRadius: '50%',
                 background: dotColor, display: 'inline-block', flexShrink: 0,
+                ...(isActive && (waitingFor || lastTask) ? { animation: 'pulse-dot 1.4s ease-in-out infinite' } : {}),
               }} />
               <span style={{ fontWeight: isActive ? 600 : 400 }}>
                 {SOURCE_LABELS[s.source] ?? s.source}
@@ -86,6 +89,7 @@ export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Pr
         )
       })}
     </div>
+    </>
   )
 }
 

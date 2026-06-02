@@ -10,7 +10,7 @@ import fs from 'fs'
 import os from 'os'
 import { type PollableAdapter, type PollSession, type ParsedEvent, registerAdapter } from './adapter'
 import { getOpencodeDb } from '../paths'
-import { getContextWindow } from '../pricing'
+import { getContextWindow, calcCost } from '../pricing'
 import type { CostUpdate } from '../db'
 import { dbOps } from '../db'
 import { findProjectCwdForFile } from '../routes/helpers'
@@ -68,16 +68,23 @@ function importToolEvents(ocDb: ReturnType<typeof openDb>, sessionId: string, ta
     WHERE m.session_id = ?
     AND json_extract(p.data, '$.type') = 'tool'
     AND json_extract(p.data, '$.state') IS NOT NULL
+    ORDER BY p.time_created ASC
   `).all(sessionId) as Array<{ id: string; data: string; time_created: number }>
 
   const destId = targetSessionId ?? sessionId
 
+  const entries: Array<{ toolName: string; ts: number; externalId: string }> = []
   for (const part of parts) {
     try {
       const toolName = (JSON.parse(part.data) as { tool?: string }).tool
       if (!toolName) continue
-      dbOps.insertOcEvent(destId, toolName, part.time_created, part.id)
+      entries.push({ toolName, ts: part.time_created, externalId: part.id })
     } catch {}
+  }
+
+  for (let i = 0; i < entries.length; i++) {
+    const durationMs = i < entries.length - 1 ? Math.max(0, entries[i + 1].ts - entries[i].ts) : 0
+    dbOps.insertOcEvent(destId, entries[i].toolName, entries[i].ts, durationMs, entries[i].externalId)
   }
 }
 
@@ -202,6 +209,14 @@ export const opencodeAdapter: PollableAdapter = {
         const inferred = shouldInfer ? inferProjectFromParts(db, row.id) : undefined
         const projectCwd = inferred ?? dir ?? undefined
 
+        const realCost = row.cost
+        const estimatedCost = realCost !== 0 ? realCost : calcCost(modelId, {
+          input_tokens: row.tokens_input,
+          output_tokens: row.tokens_output,
+          cache_read_input_tokens: row.tokens_cache_read,
+          cache_creation_input_tokens: row.tokens_cache_write,
+        })
+
         return {
           sessionId: row.id,
           cwd: projectCwd,
@@ -210,7 +225,7 @@ export const opencodeAdapter: PollableAdapter = {
             output_tokens: row.tokens_output,
             cache_read: row.tokens_cache_read,
             cache_creation: row.tokens_cache_write,
-            cost_usd: row.cost,
+            cost_usd: estimatedCost,
             context_used: row.tokens_input + row.tokens_cache_read + row.tokens_cache_write,
             context_window: getContextWindow(modelId),
             lastModel: modelId,

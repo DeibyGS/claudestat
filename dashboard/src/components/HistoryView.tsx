@@ -6,7 +6,12 @@ import { Tip } from './Tip'
 import { ReplayModal } from './ReplayModal'
 import { fmtDuration, fmtTok, MODE_COLOR as MODE_COLOR_MAP } from './shared'
 
-interface Props { days: DaySessions[]; activeSessionId?: string }
+interface Props {
+  days:           DaySessions[]
+  activeSessionId?: string
+  selectedDays?:  number
+  onDaysChange?:  (n: number) => void
+}
 
 function fmtDate(dateStr: string) {
   const d         = new Date(dateStr + 'T12:00:00')
@@ -308,6 +313,18 @@ function TimelineView({ days, activeSessionId }: { days: DaySessions[]; activeSe
                         {s.project_name && (
                           <span style={{ color: '#79c0ff', fontSize: 11, fontWeight: 600 }}>{s.project_name}</span>
                         )}
+                        {(s.merged_count ?? 1) > 1 && (
+                          <Tip position="top" align="left" content={
+                            <div>
+                              <div style={{ color: '#bc8cff', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Merged session</div>
+                              <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>{s.merged_count} consecutive sessions merged (gap &lt; 10 min, same project)</div>
+                            </div>
+                          }>
+                            <span style={{ color: '#bc8cff', fontSize: 10, background: '#bc8cff18', border: '1px solid #bc8cff30', borderRadius: 4, padding: '1px 6px', cursor: 'default' }}>
+                              ×{s.merged_count}
+                            </span>
+                          </Tip>
+                        )}
                         <Tip position="top" align="left" content={
                           <div>
                             <div style={{ color: '#3fb950', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>API Cost</div>
@@ -359,7 +376,9 @@ const COST_FILTERS: { label: string; min: number | null; max: number | null }[] 
   { label: '$1+',     min: 1.00,  max: null  },
 ]
 
-export function HistoryView({ days, activeSessionId }: Props) {
+const DAY_OPTIONS = [7, 14, 30, 90]
+
+export function HistoryView({ days, activeSessionId, selectedDays = 30, onDaysChange }: Props) {
   const [selectedIds,      setSelectedIds]      = useState<string[]>([])
   const [viewMode,         setViewMode]         = useState<'list' | 'timeline'>('list')
   const [searchQuery,      setSearchQuery]      = useState('')
@@ -506,6 +525,26 @@ export function HistoryView({ days, activeSessionId }: Props) {
             </Tip>
           ))}
         </div>
+
+        <div style={{ width: 1, height: 16, background: '#21262d' }} />
+
+        {/* Days selector */}
+        {onDaysChange && (
+          <div style={{ display: 'flex', gap: 2 }}>
+            {DAY_OPTIONS.map(n => (
+              <button
+                key={n}
+                onClick={() => onDaysChange(n)}
+                style={{
+                  padding: '2px 7px', borderRadius: 4, border: `1px solid ${selectedDays === n ? '#d2992260' : '#21262d'}`,
+                  background: selectedDays === n ? '#d2992218' : 'transparent',
+                  color: selectedDays === n ? '#d29922' : '#6e7681',
+                  fontSize: 10, fontWeight: 600, cursor: 'pointer',
+                }}
+              >{n}d</button>
+            ))}
+          </div>
+        )}
 
         <div style={{ width: 1, height: 16, background: '#21262d' }} />
 

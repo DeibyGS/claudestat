@@ -9,8 +9,9 @@ import {
   FileText, ChevronDown, ChevronUp, X, Trash2,
 } from 'lucide-react'
 import { Tip } from './Tip'
-import type { QuotaData, CostInfo, TraceEvent, ClaudeStatsData } from '../types'
+import type { QuotaData, CostInfo, TraceEvent, ClaudeStatsData, DailyActivity } from '../types'
 import { UsageView } from './UsageView'
+import { YearHeatmap } from './YearHeatmap'
 import { fmtCost, fmtTok, fmtHours } from './shared'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -32,11 +33,12 @@ interface ReportMeta { id: number; date: string; preview: string; created_at: st
 interface ReportFull extends ReportMeta { report_markdown: string }
 
 interface Props {
-  quota?:       QuotaData
-  cost?:        CostInfo
-  events?:      TraceEvent[]
-  prompts?:     Array<{ index: number; ts: number; text: string }>
-  claudeStats?: ClaudeStatsData
+  quota?:         QuotaData
+  cost?:          CostInfo
+  events?:        TraceEvent[]
+  prompts?:       Array<{ index: number; ts: number; text: string }>
+  claudeStats?:   ClaudeStatsData
+  activityData?:  DailyActivity[]
 }
 
 type Period = '7' | '30' | '90'
@@ -119,8 +121,10 @@ const tooltipStyle = {
 
 // ── KpiCard ───────────────────────────────────────────────────────────────────
 
-interface KpiCardProps { icon: React.ReactNode; label: string; value: string; sub?: string; color?: string; tip: string }
-function KpiCard({ icon, label, value, sub, color = '#58a6ff', tip }: KpiCardProps) {
+interface KpiCardProps { icon: React.ReactNode; label: string; value: string; sub?: string; color?: string; tip: string; delta?: number }
+function KpiCard({ icon, label, value, sub, color = '#58a6ff', tip, delta }: KpiCardProps) {
+  const deltaColor = delta === undefined ? '' : delta > 0 ? '#f85149' : '#3fb950'
+  const deltaArrow = delta === undefined ? '' : delta > 0 ? '↑' : '↓'
   return (
     <div style={{ background: '#161b22', border: '1px solid #21262d', borderRadius: 8, padding: '14px 16px', flex: 1, minWidth: 140 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
@@ -131,7 +135,12 @@ function KpiCard({ icon, label, value, sub, color = '#58a6ff', tip }: KpiCardPro
           </span>
         </Tip>
       </div>
-      <div style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3', lineHeight: 1 }}>{value}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+        <div style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3', lineHeight: 1 }}>{value}</div>
+        {delta !== undefined && (
+          <span style={{ fontSize: 10, fontWeight: 700, color: deltaColor }}>{deltaArrow}{Math.abs(delta)}%</span>
+        )}
+      </div>
       {sub && <div style={{ fontSize: 10, color: '#484f58', marginTop: 4 }}>{sub}</div>}
     </div>
   )
@@ -306,7 +315,7 @@ function ReportsPanel() {
 
 // ── Componente principal ──────────────────────────────────────────────────────
 
-export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Props) {
+export function AnalyticsView({ quota, cost, events, prompts, claudeStats, activityData }: Props) {
   const [period,        setPeriod]        = useState<Period>('30')
   const [sourceFilter,  setSourceFilter]  = useState<SourceFilter>('all')
   const [daily,         setDaily]         = useState<DayData[]>([])
@@ -344,9 +353,27 @@ export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Pro
   const totalHours  = projectSegments.reduce((a, p) => a + p.total_hours, 0)
   const tokensDaily = filteredDaily.map(d => ({
     date:    d.date,
-    tokens:  d.input_tokens + d.output_tokens + d.cache_read,
+    input:   d.input_tokens,
+    output:  d.output_tokens,
+    cache:   d.cache_read,
     sessions: d.sessions,
   }))
+
+  // Period-over-period deltas: compare first half vs second half of filteredDaily
+  const periodDeltas = useMemo(() => {
+    if (filteredDaily.length < 4) return null
+    const mid  = Math.floor(filteredDaily.length / 2)
+    const prev = filteredDaily.slice(0, mid)
+    const curr = filteredDaily.slice(mid)
+    const pct  = (c: number, p: number) => p > 0 ? Math.round((c - p) / p * 100) : undefined
+    const prevCost  = prev.reduce((s, d) => s + d.cost, 0)
+    const currCost  = curr.reduce((s, d) => s + d.cost, 0)
+    const prevTok   = prev.reduce((s, d) => s + d.input_tokens + d.output_tokens + d.cache_read, 0)
+    const currTok   = curr.reduce((s, d) => s + d.input_tokens + d.output_tokens + d.cache_read, 0)
+    const prevEff   = prev.length ? prev.reduce((s, d) => s + d.avg_efficiency, 0) / prev.length : 0
+    const currEff   = curr.length ? curr.reduce((s, d) => s + d.avg_efficiency, 0) / curr.length : 0
+    return { cost: pct(currCost, prevCost), tokens: pct(currTok, prevTok), efficiency: pct(currEff, prevEff) }
+  }, [filteredDaily])
 
   const filteredKpis = useMemo(() => {
     if (sourceFilter === 'all' || !kpis) return kpis
@@ -371,6 +398,18 @@ export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Pro
       <div style={{ padding: '16px 20px 12px' }}>
         <ReportsPanel />
       </div>
+
+      {/* Activity heatmap */}
+      {activityData && activityData.length > 0 && (
+        <div style={{ padding: '0 20px 12px' }}>
+          <div style={{ marginBottom: '24px' }}>
+            <h3 style={{ fontSize: '14px', fontWeight: 600, marginBottom: '8px', color: '#374151' }}>
+              Activity — last 52 weeks
+            </h3>
+            <YearHeatmap data={activityData} />
+          </div>
+        </div>
+      )}
 
       {/* En tiempo real — section label */}
       <div style={{ padding: '0 20px 2px' }}>
@@ -430,7 +469,7 @@ export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Pro
               <KpiCard
                 icon={<DollarSign size={13} />} label="Real spend 7d"
                 value={fmtCost(filteredKpis.week_cost)} sub={`${filteredKpis.week_sessions} sessions · DB`}
-                color="#58a6ff"
+                color="#58a6ff" delta={periodDeltas?.cost}
                 tip="Real spend in the last 7 days from the claudestat database. Complements the projection above that uses stats-cache."
               />
               <KpiCard
@@ -442,7 +481,7 @@ export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Pro
               <KpiCard
                 icon={<Activity size={13} />} label={`Tokens ${PERIOD_LABELS[period]}`}
                 value={fmtTok(totalTok)} sub={`In+Out: ${fmtTok(totalInput + totalOutput)}`}
-                color="#d29922"
+                color="#d29922" delta={periodDeltas?.tokens}
                 tip="Total tokens for the period (input + output + cache read). Cache is ~10× cheaper than fresh tokens."
               />
               <KpiCard
@@ -461,6 +500,7 @@ export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Pro
                 icon={<Zap size={13} />} label="Avg efficiency"
                 value={`${filteredKpis.avg_efficiency}%`} sub={`Cache: ${cacheRatio}%`}
                 color={filteredKpis.avg_efficiency >= 80 ? '#3fb950' : filteredKpis.avg_efficiency >= 60 ? '#d29922' : '#f85149'}
+                delta={periodDeltas?.efficiency !== undefined ? -periodDeltas.efficiency : undefined}
                 tip={`Average efficiency for the period (100% = no loops or redundancy). Cache: ${cacheRatio}% of tokens come from cache (cheaper).`}
               />
             </div>
@@ -482,16 +522,18 @@ export function AnalyticsView({ quota, cost, events, prompts, claudeStats }: Pro
             {/* Tokens por día (fluctuación) + Tokens por modelo */}
             <div style={{ display: 'flex', gap: 14, marginBottom: 14 }}>
               <div style={{ flex: 1, background: '#161b22', border: '1px solid #21262d', borderRadius: 8, padding: '16px 20px' }}>
-                <div style={sectionTitle}>Tokens per day · fluctuation</div>
+                <div style={sectionTitle}>Tokens per day · input / output / cache</div>
                 <ResponsiveContainer width="100%" height={130}>
                   <ComposedChart data={tokensDaily} margin={{ top: 4, right: 14, left: -24, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#21262d" />
                     <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#6e7681' }} tickFormatter={v => v.slice(5)} axisLine={false} tickLine={false} interval="preserveStartEnd" />
                     <YAxis yAxisId="left"  tick={{ fontSize: 9, fill: '#6e7681' }} axisLine={false} tickLine={false} tickFormatter={fmtTok} />
                     <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 9, fill: '#6e7681' }} axisLine={false} tickLine={false} />
-                    <Tooltip {...tooltipStyle} cursor={{ fill: '#21262d' }} formatter={(v: number, name: string) => [name === 'Tokens' ? fmtTok(v) : v, name]} />
+                    <Tooltip {...tooltipStyle} cursor={{ fill: '#21262d' }} formatter={(v: number, name: string) => [name === 'Sessions' ? v : fmtTok(v), name]} />
                     <Legend iconSize={8} wrapperStyle={{ fontSize: 10, color: '#8b949e' }} />
-                    <Bar  yAxisId="left"  dataKey="tokens"   name="Tokens"   fill="#1f6feb88" radius={[2, 2, 0, 0]} />
+                    <Bar yAxisId="left" dataKey="input"   name="Input"   stackId="tok" fill="#1f6feb88" />
+                    <Bar yAxisId="left" dataKey="output"  name="Output"  stackId="tok" fill="#3fb95066" />
+                    <Bar yAxisId="left" dataKey="cache"   name="Cache"   stackId="tok" fill="#d2992244" radius={[2, 2, 0, 0]} />
                     <Line yAxisId="right" dataKey="sessions" name="Sessions" stroke="#3fb950" dot={false} strokeWidth={2} />
                   </ComposedChart>
                 </ResponsiveContainer>

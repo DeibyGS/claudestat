@@ -19,7 +19,7 @@ export function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [
   subAgentSessions?:  SubAgentSession[]
 }) {
   const score = cost
-    ? (cost.efficiency_score === 0 && cost.cost_usd < 0.001 ? 100 : cost.efficiency_score)
+    ? (cost.efficiency_score === -1 ? null : cost.efficiency_score === 0 && cost.cost_usd < 0.001 ? 100 : cost.efficiency_score)
     : null
   const scoreColor = score === null ? '#484f58'
     : score >= 90 ? '#3fb950' : score >= 70 ? '#d29922' : '#f85149'
@@ -91,6 +91,17 @@ export function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [
           )}
         </div>
       )}
+
+      {/* Tool count — computed from events */}
+      {(() => {
+        const count = events.filter(e => e.type === 'Done').length
+        if (count === 0) return null
+        return (
+          <div style={{ fontSize: 9, color: '#484f58' }}>
+            {count} tool call{count !== 1 ? 's' : ''}
+          </div>
+        )
+      })()}
 
       {/* Cache savings + efficiency — only when cost is known */}
       {cost && cost.cost_usd > 0 && (

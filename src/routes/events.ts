@@ -35,6 +35,10 @@ const CONTEXT_SAMPLES_MAX     = 20
 const loopAlertCooldown = new Map<string, number>()
 const LOOP_ALERT_COOLDOWN_MS = 120_000  // coincide con LOOP_COOLDOWN_MS en intelligence.ts
 
+// ─── Context threshold tracking: qué thresholds ya se notificaron por sesión ──
+const contextThresholdsFired = new Map<string, Set<number>>()
+const CONTEXT_THRESHOLDS = [50, 75, 90] as const
+
 // ─── Session cost alert: sesiones que ya recibieron notificación ───────────────
 const sessionCostAlertFired = new Set<string>()
 
@@ -164,7 +168,7 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
           const lam = req.body.last_assistant_message
           if (lam && typeof lam === 'string') {
             const t = lam.replace(/\s+/g, ' ').trim()
-            return t.length > 120 ? t.slice(0, 120) + '…' : t
+            return t.length > 2000 ? t.slice(0, 2000) + '…' : t
           }
           return transcript_path ? extractTextPreview(transcript_path) : undefined
         })()
@@ -338,6 +342,31 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
             context_window: cost.context_window,
           }
         })
+      }
+    }
+
+    // ─── Context percentage threshold alerts ──────────────────────────────────
+    if (cost.context_window > 0) {
+      const pct = Math.round((cost.context_used / cost.context_window) * 100)
+      if (pct >= 50) {
+        let fired = contextThresholdsFired.get(sessionId)
+        if (!fired) {
+          fired = new Set()
+          contextThresholdsFired.set(sessionId, fired)
+        }
+        for (const th of CONTEXT_THRESHOLDS) {
+          if (pct >= th && !fired.has(th)) {
+            fired.add(th)
+            sendDesktopNotification(
+              `claudestat — Context at ${th}%`,
+              `${cost.context_used.toLocaleString()} / ${cost.context_window.toLocaleString()} tokens (${pct}%) — session ${sessionId.slice(0, 8)}`
+            )
+            broadcast({
+              type: 'context_threshold',
+              payload: { session_id: sessionId, pct, threshold: th, context_used: cost.context_used, context_window: cost.context_window }
+            })
+          }
+        }
       }
     }
   }

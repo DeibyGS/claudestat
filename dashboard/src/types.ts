@@ -40,11 +40,13 @@ export interface DayStats {
 }
 
 export interface BlockCost {
-  inputUsd:     number   // costo del prompt + contexto enviado
-  outputUsd:    number   // costo de la respuesta generada por Claude
-  totalUsd:     number
-  inputTokens:  number   // tokens de entrada de este bloque
-  outputTokens: number   // tokens de salida de este bloque
+  inputUsd:      number   // costo del prompt + contexto enviado
+  outputUsd:     number   // costo de la respuesta generada por Claude
+  totalUsd:      number
+  inputTokens:   number   // tokens de entrada de este bloque
+  outputTokens:  number   // tokens de salida de este bloque
+  context_used?:   number  // tokens de contexto activo al final del bloque
+  context_window?: number  // tamaño máximo del modelo
 }
 
 export interface SubAgentSession {
@@ -104,8 +106,9 @@ export interface SessionSummary {
   git_dirty?:   boolean
   git_ahead?:   number
   git_behind?:  number
-  source?:      string
+  source?:       string
   is_sub_agent?: boolean
+  merged_count?: number
 }
 
 export interface GitInfo {
@@ -155,6 +158,22 @@ export interface PatternInsight {
   metric?:     string
 }
 
+export interface SourceStats {
+  session_count:  number
+  total_cost_usd: number
+  total_tokens:   number
+  avg_efficiency: number | null
+  avg_loops:      number
+  last_active:    number | null
+  dominant_model: string | null
+}
+
+export interface ProjectRecentExtremes {
+  heavy_loop_sessions: number
+  recent_sessions:     number
+  max_session_cost:    number
+}
+
 export interface ProjectSummary {
   path:           string
   name:           string
@@ -169,6 +188,7 @@ export interface ProjectSummary {
   model_usage?:   ModelUsage
   insights?:      PatternInsight[]
   cli_hours?:     Record<string, number>
+  source_stats?:  Record<string, SourceStats>
 }
 
 // ─── Meta-stats (KPIs de contexto) ────────────────────────────────────────────
@@ -278,3 +298,10 @@ export interface ToolStatusEntry {
 }
 
 export type ToolStatus = Record<string, ToolStatusEntry>
+
+export interface DailyActivity {
+  date:         string
+  cost_usd:     number
+  total_tokens: number
+  tool_calls:   number
+}

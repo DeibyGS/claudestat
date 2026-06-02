@@ -1,4 +1,5 @@
-import { FolderGit2 } from 'lucide-react'
+import { useState } from 'react'
+import { FolderGit2, Search } from 'lucide-react'
 import type { ProjectSummary, DayStats } from '../types'
 import { ProjectCard } from './ProjectCard'
 import { Tip } from './Tip'
@@ -16,11 +17,12 @@ const DAY_LABELS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']
 /** C.13 — Mini heatmap de 7 días en la barra de resumen */
 function WeeklyHeatmap({ data }: { data: DayStats[] }) {
   if (data.length === 0) return null
-  const max = Math.max(...data.map(d => d.tokens), 1)
+  const max  = Math.max(...data.map(d => d.tokens), 1)
+  const week = data.slice(-7)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
       <div style={{ display: 'flex', gap: 3 }}>
-        {data.slice(-7).map((d, i) => {
+        {week.map((d, i) => {
           const pct = d.tokens / max
           const bg  = pct < 0.05 ? '#1c2128'
             : pct < 0.3  ? '#0e4429'
@@ -44,7 +46,7 @@ function WeeklyHeatmap({ data }: { data: DayStats[] }) {
         })}
       </div>
       <div style={{ display: 'flex', gap: 3 }}>
-        {data.slice(-7).map((d, i) => (
+        {week.map((d, i) => (
           <span key={i} style={{ width: 12, fontSize: 8, color: '#484f58', textAlign: 'center' }}>
             {DAY_LABELS[new Date(d.date + 'T12:00:00').getDay()]}
           </span>
@@ -94,7 +96,28 @@ const S = {
   sep:     { width: 1, height: 32, background: '#21262d', flexShrink: 0 },
 }
 
+const FILTERS: { key: string; label: string; fn: (p: ProjectSummary) => boolean }[] = [
+  { key: 'active7d',  label: 'Active 7d',      fn: p => (p.last_active ?? 0) > Date.now() - 7 * 86_400_000 },
+  { key: 'cost10',    label: 'Cost > $10',      fn: p => p.total_cost_usd > 10 },
+  { key: 'eff70',     label: 'Efficiency < 70', fn: p => p.avg_efficiency !== null && (p.avg_efficiency ?? 100) < 70 },
+]
+
 export function ProjectsView({ projects, activeProject, weeklyData = [], loading = false }: Props) {
+  const [query,   setQuery]   = useState('')
+  const [filters, setFilters] = useState<Set<string>>(new Set())
+
+  const toggleFilter = (key: string) =>
+    setFilters(prev => { const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s })
+
+  const filtered = projects.filter(p => {
+    if (query && !p.name.toLowerCase().includes(query.toLowerCase())) return false
+    for (const key of filters) {
+      const f = FILTERS.find(f => f.key === key)
+      if (f && !f.fn(p)) return false
+    }
+    return true
+  })
+
   const totalCost     = projects.reduce((s, p) => s + p.total_cost_usd, 0)
   const totalTokens   = projects.reduce((s, p) => s + p.total_tokens, 0)
   const totalSessions = projects.reduce((s, p) => s + p.session_count, 0)
@@ -188,6 +211,47 @@ export function ProjectsView({ projects, activeProject, weeklyData = [], loading
         )}
       </div>
 
+      {/* M4 — Búsqueda + filtros */}
+      {!loading && projects.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative', flex: '1 1 180px', minWidth: 140 }}>
+            <Search size={12} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#484f58', pointerEvents: 'none' }} />
+            <input
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder="Search projects…"
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                background: '#161b22', border: '1px solid #30363d', borderRadius: 6,
+                color: '#e6edf3', fontSize: 12, padding: '6px 10px 6px 28px',
+                outline: 'none', fontFamily: 'inherit',
+              }}
+            />
+          </div>
+          {FILTERS.map(f => {
+            const active = filters.has(f.key)
+            return (
+              <button
+                key={f.key}
+                onClick={() => toggleFilter(f.key)}
+                style={{
+                  border: `1px solid ${active ? '#58a6ff' : '#30363d'}`,
+                  borderRadius: 20, padding: '4px 12px', fontSize: 11,
+                  color: active ? '#58a6ff' : '#7d8590',
+                  background: active ? '#1f6feb22' : 'transparent',
+                  cursor: 'pointer', fontFamily: 'inherit',
+                }}
+              >
+                {f.label}
+              </button>
+            )
+          })}
+          {(query || filters.size > 0) && (
+            <span style={{ fontSize: 11, color: '#484f58' }}>{filtered.length} / {projects.length}</span>
+          )}
+        </div>
+      )}
+
       {/* B.7 — Skeleton mientras carga */}
       {loading && (
         <div style={S.grid}>
@@ -217,7 +281,7 @@ export function ProjectsView({ projects, activeProject, weeklyData = [], loading
       {/* Grid de proyectos */}
       {!loading && projects.length > 0 && (
         <div style={S.grid}>
-          {projects.map(p => (
+          {filtered.map(p => (
             <ProjectCard
               key={p.path}
               project={p}

@@ -115,7 +115,7 @@ function SessionCardInner({ session: s, isActive, selectable, selected = false, 
           </>
         )}
         <div style={{ flex: 1 }} />
-        {onReplay && (
+        {onReplay && (s.done_count > 0 || s.total_cost_usd > 0) && (
           <Tip position="top" align="right" content={
             <div>
               <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Session Replay</div>

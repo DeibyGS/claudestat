@@ -20,6 +20,7 @@ import { startWatch }                   from './watch'
 import { runInstall, runWizard, uninstallHooks } from './install'
 import { uninstallService } from './service'
 import { runExport } from './export'
+import { runShare } from './share'
 import { readConfig, writeConfig }      from './config'
 import type { ClaudestatConfig }        from './config'
 import { runDoctor }                    from './doctor'
@@ -28,6 +29,8 @@ import { computeProjection, formatProjection } from './cost-projector'
 import { getWeeklyInsightData, renderWeeklyInsight, getUsageInsights, renderInsights, getPrevWeekInsightData } from './insights'
 import { getPidFile, isWindows, getClaudestatDir, getPauseSignalFile, getDaemonLogFile } from './paths'
 import { refreshFromApi } from './quota-tracker'
+import { dbOps } from './db'
+import type { BillingBlock } from './db'
 
 const program  = new Command()
 const PKG_VERSION = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version
@@ -968,6 +971,78 @@ program
       console.error('\n❌ Error:', err.message)
       process.exit(1)
     }
+  })
+
+program
+  .command('blocks')
+  .description('Show 5-hour billing block history')
+  .option('--limit <n>', 'Number of blocks to show (default: 20, max: 100)', '20')
+  .action((opts) => {
+    try {
+      const limit = Math.min(100, Math.max(1, parseInt(opts.limit || '20', 10) || 20))
+      const blocks = dbOps.getBillingBlocks(limit)
+      if (blocks.length === 0) {
+        console.log('\n  No billing blocks recorded yet. Start Claude Code to begin tracking.\n')
+        process.exit(0)
+      }
+      const G = '\x1b[32m', R = '\x1b[0m', D = '\x1b[2m'
+      const W = 63
+      const line = '═'.repeat(W)
+      const pad  = (s: string, n: number) => s.length >= n ? s.slice(0, n) : s + ' '.repeat(n - s.length)
+      function fmtBlock(b: BillingBlock): string {
+        const start = new Date(b.block_start)
+        const end   = new Date(b.block_end)
+        const mo    = start.toLocaleString('en', { month: 'short' })
+        const day   = String(start.getDate()).padStart(2, ' ')
+        const hStart = String(start.getHours()).padStart(2, '0') + ':00'
+        const hEnd   = String(end.getHours()).padStart(2, '0') + ':00'
+        return `${mo} ${day}  ${hStart} – ${hEnd}`
+      }
+      function fmtTok(n: number): string {
+        if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M'
+        if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'K'
+        return String(n)
+      }
+      console.log(`\n╔${line}╗`)
+      console.log(`║${'  5h Billing Blocks'.padEnd(W)}║`)
+      console.log(`╠${line}╣`)
+      console.log(`║  ${ pad('Block', 28) }${ pad('Sessions', 10) }${ pad('Tokens', 12) }${ pad('Cost', 9) }║`)
+      console.log(`╠${line}╣`)
+      for (const b of blocks) {
+        const label   = fmtBlock(b)
+        const marker  = b.is_current ? `▶ ${label} ◀` : `  ${label}  `
+        const sess    = String(b.sessions)
+        const tok     = fmtTok(b.total_tokens)
+        const cost    = `$${b.total_cost_usd.toFixed(3)}`
+        const row     = `  ${ pad(marker, 28) }${ pad(sess, 10) }${ pad(tok, 12) }${ pad(cost, 9) }`
+        if (b.is_current) {
+          console.log(`${G}║${row}║${R}`)
+        } else {
+          console.log(`║${row}║`)
+        }
+      }
+      console.log(`╚${line}╝`)
+      console.log(`  ${D}▶ = current block${R}\n`)
+      process.exit(0)
+    } catch (err: any) {
+      console.error('\n❌ Error:', err.message)
+      process.exit(1)
+    }
+  })
+
+program
+  .command('share [session-id]')
+  .description('Share a session summary (ASCII or JSON)')
+  .option('--format <fmt>', 'Output format: ascii or json', 'ascii')
+  .option('--copy', 'Copy output to clipboard')
+  .action(async (sessionId: string | undefined, opts: { format?: string; copy?: boolean }) => {
+    const fmt = (opts.format ?? 'ascii').toLowerCase()
+    if (fmt !== 'ascii' && fmt !== 'json') {
+      console.error('Error: format must be "ascii" or "json"')
+      process.exit(1)
+    }
+    await runShare({ sessionId, format: fmt, copy: !!opts.copy })
+    process.exit(0)
   })
 
 program.parse()

@@ -45,11 +45,28 @@ export interface SessionStats {
 const MIN_SESSIONS  = 2     // need at least 2 sessions for meaningful patterns
 const MIN_TOOLS     = 15    // need at least 15 tool calls total to trust ratios
 
+// ─── Extra context types ──────────────────────────────────────────────────────
+
+export interface RecentExtremes {
+  heavy_loop_sessions: number   // sessions with 5+ loops in last 30 days
+  recent_sessions:     number
+  max_session_cost:    number
+}
+
+export interface SourceStat {
+  avg_efficiency: number | null
+  avg_loops:      number
+  total_cost_usd: number
+  session_count:  number
+}
+
 // ─── Analyzer ────────────────────────────────────────────────────────────────
 
 export function analyzePatterns(
-  toolCounts: ToolCount[],
-  stats: SessionStats,
+  toolCounts:     ToolCount[],
+  stats:          SessionStats,
+  recentExtremes?: RecentExtremes,
+  sourceStats?:    Record<string, SourceStat>,
 ): PatternInsight[] {
   const insights: PatternInsight[] = []
 
@@ -68,8 +85,8 @@ export function analyzePatterns(
     insights.push({
       level:       'tip',
       title:       'High Read frequency',
-      description: 'More than 40% of tool calls are Read. Consider using offset+limit to read only the needed lines, or batch reads of multiple files in a single response.',
-      metric:      `${readPct}% of calls (${readCount} uses)`,
+      description: `Read accounts for ${readPct}% of all tool calls (${readCount} uses). Use offset+limit for partial reads, or batch multiple files in a single response to cut redundant reads.`,
+      metric:      `${readPct}% of calls · ${readCount} uses`,
     })
   }
 
@@ -81,8 +98,8 @@ export function analyzePatterns(
     insights.push({
       level:       'tip',
       title:       'Bash used more than Read/Grep',
-      description: 'Bash can do the same as cat, grep or find, but is slower and less transparent. Dedicated tools (Read, Grep, Glob) are safer and faster for Claude.',
-      metric:      `${bashPct}% Bash (${bashCount}) vs ${readGrep} Read+Grep+Glob`,
+      description: `Bash makes up ${bashPct}% of calls (${bashCount}) vs ${readGrep} combined Read+Grep+Glob. Dedicated tools are safer, faster, and more transparent for Claude.`,
+      metric:      `${bashCount} Bash vs ${readGrep} Read+Grep+Glob`,
     })
   }
 
@@ -94,17 +111,20 @@ export function analyzePatterns(
     insights.push({
       level:       'tip',
       title:       'Heavy Write vs Edit usage',
-      description: 'More than 3× Write calls vs Edit calls. Editing existing files is cheaper in tokens than writing from scratch. Consider using Edit for incremental changes instead of rewriting entire files.',
-      metric:      `${writePct}% Write (${writeCount} writes vs ${editCount} edits)`,
+      description: `${writeCount} Write calls vs ${editCount} Edit calls (${writePct}% Write). Rewriting whole files costs more tokens than editing incrementally — prefer Edit for existing files.`,
+      metric:      `${writeCount} writes vs ${editCount} edits`,
     })
   }
 
   // ── High loop rate ────────────────────────────────────────────────────────
   if (stats.avg_loops >= 1.5) {
+    const heavySuffix = recentExtremes && recentExtremes.recent_sessions > 0
+      ? ` ${recentExtremes.heavy_loop_sessions} of ${recentExtremes.recent_sessions} sessions in the last 30 days had 5+ loops.`
+      : ''
     insights.push({
       level:       'warning',
       title:       'Frequent loops detected',
-      description: 'Claude repeats the same tools in a loop more than 1.5 times per session on average. This usually indicates ambiguous instructions or an unnecessary confirmation cycle.',
+      description: `~${stats.avg_loops.toFixed(1)} loops per session on average — likely ambiguous instructions or unnecessary confirmation cycles.${heavySuffix}`,
       metric:      `~${stats.avg_loops.toFixed(1)} loops / session`,
     })
   }
@@ -113,30 +133,34 @@ export function analyzePatterns(
   const cacheRatio = stats.avg_total_input > 0
     ? stats.avg_cache_read / stats.avg_total_input
     : 0
+  const cachePct = Math.round(cacheRatio * 100)
 
   if (cacheRatio < 0.15 && stats.avg_total_input > 5_000) {
     insights.push({
       level:       'tip',
       title:       'Low cache reuse',
-      description: 'Only 15% or less of the context comes from cache. The context varies a lot between messages. If there are fixed instructions (CLAUDE.md, long system prompts), Claude reprocesses them on every response.',
-      metric:      `${Math.round(cacheRatio * 100)}% cache hit ratio`,
+      description: `Only ${cachePct}% of context comes from cache. The context changes too much between messages — fixed instructions (CLAUDE.md, system prompts) are being reprocessed on every call.`,
+      metric:      `${cachePct}% cache hit ratio`,
     })
   } else if (cacheRatio >= 0.65 && stats.avg_total_input > 5_000) {
     insights.push({
       level:       'positive',
       title:       'Excellent cache usage',
-      description: 'More than 65% of the context is served from cache in this project. A large portion of input cost is avoided thanks to Claude prompt caching.',
-      metric:      `${Math.round(cacheRatio * 100)}% cache hit ratio`,
+      description: `${cachePct}% of context is served from cache — a large portion of input cost is being avoided. Prompt caching is working well for this project.`,
+      metric:      `${cachePct}% cache hit ratio`,
     })
   }
 
   // ── High average cost per session ─────────────────────────────────────────
   if (stats.avg_cost_usd >= 0.50) {
+    const maxNote = recentExtremes && recentExtremes.max_session_cost > 0
+      ? ` Most expensive session in the last 30 days: $${recentExtremes.max_session_cost.toFixed(2)}.`
+      : ''
     insights.push({
       level:       'tip',
       title:       'High cost per session',
-      description: 'The average cost per session exceeds $0.50. If there are repetitive analysis or file reading tasks, consider using Haiku (10× cheaper) for those parts.',
-      metric:      `~$${stats.avg_cost_usd.toFixed(2)} / session`,
+      description: `Average session cost is $${stats.avg_cost_usd.toFixed(2)} — above the $0.50 threshold.${maxNote} Consider Haiku (10× cheaper) for repetitive reads or analysis tasks.`,
+      metric:      `$${stats.avg_cost_usd.toFixed(2)} / session avg`,
     })
   }
 
@@ -145,7 +169,7 @@ export function analyzePatterns(
     insights.push({
       level:       'warning',
       title:       'Low efficiency score',
-      description: 'The average efficiency score is below 65/100. This is correlated with high loop counts. Check if prompts provide enough context on the first attempt.',
+      description: `Average efficiency is ${Math.round(stats.avg_efficiency)}/100 — below the 65 threshold. This score penalizes loops, re-reads, and context bloat. Usually fixed by providing more context upfront.`,
       metric:      `${Math.round(stats.avg_efficiency)}/100 average`,
     })
   }
@@ -155,7 +179,7 @@ export function analyzePatterns(
     insights.push({
       level:       'tip',
       title:       'Very large context per session',
-      description: 'The average context exceeds 150K tokens per session. Consider using /checkpoint + /compact frequently to reduce context size and lower the cost of each call.',
+      description: `Average context is ~${Math.round(stats.avg_total_input / 1000)}K tokens per session. Run /checkpoint + /compact regularly to cut context and reduce per-call cost.`,
       metric:      `~${Math.round(stats.avg_total_input / 1000)}K tokens / session`,
     })
   }
@@ -167,9 +191,53 @@ export function analyzePatterns(
     insights.push({
       level:       'positive',
       title:       'Heavy agent usage',
-      description: 'More than 20% of calls are to Agent. This project makes good use of Claude Code multi-agent mode to parallelize tasks.',
-      metric:      `${agentPct}% Agent (${agentCount} uses)`,
+      description: `${agentPct}% of calls (${agentCount} uses) go to Agent — this project actively uses Claude Code multi-agent mode to parallelize work.`,
+      metric:      `${agentPct}% Agent · ${agentCount} uses`,
     })
+  }
+
+  // ── Cross-tool comparison (CC vs OC) ─────────────────────────────────────
+  if (sourceStats) {
+    const cc = sourceStats['claude-code']
+    const oc = sourceStats['opencode']
+    if (cc && oc) {
+      // Loop gap
+      if (cc.avg_loops > 0 && oc.avg_loops > 0) {
+        const loopRatio = cc.avg_loops / oc.avg_loops
+        if (loopRatio >= 2) {
+          insights.push({
+            level:       'tip',
+            title:       'CC has significantly more loops than OC',
+            description: `Claude Code averages ${cc.avg_loops.toFixed(1)} loops/session vs OpenCode's ${oc.avg_loops.toFixed(1)}. CC sessions may benefit from clearer instructions or CLAUDE.md context.`,
+            metric:      `${loopRatio.toFixed(1)}× more loops in CC`,
+          })
+        } else if (oc.avg_loops / cc.avg_loops >= 2) {
+          insights.push({
+            level:       'tip',
+            title:       'OC has significantly more loops than CC',
+            description: `OpenCode averages ${oc.avg_loops.toFixed(1)} loops/session vs Claude Code's ${cc.avg_loops.toFixed(1)}. Consider reviewing OC agent instructions for this project.`,
+            metric:      `${(oc.avg_loops / cc.avg_loops).toFixed(1)}× more loops in OC`,
+          })
+        }
+      }
+      // Efficiency gap
+      if (cc.avg_efficiency !== null && oc.avg_efficiency !== null) {
+        const diff    = oc.avg_efficiency - cc.avg_efficiency
+        const absDiff = Math.abs(diff)
+        if (absDiff >= 15) {
+          const better = diff > 0 ? 'OpenCode' : 'Claude Code'
+          const worse  = diff > 0 ? 'Claude Code' : 'OpenCode'
+          const betterVal = diff > 0 ? oc.avg_efficiency : cc.avg_efficiency
+          const worseVal  = diff > 0 ? cc.avg_efficiency : oc.avg_efficiency
+          insights.push({
+            level:       'tip',
+            title:       `${better} more efficient for this project`,
+            description: `${better} scores ${betterVal}/100 vs ${worse}'s ${worseVal}/100 — a ${absDiff}-point gap. The less efficient tool may have weaker instructions or a less suited workflow.`,
+            metric:      `${absDiff} point gap · ${better} wins`,
+          })
+        }
+      }
+    }
   }
 
   return insights

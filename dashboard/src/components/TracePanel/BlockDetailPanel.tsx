@@ -149,8 +149,46 @@ function PromptScoreCard({ prompt }: { prompt: string }) {
             </div>
           )}
           {recs.length === 0 && (
-            <div style={{ fontSize: 10, color: '#3fb95099', paddingLeft: 4 }}>✓ Prompt bien estructurado</div>
+            <div style={{ fontSize: 10, color: '#3fb95099', paddingLeft: 4 }}>✓ Well structured prompt</div>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── ResponseSection ──────────────────────────────────────────────────────────
+
+const RESPONSE_COLLAPSE_LIMIT = 300
+
+function ResponseSection({ text, blockCost }: { text: string; blockCost?: BlockCost }) {
+  const needsToggle = text.length > RESPONSE_COLLAPSE_LIMIT
+  const [expanded, setExpanded] = useState(false)
+  const displayed = needsToggle && !expanded ? text.slice(0, RESPONSE_COLLAPSE_LIMIT) + '…' : text
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <SectionLabel>Response</SectionLabel>
+        {needsToggle && (
+          <button
+            onClick={() => setExpanded(v => !v)}
+            style={{ background: 'none', border: '1px solid #21262d', borderRadius: 4, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 7px', color: '#6e7681', fontSize: 10 }}
+          >
+            {expanded ? <ChevronsDownUp size={10} /> : <ChevronsUpDown size={10} />}
+            {expanded ? 'show less' : `show all (${text.length} chars)`}
+          </button>
+        )}
+      </div>
+      <div style={{ background: '#0d1117', border: '1px solid #21262d', borderRadius: 6, padding: '10px 14px' }}>
+        <span style={{ fontSize: 12, color: '#8b949e', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {displayed}
+        </span>
+      </div>
+      {blockCost && (blockCost.inputTokens + blockCost.outputTokens) > 0 && (
+        <div style={{ display: 'flex', gap: 12, marginTop: 8, fontSize: 11, color: '#6e7681' }}>
+          <span><span style={{ color: '#58a6ff88' }}>{fmtTokens(blockCost.inputTokens)}</span> in</span>
+          <span><span style={{ color: '#3fb95088' }}>{fmtTokens(blockCost.outputTokens)}</span> out</span>
         </div>
       )}
     </div>
@@ -453,25 +491,9 @@ export function BlockDetailPanel({
           </div>
         )}
 
-        {/* ── Response preview (solo bloques sin tools) ── */}
-        {block.tools.length === 0 && block.textPreview && (
-          <div>
-            <SectionLabel>Response</SectionLabel>
-            <div style={{
-              background: '#0d1117', border: '1px solid #21262d', borderRadius: 6,
-              padding: '10px 14px',
-            }}>
-              <span style={{ fontSize: 12, color: '#8b949e', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                {block.textPreview}
-              </span>
-            </div>
-            {blockCost && (blockCost.inputTokens + blockCost.outputTokens) > 0 && (
-              <div style={{ display: 'flex', gap: 12, marginTop: 8, fontSize: 11, color: '#6e7681' }}>
-                <span><span style={{ color: '#58a6ff88' }}>{fmtTokens(blockCost.inputTokens)}</span> in</span>
-                <span><span style={{ color: '#3fb95088' }}>{fmtTokens(blockCost.outputTokens)}</span> out</span>
-              </div>
-            )}
-          </div>
+        {/* ── Response preview ── */}
+        {block.textPreview && (
+          <ResponseSection text={block.textPreview} blockCost={blockCost} />
         )}
 
         {/* ── Modelo real de la sesión + sub-agentes ── */}
@@ -511,7 +533,7 @@ export function BlockDetailPanel({
                     }}>
                       <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.color, flexShrink: 0 }} />
                       <span style={{ color: s.color, fontSize: 11, fontWeight: 700 }}>{s.name}</span>
-                      <span style={{ color: s.color + '99', fontSize: 9, fontWeight: 500 }}>sub-agente</span>
+                      <span style={{ color: s.color + '99', fontSize: 9, fontWeight: 500 }}>sub-agent</span>
                     </div>
                   )
                 })}
@@ -586,7 +608,7 @@ export function BlockDetailPanel({
                     )
                   )}
                   {renderItems.length === 0 && (
-                    <div style={{ color: '#484f58', fontSize: 11, paddingLeft: 8 }}>sin resultados</div>
+                    <div style={{ color: '#484f58', fontSize: 11, paddingLeft: 8 }}>no results</div>
                   )}
                 </div>
               </>

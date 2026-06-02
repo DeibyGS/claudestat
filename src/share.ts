@@ -29,16 +29,14 @@ function formatDuration(ms: number): string {
 }
 
 async function getSessionData(sessionId?: string): Promise<SessionData | null> {
-  const sessions = dbOps.getAllSessions(1)
   let session: SessionRow | undefined
 
   if (sessionId) {
     session = dbOps.getSession(sessionId)
     if (!session) return null
-  } else if (sessions.length > 0) {
-    session = sessions[0]
   } else {
-    return null
+    session = dbOps.getLatestSession()
+    if (!session) return null
   }
 
   const events = dbOps.getSessionEvents(session.id)

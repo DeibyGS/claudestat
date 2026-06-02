@@ -132,7 +132,7 @@ export function ReplayModal({ sessionId, onClose }: Props) {
             <div style={{ flex: 1, overflowY: 'auto', borderRight: '1px solid #21262d', padding: '8px 0' }}>
               {replay.turns.length === 0 && (
                 <div style={{ padding: 24, color: '#484f58', fontSize: 12, textAlign: 'center' }}>
-                  No turns recorded yet — semantic extraction runs 3s after the last assistant response.
+                  No replay data available — this session had no tool calls recorded.
                 </div>
               )}
               {replay.turns.map(turn => {

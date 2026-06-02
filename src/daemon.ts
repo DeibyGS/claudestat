@@ -163,6 +163,9 @@ const LEVEL_COLOR = {
 let _lastCycleAlertLevel:  string | null = null
 let _lastWeeklyAlertLevel: string | null = null
 let _resetReminderFired = false
+let _contextThresholdsFired = new Set<number>()
+let _lastContextSessionId = ''
+const CONTEXT_THRESHOLDS = [50, 75, 90]
 
 function checkAlertLevel(
   level: 'yellow' | 'orange' | 'red' | null,
@@ -252,6 +255,41 @@ function startAlertPolling() {
           _resetReminderFired = true
         }
       }
+
+      // ── Context percentage alerts ────────────────────────────────────────────
+      try {
+        const session = dbOps.getLatestSession()
+        if (session && session.context_window && session.context_window > 0 && session.context_used != null) {
+          // Reset thresholds on new session
+          if (session.id !== _lastContextSessionId) {
+            _contextThresholdsFired.clear()
+            _lastContextSessionId = session.id
+          }
+          const pct = Math.round((session.context_used / session.context_window) * 100)
+          if (pct >= 50) {
+            for (const th of CONTEXT_THRESHOLDS) {
+              if (pct >= th && !_contextThresholdsFired.has(th)) {
+                _contextThresholdsFired.add(th)
+                logger.warn(`[claudestat] Context at ${pct}% (${session.context_used.toLocaleString()} / ${session.context_window.toLocaleString()} tokens) — threshold ${th}%`)
+                process.stderr.write(`\x1b[33m[claudestat] ⚠️  Context at ${pct}% — ${session.context_used.toLocaleString()} / ${session.context_window.toLocaleString()} tokens\x1b[0m\n`)
+                sendDesktopNotification(
+                  'claudestat — Context usage alert',
+                  `Context at ${th}% (${pct}%) — ${session.context_used.toLocaleString()} / ${session.context_window.toLocaleString()} tokens`
+                )
+                broadcast({
+                  type: 'context_threshold',
+                  payload: {
+                    session_id: session.id,
+                    pct, threshold: th,
+                    context_used: session.context_used,
+                    context_window: session.context_window
+                  }
+                })
+              }
+            }
+          }
+        }
+      } catch { /* context check non-critical */ }
 
       // Write or remove pause signal file based on kill switch state
       const signalFile = getPauseSignalFile()

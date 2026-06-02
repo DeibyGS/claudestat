@@ -106,8 +106,13 @@ Then just ask:
 - **OpenCode support** — same live dashboard for OpenCode sessions (tool calls, prompts, model, intent)
 - **Quota guard** — alerts at 70%, 85%, 95%; optional kill switch blocks new sessions at X%
 - **Loop detector** — flags context thrashing with estimated waste cost
-- **Top tools** — know which tools eat most of your budget
+- **Top tools** — know which tools eat most of your budget; expandable "Other" row reveals tools beyond top 10
 - **Cost projection** — linear regression with trend, confidence intervals, R²
+- **Billing blocks** — track 5-hour billing windows and cumulative spend per block (`claudestat blocks`)
+- **Session sharing** — export any session summary as formatted ASCII or JSON (`claudestat share`)
+- **52-week activity heatmap** — visualize your coding activity across the full year in Analytics
+- **Period-over-period deltas** — Analytics KPIs show ↑↓% trend vs. the previous period
+- **Projects search & filter** — find projects instantly; filter by activity, cost, or efficiency threshold
 - **Web dashboard** — 6 tabs: Live, History, Projects, Analytics, Top, System
 - **MCP server** — 7 tools so Claude can answer questions about its own usage
 - **Weekly insights** — pattern analysis with actionable tips
@@ -176,6 +181,8 @@ claudestat start     # start the daemon manually
 | `claudestat project` | Cost projection with linear regression |
 | `claudestat config` | View or edit configuration |
 | `claudestat doctor` | Check installation health and diagnose issues |
+| `claudestat blocks` | Show 5-hour billing block history |
+| `claudestat share [session-id]` | Export session summary as ASCII or JSON (use `--copy` to copy to clipboard) |
 | `claudestat export [format]` | Export session data to JSON or CSV |
 | `claudestat roast` | Sarcastic usage analysis |
 | `claudestat version` | Show version and check for updates |
@@ -186,7 +193,7 @@ claudestat start     # start the daemon manually
 
 ## Dashboard
 
-The dashboard lives at `http://localhost:7337` and has six tabs: **Live** (real-time trace with source badge and expandable Bash commands), **History** (sessions by date with compare panel), **Projects** (grid with weekly heatmap and cost breakdown), **Analytics** (real spend + tokens + hours + efficiency KPIs, source filter, weekly AI reports), **Top** (tool rankings by cost/count/duration with cost projection), and **System** (hooks, agents, skills, workflows, context file limits, work mode distribution, OpenCode config, memory files, claudestat config).
+The dashboard lives at `http://localhost:7337` and has six tabs: **Live** (real-time trace with source badge, expandable Bash commands, and last-task subtitle per source), **History** (sessions by date with day selector 7/14/30/90d, merged-session badge, search, cost filter, and compare panel), **Projects** (grid with weekly heatmap, search input, and filters for active, high-cost, or low-efficiency projects), **Analytics** (spend + tokens + hours + efficiency KPIs with period-over-period ↑↓% deltas, stacked token chart by input/output/cache, 52-week activity heatmap, source filter, weekly AI reports), **Top** (tool rankings by cost/count/duration with cost projection and expandable "Other" row for tools beyond top 10), and **System** (hooks, agents, skills, workflows, context file limits, work mode distribution, OpenCode config, memory files with truncation warning, claudestat config).
 
 ![Live tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225605/My%20portfolio%7D/live_oeucqs.png)
 

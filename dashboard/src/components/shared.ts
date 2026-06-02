@@ -31,6 +31,12 @@ export function fmtCost(usd: number): string {
   return usd >= 10 ? `$${usd.toFixed(2)}` : `$${usd.toFixed(3)}`
 }
 
+// ── Model helpers ──
+
+export function shortModel(m: string): string {
+  return m.replace(/^claude-/, '').replace(/-\d{8}$/, '').replace(/^opencode-go\//, '')
+}
+
 // ── Source helpers ──
 
 export function sourceColor(source?: string): string {

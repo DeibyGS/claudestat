@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { Terminal } from 'lucide-react'
 import type { TraceEvent, CostInfo, BlockCost, MetaStats, QuotaData, SessionState, DayStats, QuotaStats, SubAgentSession } from '../../types'
 import { groupBlocks } from './utils'
@@ -6,26 +6,30 @@ import type { HiddenCostStats, SessionPromptItem } from './utils'
 import { SidebarKPI } from './SidebarKPI'
 import { SidebarStats } from './SidebarStats'
 import { CostTimeline } from './CostTimeline'
+import { ContextCurve } from './ContextCurve'
 import { BlockListItem } from './BlockListItem'
 import { BlockDetailPanel } from './BlockDetailPanel'
+
+const DAGView = lazy(() => import('../DAGView').then(m => ({ default: m.DAGView })))
 
 // Re-export public API consumed by App.tsx
 export { maskSecrets } from './utils'
 
 interface Props {
-  events:             TraceEvent[]
-  startedAt:          number
-  cost?:              CostInfo
-  blockCosts?:        BlockCost[]
-  meta?:              MetaStats
-  quota?:             QuotaData
-  sessionState?:      SessionState
-  weeklyData:         DayStats[]
-  prompts?:           SessionPromptItem[]
-  hiddenCost?:        HiddenCostStats
-  quotaStats?:        QuotaStats
-  subAgentSessions?:  SubAgentSession[]
-  cliLabel?:          string
+  events:                TraceEvent[]
+  startedAt:             number
+  cost?:                 CostInfo
+  blockCosts?:           BlockCost[]
+  meta?:                 MetaStats
+  quota?:                QuotaData
+  sessionState?:         SessionState
+  weeklyData:            DayStats[]
+  prompts?:              SessionPromptItem[]
+  hiddenCost?:           HiddenCostStats
+  quotaStats?:           QuotaStats
+  subAgentSessions?:     SubAgentSession[]
+  cliLabel?:             string
+  burnRateTokensPerMin?: number
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -36,11 +40,12 @@ function toActorLabel(model?: string): string {
   return seg === 'claude' ? 'Claude' : seg.charAt(0).toUpperCase() + seg.slice(1)
 }
 
-export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quota, sessionState = 'idle', weeklyData = [], hiddenCost, prompts = [], quotaStats, subAgentSessions = [], cliLabel = 'Claude Code' }: Props) {
+export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quota, sessionState = 'idle', weeklyData = [], hiddenCost, prompts = [], quotaStats, subAgentSessions = [], cliLabel = 'Claude Code', burnRateTokensPerMin }: Props) {
   const actorLabel = toActorLabel(cost?.model)
   const listRef        = useRef<HTMLDivElement>(null)
   // null = auto-follow last block
   const [pinned, setPinned] = useState<number | null>(null)
+  const [flowTab, setFlowTab] = useState<'session' | 'flow'>('session')
 
   // Memoizar groupBlocks: es O(n) sobre events y no debe recalcularse en renders sin cambios
   const blocks    = useMemo(() => groupBlocks(events), [events])
@@ -61,12 +66,21 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
   const lastIdx     = blocks.length > 0 ? blocks[blocks.length - 1].index : 1
   const selectedIdx = pinned ?? lastIdx
 
+  const agentCount = useMemo(
+    () => events.filter(e => e.type === 'PreToolUse' && e.tool_name === 'Agent').length,
+    [events],
+  )
+
   // Auto-scroll list to bottom when new block appears and not pinned
   useEffect(() => {
     if (pinned === null) {
       listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
     }
   }, [blocks.length, pinned])
+
+  useEffect(() => {
+    if (agentCount === 0) setFlowTab('session')
+  }, [agentCount])
 
   const handleSelect = useCallback((blockIndex: number) => {
     const isLast = blocks.length > 0 && blockIndex === blocks[blocks.length - 1].index
@@ -95,7 +109,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
     return (
       <div style={{ display: 'flex', height: '100%', flex: 1, background: '#0d1117', overflow: 'hidden' }}>
         <div style={{ width: 360, flexShrink: 0, borderRight: '1px solid #21262d', display: 'flex', flexDirection: 'column', background: '#090d12', overflow: 'hidden' }}>
-          <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} quotaStats={quotaStats} startedAt={startedAt} promptCount={0} />
+          <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} quotaStats={quotaStats} startedAt={startedAt} promptCount={0} burnRateTokensPerMin={burnRateTokensPerMin} />
         </div>
         {emptyPane}
       </div>
@@ -119,10 +133,13 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
         background: '#090d12', overflow: 'hidden',
       }}>
         {/* KPI section */}
-        <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} quotaStats={quotaStats} startedAt={startedAt} promptCount={prompts.length} />
+        <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} quotaStats={quotaStats} startedAt={startedAt} promptCount={prompts.length} burnRateTokensPerMin={burnRateTokensPerMin} />
 
         {/* Cost Timeline inside sidebar */}
         <CostTimeline blocks={blocks} blockCosts={blockCosts} selected={selectedIdx} onSelect={handleSelect} />
+
+        {/* Context degradation curve */}
+        <ContextCurve blocks={blocks} blockCosts={blockCosts} />
 
         {/* Block list (scrollable) */}
         <div ref={listRef} style={{ flex: 1, overflowY: 'auto', paddingTop: 4, paddingBottom: 4 }}>
@@ -147,7 +164,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
 
       {/* ── Right: block detail (full width) ── */}
       <div style={{ flex: 1, overflow: 'hidden', background: '#0d1117', display: 'flex', flexDirection: 'column' }}>
-        {/* Source badge */}
+        {/* Source badge + sub-tabs */}
         <div style={{
           flexShrink: 0, padding: '4px 14px', borderBottom: '1px solid #21262d',
           display: 'flex', alignItems: 'center', gap: 5, fontSize: 10,
@@ -160,27 +177,61 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
           }} />
           {cliLabel}
           <span style={{ color: '#484f58' }}>·</span>
-          Block view
+          {agentCount > 0 ? (
+            <>
+              <button
+                onClick={() => setFlowTab('session')}
+                style={{
+                  border: 'none', cursor: 'pointer', padding: '1px 6px',
+                  fontSize: 10, borderRadius: 4, fontFamily: 'inherit',
+                  color: flowTab === 'session' ? '#e6edf3' : '#7d8590',
+                  background: flowTab === 'session' ? '#1f6feb33' : 'transparent',
+                }}
+              >
+                Session
+              </button>
+              <button
+                onClick={() => setFlowTab('flow')}
+                style={{
+                  border: 'none', cursor: 'pointer', padding: '1px 6px',
+                  fontSize: 10, borderRadius: 4, fontFamily: 'inherit',
+                  color: flowTab === 'flow' ? '#e6edf3' : '#7d8590',
+                  background: flowTab === 'flow' ? '#1f6feb33' : 'transparent',
+                }}
+              >
+                Flow ({agentCount})
+              </button>
+            </>
+          ) : (
+            'Block view'
+          )}
         </div>
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          {selectedBlock
-            ? (
-              <BlockDetailPanel
-                key={selectedBlock.index}
-                block={selectedBlock}
-                startedAt={startedAt}
-                blockCost={blockCosts[selectedBlock.index - 1]}
-                sessionModel={cost?.model}
-                prompt={prompts.find(p => p.index === selectedBlock.index)?.text}
-                defaultActorLabel={actorLabel}
+          {flowTab === 'flow' ? (
+            <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#484f58', fontSize: 12 }}>Loading…</div>}>
+              <DAGView
+                cost={cost}
+                subAgentSessions={subAgentSessions}
+                sessionState={sessionState}
+                events={events}
+                cliLabel={cliLabel}
               />
-            )
-            : (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#484f58', fontSize: 12 }}>
-                Select a block
-              </div>
-            )
-          }
+            </Suspense>
+          ) : selectedBlock ? (
+            <BlockDetailPanel
+              key={selectedBlock.index}
+              block={selectedBlock}
+              startedAt={startedAt}
+              blockCost={blockCosts[selectedBlock.index - 1]}
+              sessionModel={cost?.model}
+              prompt={prompts.find(p => p.index === selectedBlock.index)?.text}
+              defaultActorLabel={actorLabel}
+            />
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#484f58', fontSize: 12 }}>
+              Select a block
+            </div>
+          )}
         </div>
       </div>
     </div>

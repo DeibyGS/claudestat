@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Wrench, DollarSign, Clock, Hash, HelpCircle, type LucideIcon } from 'lucide-react'
+import { useEffect, useState, useCallback } from 'react'
+import { Wrench, DollarSign, Clock, Hash, HelpCircle, ChevronDown, ChevronUp, type LucideIcon } from 'lucide-react'
 import { Tip } from './Tip'
 import { sourceColor, sourceLabel } from './shared'
 
@@ -70,7 +70,8 @@ function FilterButton<T extends string | number>({ value, options, onChange }: F
 }
 
 function fmtCostPrecise(n: number): string {
-  if (n < 0.001) return '$0'
+  if (n < 0.00001) return '$0'
+  if (n < 0.001) return `$${n.toFixed(6)}`
   if (n < 0.01) return `$${n.toFixed(4)}`
   if (n < 1) return `$${n.toFixed(3)}`
   return `$${n.toFixed(2)}`
@@ -94,6 +95,21 @@ export function TopView() {
   const [days, setDays] = useState(30)
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
   const [loading, setLoading] = useState(false)
+  const [otherTools, setOtherTools] = useState<TopTool[]>([])
+  const [otherExpanded, setOtherExpanded] = useState(false)
+  const [otherLoading, setOtherLoading] = useState(false)
+
+  const fetchOther = useCallback(() => {
+    if (otherExpanded) { setOtherExpanded(false); return }
+    setOtherLoading(true)
+    fetch(`/api/top-other?by=${sortBy}&days=${days}&source=${sourceFilter}`)
+      .then(r => r.ok ? r.json() : undefined)
+      .then(d => { if (d) setOtherTools(d.tools ?? []); setOtherExpanded(true) })
+      .catch(() => {})
+      .finally(() => setOtherLoading(false))
+  }, [otherExpanded, sortBy, days, sourceFilter])
+
+  useEffect(() => { setOtherExpanded(false) }, [sortBy, days, sourceFilter])
 
   useEffect(() => {
     setLoading(true)
@@ -233,17 +249,16 @@ export function TopView() {
                 <span style={{ color: '#8b949e', fontWeight: 600, position: 'relative' }}>{i + 1}</span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 6, position: 'relative' }}>
                   {t.tool === 'Other' ? (
-                    <Tip position="top" align="left" content={
-                      <div style={{ fontSize: 11, lineHeight: 1.7 }}>
-                        <div style={{ fontWeight: 700, color: '#8b949e', marginBottom: 4 }}>Other tools</div>
-                        <div style={{ color: '#7d8590' }}>Remaining cost not attributed to the<br/>top tools listed above</div>
-                      </div>
-                    }>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <HelpCircle size={11} color="#8b949e" />
-                        {t.tool}
-                      </span>
-                    </Tip>
+                    <span
+                      onClick={fetchOther}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                    >
+                      <HelpCircle size={11} color="#8b949e" />
+                      {t.tool}
+                      {otherLoading ? <span style={{ fontSize: 9, color: '#484f58' }}>…</span>
+                        : otherExpanded ? <ChevronUp size={10} color="#484f58" />
+                        : <ChevronDown size={10} color="#484f58" />}
+                    </span>
                   ) : (
                     <>
                       <Wrench size={11} color={COLORS[i % COLORS.length]} style={{ flexShrink: 0 }} />
@@ -280,6 +295,31 @@ export function TopView() {
               </div>
             )
           })}
+
+          {/* Other breakdown */}
+          {otherExpanded && otherTools.length > 0 && (
+            <div style={{ marginLeft: 16, borderLeft: '2px solid #30363d', paddingLeft: 8, display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {otherTools.map((t, i) => (
+                <div key={`${t.tool}-${t.source}-other`} style={{
+                  display: 'grid', gridTemplateColumns: '32px 200px 70px 80px 80px',
+                  gap: 8, padding: '5px 8px', fontSize: 11, color: '#8b949e',
+                  background: '#0d1117', border: '1px solid #161b22', borderRadius: 4,
+                }}>
+                  <span style={{ color: '#484f58' }}>{i + 11}</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 5, overflow: 'hidden' }}>
+                    <Wrench size={10} color="#484f58" style={{ flexShrink: 0 }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.tool}>{t.tool}</span>
+                  </span>
+                  <span style={{ textAlign: 'right' }}>{t.count.toLocaleString()}</span>
+                  <span style={{ textAlign: 'right' }}>{t.totalDurationMs > 0 ? fmtDur(t.totalDurationMs) : '—'}</span>
+                  <span style={{ textAlign: 'right', fontWeight: 600 }}>{fmtCostPrecise(t.estimatedCostUsd)}</span>
+                </div>
+              ))}
+              {otherTools.length === 0 && (
+                <span style={{ fontSize: 11, color: '#484f58', padding: '4px 8px' }}>No additional tools in this period</span>
+              )}
+            </div>
+          )}
 
           {/* Total row */}
           {(() => {

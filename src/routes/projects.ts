@@ -134,22 +134,39 @@ projectsRouter.get('/projects', (_req: Request, res: Response) => {
     cliHoursMap.get(row.project_path)![row.source] = row.total_ms / 3_600_000
   }
 
-  // Attach pattern insights per project (only if DB has enough data)
+  // Attach pattern insights + source stats per project (only if DB has enough data)
   const cfg = readConfig()
   const projects = [...projectMap.values()].map(p => {
-    const toolCounts  = dbOps.getProjectToolCounts(p.path)
+    const toolCounts   = dbOps.getProjectToolCounts(p.path)
     const sessionStats = dbOps.getProjectSessionStats(p.path)
-    const insights = (sessionStats && sessionStats.session_count >= 2)
-      ? analyzePatterns(toolCounts, sessionStats)
-      : []
     const cli_hours = cliHoursMap.get(p.path)
     const aliasName = cfg.projectAliases[p.path]
+
+    const sourceRows = dbOps.getProjectStatsBySource(p.path)
+    const source_stats = sourceRows.length >= 2
+      ? Object.fromEntries(sourceRows.map(r => [r.source, {
+          session_count:  r.session_count,
+          total_cost_usd: r.total_cost_usd,
+          total_tokens:   r.total_tokens,
+          avg_efficiency: r.avg_efficiency !== null ? Math.round(r.avg_efficiency) : null,
+          avg_loops:      Math.round((r.avg_loops ?? 0) * 10) / 10,
+          last_active:    r.last_active,
+          dominant_model: r.dominant_model ?? null,
+        }]))
+      : undefined
+
+    const recentExtremes = dbOps.getProjectRecentExtremes(p.path)
+    const insights = (sessionStats && sessionStats.session_count >= 2)
+      ? analyzePatterns(toolCounts, sessionStats, recentExtremes, source_stats)
+      : []
+
     return {
       ...p,
       name: aliasName ?? p.name,
       alias: aliasName ?? null,
       insights,
-      ...(cli_hours ? { cli_hours } : {}),
+      ...(cli_hours    ? { cli_hours }    : {}),
+      ...(source_stats ? { source_stats } : {}),
     }
   })
     .sort((a, b) => (b.last_active ?? 0) - (a.last_active ?? 0))

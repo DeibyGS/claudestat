@@ -193,7 +193,7 @@ miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
 
 let _systemConfigCache: unknown = null
 let _systemConfigCacheTs = 0
-const SYSTEM_CONFIG_TTL = 30_000
+const SYSTEM_CONFIG_TTL = 5_000
 
 miscRouter.get('/system-config', (_req: Request, res: Response) => {
   if (_systemConfigCache && Date.now() - _systemConfigCacheTs < SYSTEM_CONFIG_TTL) {
@@ -281,9 +281,14 @@ miscRouter.get('/system-config', (_req: Request, res: Response) => {
 
     // 4. Archivos de memoria Engram
     let memoryFiles: string[] = []
+    let memoryMdLines = 0
     try {
       const memDir = path.join(claudeDir, 'projects', engramSlugCtx, 'memory')
       memoryFiles  = fs.readdirSync(memDir).filter(f => f.endsWith('.md')).sort()
+      try {
+        const content = fs.readFileSync(path.join(memDir, 'MEMORY.md'), 'utf-8')
+        memoryMdLines = content.split('\n').length
+      } catch {}
     } catch {}
 
     // 5. Distribución de modos (últimos 7 días)
@@ -347,7 +352,7 @@ miscRouter.get('/system-config', (_req: Request, res: Response) => {
     } catch {}
 
     _systemConfigCache = {
-      hooks, agents, workflows, skills, contextFiles, memoryFiles,
+      hooks, agents, workflows, skills, contextFiles, memoryFiles, memoryMdLines,
       modeDistribution, claudestatConfig,
       opencode: {
         config: opencodeConfig,
@@ -447,6 +452,20 @@ miscRouter.post('/tool-status', (req: Request, res: Response) => {
 
   broadcast({ type: 'tool_status_changed', payload: { tool, status, last_task: last_task ?? null, finished_at, session_id: session_id ?? null, waiting_for: waiting_for ?? null } })
   res.json({ ok: true })
+})
+
+// ─── GET /api/blocks — 5-hour billing block history ──────────────────────────
+
+miscRouter.get('/api/blocks', (req: Request, res: Response) => {
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string || '20', 10) || 20))
+  res.json({ blocks: dbOps.getBillingBlocks(limit) })
+})
+
+// ─── GET /api/activity — 52-week daily activity heatmap data ─────────────────
+
+miscRouter.get('/api/activity', (req: Request, res: Response) => {
+  const days = Math.min(730, Math.max(1, parseInt(req.query.days as string || '365', 10) || 365))
+  res.json({ activity: dbOps.getDailyActivity(days) })
 })
 
 // ─── GET /api/logs — últimos N líneas del daemon log ──────────────────────────

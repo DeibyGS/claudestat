@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { GitBranch, Cpu, BrainCircuit, FileText, Zap, Settings2, ChevronDown, ChevronRight,
-         CheckCircle2, XCircle, Bot, Layers, Workflow, MemoryStick, Globe, Users } from 'lucide-react'
+         CheckCircle2, XCircle, Bot, Layers, Workflow, MemoryStick, Globe, Users, TriangleAlert } from 'lucide-react'
 import { Tip } from './Tip'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -12,6 +12,7 @@ export interface SystemConfig {
   skills:            { name: string; description: string; lines: number }[]
   contextFiles:      { key: string; exists: boolean; sizeKb: number; lines: number }[]
   memoryFiles:       string[]
+  memoryMdLines?:    number
   modeDistribution:  { direct: number; mini: number; pipeline: number; total: number }
   claudestatConfig: {
     killSwitchEnabled?:  boolean
@@ -282,7 +283,7 @@ function SkillsSection({ skills }: { skills: { name: string; description: string
 
 // ─── Sección: Memoria ─────────────────────────────────────────────────────────
 
-function MemorySection({ memoryFiles }: { memoryFiles: string[] }) {
+function MemorySection({ memoryFiles, memoryMdLines = 0 }: { memoryFiles: string[]; memoryMdLines?: number }) {
   const [open, setOpen] = useState(true)
   const engramOk = memoryFiles.length > 0
 
@@ -297,6 +298,12 @@ function MemorySection({ memoryFiles }: { memoryFiles: string[] }) {
         badge={engramOk ? <Badge text={`${memoryFiles.length} files`} color="#58a6ff" /> : undefined}
         open={open} onToggle={() => setOpen(v => !v)}
       />
+      {memoryMdLines > 200 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0 2px', fontSize: 10, color: '#d29922' }}>
+          <TriangleAlert size={11} />
+          MEMORY.md has {memoryMdLines} lines — content after line 200 is truncated by Claude Code
+        </div>
+      )}
       {open && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
           {!engramOk ? (
@@ -958,7 +965,7 @@ export function SystemView({ config, error, onRetry }: { config?: SystemConfig; 
         <ClaudestatSection cfg={config.claudestatConfig} />
 
         <div style={{ gridColumn: '1 / -1' }}>
-          <MemorySection memoryFiles={config.memoryFiles} />
+          <MemorySection memoryFiles={config.memoryFiles} memoryMdLines={config.memoryMdLines} />
         </div>
 
         {(() => {

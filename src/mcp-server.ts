@@ -19,6 +19,7 @@ import { computeQuota, refreshFromApi } from './quota-tracker'
 import { getWeeklyInsightData, generateTip, getUsageInsights } from './insights'
 import { readConfig, getWarnLevel } from './config'
 import { getPidFile } from './paths'
+import { getContextWindow } from './pricing'
 
 function isDaemonRunning(): boolean {
   try {
@@ -39,6 +40,12 @@ Data shown below is from the last recorded session.
 const SERVER_NAME = 'claudestat'
 const SERVER_VERSION = '1.2.2'
 const PROTOCOL_VERSION = '2025-03-26'
+
+// ─── Context threshold notification tracking ────────────────────────────
+let _mcpContextThresholdsFired = new Set<number>()
+let _mcpLastContextSessionId = ''
+const MCP_CONTEXT_THRESHOLDS = [50, 75, 90] as const
+const MCP_CONTEXT_POLL_MS = 30_000
 
 type JsonRpcRequest = { jsonrpc: '2.0'; id?: number | string; method: string; params?: Record<string, unknown> }
 type JsonRpcResponse = { jsonrpc: '2.0'; id?: number | string; result?: unknown; error?: { code: number; message: string } }
@@ -133,6 +140,15 @@ const TOOLS = [
           description: 'Days to look back (default 7)'
         }
       },
+      required: []
+    }
+  },
+  {
+    name: 'get_context_status',
+    description: 'Get current context window usage for the latest session: used tokens, window size, percentage, and model',
+    inputSchema: {
+      type: 'object',
+      properties: {},
       required: []
     }
   }
@@ -359,6 +375,32 @@ function toolGetModelBreakdown(days: number): string {
   return lines.join('\n')
 }
 
+function toolGetContextStatus(): string {
+  const session = dbOps.getLatestSession()
+  if (!session) return 'No sessions recorded yet.'
+
+  const contextUsed = session.context_used ?? 0
+  const dominantModel = session.dominant_model ?? ''
+  const contextWindow = session.context_window ?? getContextWindow(dominantModel)
+  const pct = contextWindow > 0 ? Math.round((contextUsed / contextWindow) * 100) : 0
+
+  const bar = (p: number, width = 20): string =>
+    '█'.repeat(Math.round(p / 100 * width)) + '░'.repeat(width - Math.round(p / 100 * width))
+
+  const level = pct >= 90 ? '🔴' : pct >= 75 ? '🟠' : pct >= 50 ? '🟡' : '🟢'
+
+  return [
+    `Context status — ${session.id.slice(0, 8)}`,
+    ``,
+    `  ${level}  ${pct}%  ${bar(pct)}`,
+    `  Used:  ${contextUsed.toLocaleString()} / ${contextWindow.toLocaleString()} tokens`,
+    `  Model: ${dominantModel || 'unknown'}`,
+    `  Project: ${session.project_path?.split('/').pop() ?? '—'}`,
+    ...(pct >= 90 ? ['', '⚠️  Context near saturation — consider starting a new session'] : []),
+    ...(pct >= 75 ? ['', '⚠️  Context at warning level — wrap up soon'] : []),
+  ].join('\n')
+}
+
 function toolGetWeeklyInsight(days: number): string {
   const d = Math.max(1, Math.min(90, Math.floor(days || 7)))
   const data = getWeeklyInsightData(d)
@@ -403,6 +445,7 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
     case 'get_weekly_insight':  return warning + toolGetWeeklyInsight(
       typeof args.days === 'number' ? args.days : 7
     )
+    case 'get_context_status': return warning + toolGetContextStatus()
     default: return `Unknown tool: ${name}`
   }
 }
@@ -451,6 +494,48 @@ async function handleRequest(msg: JsonRpcRequest): Promise<JsonRpcResponse | nul
   }
 }
 
+// ─── Context push notifications ─────────────────────────────────────────
+// Polls the latest session's context usage every 30s and sends JSON-RPC
+// notifications to the MCP client when crossing 50/75/90% thresholds.
+
+function startContextPolling() {
+  setInterval(() => {
+    try {
+      const session = dbOps.getLatestSession()
+      if (!session) return
+
+      const dominantModel = session.dominant_model ?? ''
+      const contextWindow = session.context_window ?? getContextWindow(dominantModel)
+      const contextUsed = session.context_used ?? 0
+      if (contextWindow <= 0) return
+
+      // Reset thresholds on new session
+      if (session.id !== _mcpLastContextSessionId) {
+        _mcpContextThresholdsFired.clear()
+        _mcpLastContextSessionId = session.id
+      }
+
+      const pct = Math.round((contextUsed / contextWindow) * 100)
+      if (pct >= 50) {
+        for (const th of MCP_CONTEXT_THRESHOLDS) {
+          if (pct >= th && !_mcpContextThresholdsFired.has(th)) {
+            _mcpContextThresholdsFired.add(th)
+            const msg = `claudestat — Context at ${th}% (${contextUsed.toLocaleString()} / ${contextWindow.toLocaleString()} tokens)`
+            process.stderr.write(`\x1b[33m[MCP] ${msg}\x1b[0m\n`)
+            // Send JSON-RPC notification to MCP client (no 'id' field)
+            const notif = JSON.stringify({
+              jsonrpc: '2.0',
+              method: 'notifications/message',
+              params: { level: 'warning', message: msg }
+            })
+            process.stdout.write(notif + '\n')
+          }
+        }
+      }
+    } catch { /* context polling non-critical */ }
+  }, MCP_CONTEXT_POLL_MS)
+}
+
 const rl = readline.createInterface({ input: process.stdin, terminal: false })
 
 rl.on('line', (line: string) => {
@@ -473,4 +558,5 @@ process.on('SIGINT', () => process.exit(0))
 
 // API quota is refreshed on-demand per get_quota_status call (disk cache throttles to 1 call/5min)
 
+startContextPolling()
 process.stderr.write(`[claudestat-mcp] Server ready (stdio, protocol ${PROTOCOL_VERSION})\n`)

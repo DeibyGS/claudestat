@@ -141,6 +141,8 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
   ` },
   { version: 20, sql: `ALTER TABLE events ADD COLUMN external_id TEXT` },
   { version: 21, sql: `CREATE UNIQUE INDEX IF NOT EXISTS idx_events_ext ON events(session_id, external_id) WHERE external_id IS NOT NULL` },
+  { version: 22, sql: `ALTER TABLE sessions ADD COLUMN context_used INTEGER DEFAULT 0` },
+  { version: 23, sql: `ALTER TABLE sessions ADD COLUMN context_window INTEGER DEFAULT 0` },
 ]
 
 function runMigrations() {
@@ -183,6 +185,8 @@ export interface SessionRow {
   avg_output_chars?: number
   error_block_count?: number
   semantic_loop_count?: number
+  context_used?: number
+  context_window?: number
 }
 
 export interface AssistantTurnRow {
@@ -231,6 +235,22 @@ export interface CostUpdate {
   lastTs?: number             // timestamp ms del último mensaje assistant (para last_event_at de sub-agentes)
 }
 
+export interface BillingBlock {
+  block_start:    number
+  block_end:      number
+  sessions:       number
+  total_cost_usd: number
+  total_tokens:   number
+  is_current:     boolean
+}
+
+export interface DailyActivity {
+  date:         string
+  cost_usd:     number
+  total_tokens: number
+  tool_calls:   number
+}
+
 // ─── Prepared statements (se compilan una vez al iniciar) ─────────────────────
 
 const stmts = {
@@ -260,7 +280,9 @@ const stmts = {
       exact_retries        = ?,
       error_rate           = ?,
       file_churn_score     = ?,
-      seq_cycle_count      = ?
+      seq_cycle_count      = ?,
+      context_used         = ?,
+      context_window       = ?
     WHERE id = ?
   `),
 
@@ -271,7 +293,7 @@ const stmts = {
 
   insertOcEvent: db.prepare(`
     INSERT OR IGNORE INTO events (session_id, type, tool_name, ts, duration_ms, external_id, source)
-    VALUES (?, 'Done', ?, ?, 0, ?, 'opencode')
+    VALUES (?, 'Done', ?, ?, ?, ?, 'opencode')
   `),
 
   pairPost: db.prepare(`
@@ -385,6 +407,37 @@ const stmts = {
       AVG(CASE WHEN efficiency_score > 0 THEN efficiency_score END) as avg_efficiency
     FROM sessions
     WHERE project_path = ?
+  `),
+
+  getProjectStatsBySource: db.prepare(`
+    SELECT
+      COALESCE(source, 'claude-code')                                                   as source,
+      COUNT(*)                                                                           as session_count,
+      COALESCE(SUM(total_cost_usd), 0)                                                  as total_cost_usd,
+      COALESCE(SUM(total_input_tokens + total_output_tokens + total_cache_read), 0)     as total_tokens,
+      AVG(CASE WHEN efficiency_score > 0 THEN efficiency_score END)                     as avg_efficiency,
+      AVG(loops_detected)                                                               as avg_loops,
+      MAX(last_event_at)                                                                as last_active,
+      (SELECT s2.dominant_model
+       FROM sessions s2
+       WHERE COALESCE(s2.source, 'claude-code') = COALESCE(sessions.source, 'claude-code')
+         AND s2.project_path = sessions.project_path
+         AND s2.dominant_model IS NOT NULL
+       GROUP BY s2.dominant_model
+       ORDER BY COUNT(*) DESC LIMIT 1)                                                  as dominant_model
+    FROM sessions
+    WHERE project_path = ?
+    GROUP BY COALESCE(source, 'claude-code')
+  `),
+
+  getProjectRecentExtremes: db.prepare(`
+    SELECT
+      COUNT(CASE WHEN loops_detected >= 5 THEN 1 END) as heavy_loop_sessions,
+      COUNT(*)                                         as recent_sessions,
+      MAX(total_cost_usd)                              as max_session_cost
+    FROM sessions
+    WHERE project_path = ?
+      AND started_at > (strftime('%s', 'now') - 2592000) * 1000
   `),
 
   insertWeeklyReport: db.prepare(`
@@ -687,8 +740,8 @@ export const dbOps = {
     return Number(res.lastInsertRowid)
   },
 
-  insertOcEvent(sessionId: string, toolName: string, ts: number, externalId: string): void {
-    stmts.insertOcEvent.run(sessionId, toolName, ts, externalId)
+  insertOcEvent(sessionId: string, toolName: string, ts: number, durationMs: number, externalId: string): void {
+    stmts.insertOcEvent.run(sessionId, toolName, ts, durationMs, externalId)
   },
 
   insertSessionIfAbsent(s: SessionRow): void {
@@ -738,6 +791,8 @@ export const dbOps = {
       errorRate,
       fileChurnScore,
       seqCycleCount,
+      cost.context_used,
+      cost.context_window,
       sessionId,
     )
   },
@@ -795,6 +850,14 @@ export const dbOps = {
 
   getProjectCliHours(): { project_path: string; source: string; total_ms: number }[] {
     return stmts.getProjectCliHours.all() as { project_path: string; source: string; total_ms: number }[]
+  },
+
+  getProjectStatsBySource(projectPath: string): { source: string; session_count: number; total_cost_usd: number; total_tokens: number; avg_efficiency: number | null; avg_loops: number; last_active: number | null; dominant_model: string | null }[] {
+    return stmts.getProjectStatsBySource.all(projectPath) as any[]
+  },
+
+  getProjectRecentExtremes(projectPath: string): { heavy_loop_sessions: number; recent_sessions: number; max_session_cost: number } {
+    return stmts.getProjectRecentExtremes.get(projectPath) as any
   },
 
   updateSessionSummary(sessionId: string, summary: string) {
@@ -1110,5 +1173,46 @@ export const dbOps = {
       JOIN file_intent_files f ON f.intent_id = i.id
       WHERE i.status = 'active'
     `).all() as { id: number; tool: string; file_path: string }[]
+  },
+
+  getBillingBlocks(limit = 20): BillingBlock[] {
+    const rows = db.prepare(`
+      SELECT
+        (started_at / 18000000) * 18000000           AS block_start,
+        (started_at / 18000000) * 18000000 + 18000000 AS block_end,
+        COUNT(*)                                      AS sessions,
+        COALESCE(SUM(total_cost_usd), 0)              AS total_cost_usd,
+        COALESCE(SUM(total_input_tokens + total_output_tokens), 0) AS total_tokens
+      FROM sessions
+      WHERE started_at > 0
+      GROUP BY (started_at / 18000000)
+      ORDER BY block_start DESC
+      LIMIT ?
+    `).all(limit) as Array<{
+      block_start: number; block_end: number; sessions: number
+      total_cost_usd: number; total_tokens: number
+    }>
+    const currentBlock = Math.floor(Date.now() / 18_000_000) * 18_000_000
+    return rows.map(r => ({ ...r, is_current: r.block_start === currentBlock }))
+  },
+
+  getDailyActivity(days = 365): DailyActivity[] {
+    const since = Date.now() - days * 86400000
+    return db.prepare(`
+      SELECT
+        strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch') AS date,
+        ROUND(SUM(s.total_cost_usd), 6) AS cost_usd,
+        SUM(COALESCE(s.total_input_tokens, 0) + COALESCE(s.total_output_tokens, 0)) AS total_tokens,
+        SUM(COALESCE(e.done_count, 0)) AS tool_calls
+      FROM sessions s
+      LEFT JOIN (
+        SELECT session_id, COUNT(*) AS done_count
+        FROM events WHERE type = 'Done'
+        GROUP BY session_id
+      ) e ON e.session_id = s.id
+      WHERE s.started_at >= ?
+      GROUP BY date
+      ORDER BY date ASC
+    `).all(since) as DailyActivity[]
   },
 }

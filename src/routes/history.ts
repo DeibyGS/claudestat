@@ -36,6 +36,7 @@ interface SessionEntry {
   git_dirty:      boolean
   git_ahead:      number
   git_behind:     number
+  merged_count:   number
 }
 
 function buildSessionEntry(s: any, gitInfo: ReturnType<typeof getCachedGitInfo>): SessionEntry {
@@ -67,6 +68,7 @@ function buildSessionEntry(s: any, gitInfo: ReturnType<typeof getCachedGitInfo>)
     git_dirty:    gitInfo?.dirty        ?? false,
     git_ahead:    gitInfo?.ahead        ?? 0,
     git_behind:   gitInfo?.behind       ?? 0,
+    merged_count: 1,
   }
 }
 
@@ -199,12 +201,14 @@ function mergeSessionGroups(entries: SessionEntry[]): SessionEntry[] {
       git_dirty:      first.git_dirty,
       git_ahead:      first.git_ahead,
       git_behind:     first.git_behind,
+      merged_count:   group.length,
     }
   })
 }
 
-historyRouter.get('/history', (_req: Request, res: Response) => {
-  const rows = dbOps.getRecentSessions(30)
+historyRouter.get('/history', (req: Request, res: Response) => {
+  const periodDays = Math.min(Math.max(parseInt(req.query.days as string) || 30, 1), 365)
+  const rows = dbOps.getRecentSessions(periodDays)
 
   // Construir entries individuales
   const entries: SessionEntry[] = []

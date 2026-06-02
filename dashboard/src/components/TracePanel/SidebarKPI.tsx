@@ -161,14 +161,15 @@ export function EfficiencyAlert({ cost, events, prompts }: {
 
 // ─── SidebarKPI ───────────────────────────────────────────────────────────────
 
-export function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStats, startedAt, promptCount = 0 }: {
-  cost?:         CostInfo
-  quota?:        QuotaData
-  sessionState?: SessionState
-  meta?:         MetaStats
-  quotaStats?:   QuotaStats
-  startedAt?:    number
-  promptCount?:  number
+export function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStats, startedAt, promptCount = 0, burnRateTokensPerMin }: {
+  cost?:                  CostInfo
+  quota?:                 QuotaData
+  sessionState?:          SessionState
+  meta?:                  MetaStats
+  quotaStats?:            QuotaStats
+  startedAt?:             number
+  promptCount?:           number
+  burnRateTokensPerMin?:  number
 }) {
   const sm = STATE_META[sessionState]
 
@@ -226,34 +227,40 @@ export function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStat
             </span>
           </div>
         </Tip>
-        {quota && quota.burnRateTokensPerMin > 0 && (
-          <Tip position="bottom" content={
-            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
-              <div style={{ fontWeight: 700, color: '#d29922', marginBottom: 4 }}>Burn rate</div>
-              <div style={{ color: '#7d8590' }}>Token consumption rate in the current session.</div>
-              <div style={{ color: '#484f58', marginTop: 6 }}>
-                <div>{quota.burnRateTokensPerMin.toLocaleString()} tokens/min</div>
-                {cost?.projected_hourly_usd && cost.projected_hourly_usd > 0.001 && cost.projected_hourly_usd < 50 && (
-                  <div>Projection: ~{fmtUsd(cost.projected_hourly_usd)}/h at current rate</div>
-                )}
+        {(() => {
+          const rate = quota?.burnRateTokensPerMin ?? burnRateTokensPerMin ?? 0
+          if (rate <= 0) return null
+          return (
+            <Tip position="bottom" content={
+              <div style={{ fontSize: 11, lineHeight: 1.7 }}>
+                <div style={{ fontWeight: 700, color: '#d29922', marginBottom: 4 }}>Burn rate</div>
+                <div style={{ color: '#7d8590' }}>
+                  {quota ? 'Token consumption rate in the current session.' : 'Average token rate for this session.'}
+                </div>
+                <div style={{ color: '#484f58', marginTop: 6 }}>
+                  <div>{rate.toLocaleString()} tokens/min</div>
+                  {cost?.projected_hourly_usd && cost.projected_hourly_usd > 0.001 && cost.projected_hourly_usd < 50 && (
+                    <div>Projection: ~{fmtUsd(cost.projected_hourly_usd)}/h at current rate</div>
+                  )}
+                </div>
               </div>
-            </div>
-          }>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'default' }}>
-              <Flame size={9} color="#d29922" />
-              <span style={{ fontSize: 10, color: '#d29922', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
-                {cost?.projected_hourly_usd
-                  && cost.projected_hourly_usd > 0.001
-                  && cost.projected_hourly_usd < 50
-                  && startedAt
-                  && (Date.now() - startedAt) > 2 * 60_000
-                  ? `~${fmtUsd(cost.projected_hourly_usd)}/h`
-                  : `${quota.burnRateTokensPerMin.toLocaleString()} tok/min`
-                }
-              </span>
-            </div>
-          </Tip>
-        )}
+            }>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'default' }}>
+                <Flame size={9} color="#d29922" />
+                <span style={{ fontSize: 10, color: '#d29922', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>
+                  {cost?.projected_hourly_usd
+                    && cost.projected_hourly_usd > 0.001
+                    && cost.projected_hourly_usd < 50
+                    && startedAt
+                    && (Date.now() - startedAt) > 2 * 60_000
+                    ? `~${fmtUsd(cost.projected_hourly_usd)}/h`
+                    : `${rate.toLocaleString()} tok/min`
+                  }
+                </span>
+              </div>
+            </Tip>
+          )
+        })()}
       </div>
 
       {/* ── Contexto ── */}
@@ -291,7 +298,7 @@ export function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStat
         </div>
         {cost?.context_used && (
           <div style={{ fontSize: 9, color: '#484f58', display: 'flex', gap: 6 }}>
-            <span>{fmtTok(cost.context_used)} usados</span>
+            <span>{fmtTok(cost.context_used)} used</span>
             <span style={{ color: '#3d444d' }}>·</span>
             <span>compact @{fmtTok(compactWindow ?? 170_000)}</span>
           </div>
@@ -300,7 +307,7 @@ export function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStat
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4, padding: '3px 6px', background: `${EFFICIENCY_ALERT_COLOR}15`, border: `1px solid ${EFFICIENCY_ALERT_COLOR}35`, borderRadius: 4 }}>
             <TriangleAlert size={9} color={EFFICIENCY_ALERT_COLOR} style={{ flexShrink: 0 }} />
             <span style={{ fontSize: 9, color: EFFICIENCY_ALERT_COLOR, fontWeight: 600 }}>
-              Auto-compact inminente — solo {ctxFree}% libre
+              Auto-compact imminent — {ctxFree}% free
             </span>
           </div>
         )}

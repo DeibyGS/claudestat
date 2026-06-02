@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, WifiOff, Zap, TrendingUp } from 'lucide-react'
 import type {
-  AppState, TraceEvent, CostInfo, BlockCost,
+  AppState, TraceEvent, CostInfo, BlockCost, DailyActivity,
   MetaStats, MetaSnapshot, DaySessions, ProjectSummary,
   QuotaData, SessionState, ClaudeStatsData, QuotaStats, SubAgentSession,
   ActiveSource, ToolStatus
@@ -11,6 +11,7 @@ import { type Tab, Header }    from './components/Header'
 import { ConfigPanel }        from './components/ConfigPanel'
 import { TracePanel }          from './components/TracePanel'
 import { LiveSourceBar, SOURCE_LABELS } from './components/LiveSourceBar'
+import { fmtTok } from './components/shared'
 
 const HistoryView  = lazy(() => import('./components/HistoryView').then(m => ({ default: m.HistoryView })))
 const ProjectsView = lazy(() => import('./components/ProjectsView').then(m => ({ default: m.ProjectsView })))
@@ -21,11 +22,6 @@ const SystemView   = lazy(() => import('./components/SystemView').then(m => ({ d
 const HEAVY_BLOCK_THRESHOLD = 500_000
 const MAX_EVENTS = 10_000
 
-function fmtTok(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000)     return `${Math.round(n / 1_000)}K`
-  return String(n)
-}
 
 const EMPTY: AppState = {
   sessionId: '', cwd: '', startedAt: Date.now(), events: [], weeklyData: [],
@@ -39,9 +35,11 @@ export default function App() {
   const [activeTab,    setActiveTab]   = useState<Tab>('live')
   const [metaStats,    setMetaStats]   = useState<MetaStats | undefined>()
   const [metaHistory,  setMetaHistory] = useState<MetaSnapshot[]>([])
-  const [historyDays,  setHistoryDays] = useState<DaySessions[]>([])
-  const [projects,     setProjects]    = useState<ProjectSummary[]>([])
-  const [activeProject,setActiveProject] = useState<string | null>(null)
+  const [historyDays,    setHistoryDays]    = useState<DaySessions[]>([])
+  const [historyPeriod,  setHistoryPeriod]  = useState(30)
+  const [projects,        setProjects]       = useState<ProjectSummary[]>([])
+  const [activeProject,   setActiveProject]  = useState<string | null>(null)
+  const [projectsLoading, setProjectsLoading] = useState(true)
   const [compacting,      setCompacting]     = useState(false)
   const [killSwitchActive, setKillSwitchActive] = useState(false)
   const [quota,        setQuota]       = useState<QuotaData | undefined>()
@@ -58,10 +56,12 @@ export default function App() {
   const [activeSources,    setActiveSources]    = useState<ActiveSource[]>([])
   const [activeLiveSource, setActiveLiveSource] = useState<string>('claude-code')
   const [toolStatus,       setToolStatus]       = useState<ToolStatus>({})
+  const [activityData,    setActivityData]     = useState<DailyActivity[]>([])
   const [opencodeEvents,   setOpencodeEvents]   = useState<TraceEvent[]>([])
   const [opencodePrompts,  setOpencodePrompts]  = useState<Array<{ index: number; ts: number; text: string }>>([])
   const [claudeCodeEvents,  setClaudeCodeEvents]  = useState<TraceEvent[]>([])
   const [claudeCodePrompts, setClaudeCodePrompts] = useState<Array<{ index: number; ts: number; text: string }>>([])
+  const [ocContextInfo, setOcContextInfo] = useState<{ context_used?: number; context_window?: number } | undefined>()
   const stateRef = useRef(state)
   stateRef.current = state
 
@@ -145,6 +145,12 @@ export default function App() {
             )
             return
           }
+          if (msg.type === 'cost_update' && msg.payload?.source === 'opencode') {
+            const p = msg.payload
+            if (p.context_used != null || p.context_window != null) {
+              setOcContextInfo({ context_used: p.context_used, context_window: p.context_window })
+            }
+          }
           setState(prev => handleMessage(prev, msg))
         } catch {}
       })
@@ -189,6 +195,7 @@ export default function App() {
       fetch('/projects').then(r => r.json()).then(d => {
         setProjects(d.projects ?? [])
         setActiveProject(d.active_project ?? null)
+        setProjectsLoading(false)
       }).catch(() => {})
     }
     fetchSlowData()
@@ -223,6 +230,18 @@ export default function App() {
     const t = setInterval(fetchToolStatus, 5_000)
     return () => clearInterval(t)
   }, [])
+
+  // ── Activity data polling (60s) — for heatmap ────────────────────────────────
+  useEffect(() => {
+    const fetchActivity = () =>
+      fetch('/api/activity?days=365')
+        .then(r => r.json())
+        .then(setActivityData)
+        .catch(() => {});
+    fetchActivity();
+    const id = setInterval(fetchActivity, 60000);
+    return () => clearInterval(id);
+  }, []);
 
   // ── Active sources polling (10s) ────────────────────────────────────────────
   useEffect(() => {
@@ -316,24 +335,26 @@ export default function App() {
   // ── Fetch por tab ───────────────────────────────────────────────────────────
   useEffect(() => {
     if (activeTab === 'history') {
-      fetch('/history').then(r => r.json()).then(d => setHistoryDays(d.days ?? [])).catch(() => {})
+      fetch(`/history?days=${historyPeriod}`).then(r => r.json()).then(d => setHistoryDays(d.days ?? [])).catch(() => {})
     }
     if (activeTab === 'projects') {
       fetch('/projects').then(r => r.json()).then(d => {
         setProjects(d.projects ?? [])
         setActiveProject(d.active_project ?? null)
+        setProjectsLoading(false)
       }).catch(() => {})
     }
     if (activeTab === 'system') {
       fetchSystemConfig()
     }
-  }, [activeTab])
+  }, [activeTab, historyPeriod])
 
   // ── Debounced project refresh on SSE events ─────────────────────────────────
   // Instead of fetching /projects on every event, debounce to once per 10s max
   useEffect(() => {
     const timer = setTimeout(() => {
       fetch('/projects').then(r => r.json()).then(d => {
+        setProjects(d.projects ?? [])
         setActiveProject(d.active_project ?? null)
       }).catch(() => {})
     }, 10_000)
@@ -345,7 +366,9 @@ export default function App() {
   }
 
   const lastBlock = state.blockCosts.at(-1)
-  const heavyBlockTokens = lastBlock && lastBlock.inputTokens >= HEAVY_BLOCK_THRESHOLD ? lastBlock.inputTokens : null
+  const ccHeavyTokens = lastBlock && lastBlock.inputTokens >= HEAVY_BLOCK_THRESHOLD ? lastBlock.inputTokens : null
+  const ocSource = activeSources.find(s => s.source === 'opencode')
+  const ocHeavyTokens = ocSource && ocSource.input_tokens >= HEAVY_BLOCK_THRESHOLD ? ocSource.input_tokens : null
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -362,11 +385,12 @@ export default function App() {
       {/* Alertas globales — visibles en cualquier pestaña */}
       {connStatus === 'error'  && <DisconnectedBanner />}
       {killSwitchActive        && <KillSwitchBanner />}
+      {compacting && <CompactBanner />}
+      {ccHeavyTokens !== null && <HeavyContextBanner source="claude-code" tokens={ccHeavyTokens} />}
+      {ocHeavyTokens !== null && <HeavyContextBanner source="opencode" tokens={ocHeavyTokens} />}
 
       {activeTab === 'live' && (
         <>
-          {compacting && <CompactBanner />}
-          {heavyBlockTokens !== null && <HeavyContextBanner tokens={heavyBlockTokens} />}
           <LiveSourceBar
             sources={activeSources}
             active={activeLiveSource}
@@ -378,16 +402,28 @@ export default function App() {
               const isClaudeCode = activeLiveSource === 'claude-code'
               const activeSource = activeSources.find(s => s.source === activeLiveSource)
               const sourceCost: CostInfo | undefined = activeSource ? {
-                cost_usd:         activeSource.cost_usd,
-                input_tokens:     activeSource.input_tokens,
-                output_tokens:    activeSource.output_tokens,
-                cache_read:       activeSource.cache_read,
-                cache_creation:   activeSource.cache_creation,
-                efficiency_score: isClaudeCode ? (state.cost?.efficiency_score ?? 100) : 0,
-                model:            activeSource.model,
-                loops:            [],
-                context_used:     isClaudeCode ? undefined : activeSource.input_tokens,
+                cost_usd:             activeSource.cost_usd,
+                input_tokens:         activeSource.input_tokens,
+                output_tokens:        activeSource.output_tokens,
+                cache_read:           activeSource.cache_read,
+                cache_creation:       activeSource.cache_creation,
+                efficiency_score:     isClaudeCode ? (state.cost?.efficiency_score ?? 100) : -1,
+                model:                activeSource.model,
+                loops:                isClaudeCode ? (state.cost?.loops ?? []) : [],
+                context_used:         isClaudeCode ? state.cost?.context_used : ocContextInfo?.context_used,
+                context_window:       isClaudeCode ? state.cost?.context_window : ocContextInfo?.context_window,
+                projected_hourly_usd: isClaudeCode ? state.cost?.projected_hourly_usd : undefined,
               } : undefined
+              const ocBurnRate = !isClaudeCode && activeSource && opencodeEvents.length >= 2
+                ? (() => {
+                    const startTs = opencodeEvents[0].ts
+                    const endTs   = opencodeEvents[opencodeEvents.length - 1].ts
+                    const mins    = (endTs - startTs) / 60_000
+                    if (mins < 2) return undefined
+                    const total = activeSource.input_tokens + activeSource.output_tokens
+                    return total > 0 ? Math.round(total / mins) : undefined
+                  })()
+                : undefined
               // Fallback to SSE state.events while polling hasn't loaded claudeCodeEvents yet
               const ccEvents = claudeCodeEvents.length > 0 ? claudeCodeEvents : state.events
               const ccLast   = ccEvents[ccEvents.length - 1]
@@ -409,12 +445,13 @@ export default function App() {
                   meta={isClaudeCode ? metaStats : undefined}
                   quota={isClaudeCode ? quota : undefined}
                   sessionState={isClaudeCode ? ccState : ocState}
-                  weeklyData={state.weeklyData}
+                  weeklyData={isClaudeCode ? state.weeklyData : []}
                   hiddenCost={isClaudeCode ? hiddenCost : undefined}
                   prompts={isClaudeCode ? claudeCodePrompts : opencodePrompts}
                   quotaStats={isClaudeCode ? quotaStats : undefined}
-                  subAgentSessions={[]}
+                  subAgentSessions={isClaudeCode ? state.subAgentSessions : []}
                   cliLabel={isClaudeCode ? 'Claude Code' : (activeSource ? (SOURCE_LABELS[activeSource.source] ?? activeSource.source) : 'Claude Code')}
+                  burnRateTokensPerMin={isClaudeCode ? undefined : ocBurnRate}
                 />
               )
             })()}
@@ -425,7 +462,7 @@ export default function App() {
       {activeTab === 'history' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <Suspense fallback={null}>
-            <HistoryView days={historyDays} activeSessionId={state.sessionId} />
+            <HistoryView days={historyDays} activeSessionId={state.sessionId} selectedDays={historyPeriod} onDaysChange={setHistoryPeriod} />
           </Suspense>
         </div>
       )}
@@ -433,7 +470,7 @@ export default function App() {
       {activeTab === 'projects' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <Suspense fallback={null}>
-            <ProjectsView projects={projects} activeProject={activeProject} weeklyData={state.weeklyData} />
+            <ProjectsView projects={projects} activeProject={activeProject} weeklyData={state.weeklyData} loading={projectsLoading} />
           </Suspense>
         </div>
       )}
@@ -441,7 +478,7 @@ export default function App() {
       {activeTab === 'analytics' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <Suspense fallback={null}>
-            <AnalyticsView quota={quota} cost={state.cost} events={[...claudeCodeEvents, ...opencodeEvents].sort((a, b) => a.ts - b.ts)} prompts={prompts} claudeStats={claudeStats} />
+            <AnalyticsView quota={quota} cost={state.cost} events={[...claudeCodeEvents, ...opencodeEvents].sort((a, b) => a.ts - b.ts)} prompts={prompts} claudeStats={claudeStats} activityData={activityData} />
           </Suspense>
         </div>
       )}
@@ -535,15 +572,17 @@ function handleMessage(prev: AppState, msg: any): AppState {
   if (msg.type === 'block_cost') {
     const p = msg.payload
     if (p.session_id !== prev.sessionId) return prev
-    const entry: BlockCost = { inputUsd: p.inputUsd, outputUsd: p.outputUsd, totalUsd: p.totalUsd, inputTokens: p.inputTokens ?? 0, outputTokens: p.outputTokens ?? 0 }
+    const entry: BlockCost = { inputUsd: p.inputUsd, outputUsd: p.outputUsd, totalUsd: p.totalUsd, inputTokens: p.inputTokens ?? 0, outputTokens: p.outputTokens ?? 0, context_used: p.context_used, context_window: p.context_window }
     // Acumular sub-turnos del bloque en curso — se empuja a blockCosts al recibir Stop
     const pend = prev.pendingBlockCost
     const merged: BlockCost = pend ? {
-      inputUsd:     pend.inputUsd     + entry.inputUsd,
-      outputUsd:    pend.outputUsd    + entry.outputUsd,
-      totalUsd:     pend.totalUsd     + entry.totalUsd,
-      inputTokens:  pend.inputTokens  + entry.inputTokens,
-      outputTokens: pend.outputTokens + entry.outputTokens,
+      inputUsd:       pend.inputUsd     + entry.inputUsd,
+      outputUsd:      pend.outputUsd    + entry.outputUsd,
+      totalUsd:       pend.totalUsd     + entry.totalUsd,
+      inputTokens:    pend.inputTokens  + entry.inputTokens,
+      outputTokens:   pend.outputTokens + entry.outputTokens,
+      context_used:   entry.context_used,   // keep latest — context grows monotonically
+      context_window: entry.context_window,
     } : entry
     return { ...prev, pendingBlockCost: merged }
   }
@@ -587,12 +626,12 @@ function AlertBanner({ icon: Icon, color, title, subtitle, action }: {
 
 const DisconnectedBanner = () => <AlertBanner icon={WifiOff}       color="#f0883e" title="Daemon disconnected"      subtitle="reconnecting automatically…" />
 const KillSwitchBanner   = () => <AlertBanner icon={AlertTriangle} color="#f85149" title="Kill switch active"      subtitle="5h quota exceeded · new tool calls blocked" />
-const CompactBanner      = () => <AlertBanner icon={Zap}           color="#d29922" title="Claude is compacting context" subtitle="tool history is automatically summarized to free up space" />
-const HeavyContextBanner = ({ tokens }: { tokens: number }) =>
+const CompactBanner      = () => <AlertBanner icon={Zap}           color="#d29922" title="Claude Code is compacting context" subtitle="tool history is automatically summarized to free up space" />
+const HeavyContextBanner = ({ source, tokens }: { source: string; tokens: number }) =>
   <AlertBanner
     icon={TrendingUp}
     color="#a371f7"
-    title={`Heavy context · ${fmtTok(tokens)} tokens input`}
+    title={`${SOURCE_LABELS[source] ?? source} — Heavy context · ${fmtTok(tokens)} tokens input`}
     subtitle="save important context before compacting"
     action={{ label: 'Copy /checkpoint', onClick: () => navigator.clipboard.writeText('/checkpoint') }}
   />

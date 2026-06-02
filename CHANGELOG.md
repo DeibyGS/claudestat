@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-06-02
+
+### Added
+
+- **`claudestat blocks`** — show 5-hour billing block history with tokens, sessions, and cost per window; current block highlighted with ▶
+- **`claudestat share [session-id]`** — export any session summary as formatted ASCII or JSON; `--copy` copies output to clipboard
+- **Analytics tab: 52-week activity heatmap** — visualize coding activity across the full year at a glance
+- **Analytics tab: period-over-period deltas** — KPI cards (cost, tokens, efficiency) show ↑↓% vs. the previous period
+- **Analytics tab: stacked token chart** — tokens-per-day bar chart now stacks input / output / cache reads in distinct colors
+- **Projects tab: search + filter** — search by project name; filter by Active 7d, Cost > $10, or Efficiency < 70%
+- **History tab: day selector** — switch between 7 / 14 / 30 / 90-day windows without leaving the tab
+- **History tab: merged-session badge** — sessions merged from N consecutive blocks show a ×N badge with tooltip
+- **Top tab: expandable "Other" row** — click the Other entry to reveal all tools beyond the top 10 with individual stats
+- **Top tab: `/api/top-other` endpoint** — backend route serving the expanded tool list filtered by sort/days/source
+- **System tab: MEMORY.md truncation warning** — shows a ⚠ alert when MEMORY.md exceeds 200 lines (Claude Code truncates beyond that)
+- **TracePanel: OpenCode sidebar enrichment** — SidebarKPI and SidebarStats now show burn rate and tool count for OC sessions
+- **DAGView improvements** — reworked layout engine and edge rendering for clearer dependency graphs
+
+### Fixed
+
+- **LiveSourceBar: removed dead `ActiveSourceCard` export** — unused component cleaned up
+
 ## [1.7.0] - 2026-05-30
 
 ### Added

@@ -248,13 +248,13 @@ export function Header({ activeSources: as, state, connStatus, activeTab, onTabC
   const connected = connStatus === 'connected'
   const { sessionId, cost, startedAt } = state
 
-  // C.14 — tool activo: último tool_start sin tool_end correspondiente
+  // Tool activo: último PreToolUse sin Done/Stop posterior
   const activeTool = (state.sessionState === 'working' && state.events?.length)
     ? (() => {
         for (let i = state.events.length - 1; i >= 0; i--) {
-          const e = state.events[i] as TraceEvent
-          if ((e as any).type === 'tool_end')   break
-          if ((e as any).type === 'tool_start') return (e as any).tool_name as string | null
+          const e = state.events[i]
+          if (e.type === 'Done' || e.type === 'Stop') break
+          if (e.type === 'PreToolUse') return e.tool_name ?? null
         }
         return null
       })()

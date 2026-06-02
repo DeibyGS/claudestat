@@ -31,7 +31,15 @@
     "claude-max",
     "ai-coding",
     "agentic-workflow",
-    "observability"
+    "observability",
+    "opencode",
+    "mcp",
+    "mcp-server",
+    "session-tracker",
+    "context-window",
+    "burn-rate",
+    "ai-tools",
+    "llm-observability"
   ],
   "homepage": "https://github.com/DeibyGS/claudestat#readme",
   "repository": {

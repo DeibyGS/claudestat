@@ -195,19 +195,21 @@ claudestat start     # start the daemon manually
 
 The dashboard lives at `http://localhost:7337` and has six tabs: **Live** (real-time trace with source badge, expandable Bash commands, and last-task subtitle per source), **History** (sessions by date with day selector 7/14/30/90d, merged-session badge, search, cost filter, and compare panel), **Projects** (grid with weekly heatmap, search input, and filters for active, high-cost, or low-efficiency projects), **Analytics** (spend + tokens + hours + efficiency KPIs with period-over-period ↑↓% deltas, stacked token chart by input/output/cache, 52-week activity heatmap, source filter, weekly AI reports), **Top** (tool rankings by cost/count/duration with cost projection and expandable "Other" row for tools beyond top 10), and **System** (hooks, agents, skills, workflows, context file limits, work mode distribution, OpenCode config, memory files with truncation warning, claudestat config).
 
-![Live tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225605/My%20portfolio%7D/live_oeucqs.png)
+![Live tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428670/claudeStat/live_bc2z7j.png)
 
-![History tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225605/My%20portfolio%7D/history_gy4tpb.png)
+![History tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428669/claudeStat/history_dzwweo.png)
 
-![Projects tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225606/My%20portfolio%7D/projects_yeftby.png)
+![Projects tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428649/claudeStat/projects_xhmizz.png)
 
-![Analytics KPIs](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225605/My%20portfolio%7D/analitycsOne_yx9tcp.png)
+![Analytics KPIs](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428682/claudeStat/analitycs_td5hpv.png)
 
-![Analytics charts](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225604/My%20portfolio%7D/analitycsTwo_wzjsf2.png)
+![Analytics charts](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428683/claudeStat/analitycs2_ni2wwd.png)
 
-![Top tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225606/My%20portfolio%7D/top_pybyxy.png)
+![Top tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428637/claudeStat/top_qytho3.png)
 
-![System tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225606/My%20portfolio%7D/system_ixurjb.png)
+![System tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428650/claudeStat/system_zeackp.png)
+
+![Context notifications](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428875/claudeStat/Captura_de_pantalla_2026-06-02_a_las_21.34.24_bee8k1.png)
 
 [Dashboard details →](docs/DASHBOARD.md)
 
@@ -244,7 +246,7 @@ claude mcp add claudestat -s user -- claudestat-mcp
 
 Then ask Claude: *"What's my quota status?"*, *"Show me my latest session"*, *"Top 5 tools by cost"*.
 
-![claudestat MCP demo](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/mcp-demo.gif)
+![claudestat MCP demo](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428703/claudeStat/MCP_claudestat_zgf7el.gif)
 
 [MCP tools reference →](docs/MCP.md)
 

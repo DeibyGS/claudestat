@@ -367,6 +367,17 @@ export interface OrchTimeline {
   cycles:           OrchCycle[]
 }
 
+export interface OrchRunSummary {
+  id:           number
+  run_key:      string
+  project_name: string | null
+  goal:         string | null
+  status:       string
+  total_cycles: number
+  started_at:   string
+  ended_at:     string | null
+}
+
 export interface OrchFrameworkHealth {
   scripts:        { name: string; size: number; executable: boolean }[]
   prompts:        { name: string; lines: number }[]

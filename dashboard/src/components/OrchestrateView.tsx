@@ -1,6 +1,6 @@
-import { useEffect, useState, useRef } from 'react'
-import { Workflow, CheckCircle2, XCircle, AlertTriangle, Cpu, Bot, ChevronRight, Clock, X as XIcon, FileCode2, Sparkles, GitCommit } from 'lucide-react'
-import type { OrchTimeline, OrchCycle, OrchCycleTrace } from '../types'
+import { useEffect, useState, useRef, useCallback } from 'react'
+import { Workflow, CheckCircle2, XCircle, AlertTriangle, Cpu, Bot, ChevronRight, Clock, X as XIcon, FileCode2, Sparkles, GitCommit, StopCircle, MessageSquare } from 'lucide-react'
+import type { OrchTimeline, OrchCycle, OrchCycleTrace, OrchRunSummary } from '../types'
 
 const CC_COLOR  = '#58a6ff'
 const OC_COLOR  = '#3fb950'
@@ -82,90 +82,6 @@ function traceDetailLabel(trace: OrchCycleTrace): string | null {
   return null
 }
 
-function NodeCard({ cycle, onClick, isSelected }: { cycle: OrchCycle; onClick: () => void; isSelected: boolean }) {
-  const borderColor = cycleBorderColor(cycle)
-  const statusIcon = cycleStatusIcon(cycle)
-  const ccDur = cycle.cc_events.reduce((s, e) => s + (e.duration_secs ?? 0), 0)
-  const ocDur = cycle.oc_events.reduce((s, e) => s + (e.duration_secs ?? 0), 0)
-  const trace = cycle.trace
-  const filesCount = trace.files_changed.filter(f => !f.startsWith('+') && !f.startsWith('-')).length
-
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        minWidth: 168, maxWidth: 210,
-        background: BG_CARD,
-        border: `2px solid ${isSelected ? CC_COLOR : borderColor}`,
-        borderRadius: 10,
-        padding: '10px 12px',
-        cursor: 'pointer',
-        transition: 'border-color 0.2s',
-        position: 'relative',
-        flexShrink: 0,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-        <span style={{ fontSize: 10, color: DIM_COLOR, fontFamily: 'monospace' }}>#{cycle.index}</span>
-        <span style={{ fontSize: 13, fontWeight: 700, color: statusIcon.color, lineHeight: 1 }}>{statusIcon.icon}</span>
-      </div>
-
-      <div style={{
-        fontSize: 11, fontWeight: 600, color: '#e6edf3', lineHeight: 1.4, marginBottom: 6,
-        overflow: 'hidden', textOverflow: 'ellipsis',
-        display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-      }}>
-        {cycle.label}
-      </div>
-
-      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-        {cycle.cc_events.length > 0 && (
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 3,
-            fontSize: 9, padding: '2px 6px', borderRadius: 4,
-            background: `${CC_COLOR}15`, color: CC_COLOR, fontWeight: 600,
-          }}>
-            <Cpu size={9} /> {traceDetailLabel(trace) ?? actionLabel(cycle.cc_action ?? 'done')} · {fmtDuration(ccDur) || '—'}
-          </span>
-        )}
-        {cycle.oc_events.length > 0 && (
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 3,
-            fontSize: 9, padding: '2px 6px', borderRadius: 4,
-            background: `${OC_COLOR}15`, color: OC_COLOR, fontWeight: 600,
-          }}>
-            <Bot size={9} /> {trace.git_commit ? trace.git_commit.slice(0, 7) : actionLabel(cycle.oc_action ?? 'done')} · {fmtDuration(ocDur) || '—'}
-          </span>
-        )}
-      </div>
-
-      {filesCount > 0 && (
-        <div style={{ fontSize: 9, color: DIM_COLOR, marginTop: 4, display: 'flex', alignItems: 'center', gap: 3 }}>
-          <FileCode2 size={9} /> {filesCount} file{filesCount !== 1 ? 's' : ''}
-        </div>
-      )}
-
-      {cycle.verified === false && (
-        <div style={{ fontSize: 9, color: WARN_COLOR, marginTop: 3, fontWeight: 600 }}>verify FAILED</div>
-      )}
-      {cycle.verified === true && (
-        <div style={{ fontSize: 9, color: OC_COLOR, marginTop: 3, fontWeight: 600 }}>verify OK</div>
-      )}
-      {trace.disagreements > 0 && (
-        <div style={{ fontSize: 9, color: '#a371f7', marginTop: 2 }}>{trace.disagreements} disagree</div>
-      )}
-    </div>
-  )
-}
-
-function ConnectorArrow() {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0, padding: '0 2px' }}>
-      <ChevronRight size={16} color={DIM_COLOR} />
-    </div>
-  )
-}
-
 function VerificationRow({ label, passed }: { label: string; passed: boolean | null }) {
   if (passed === null) return <span>{label} —</span>
   return passed
@@ -178,6 +94,7 @@ function DetailPanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void
   const ccDur = cycle.cc_events.reduce((s, e) => s + (e.duration_secs ?? 0), 0)
   const ocDur = cycle.oc_events.reduce((s, e) => s + (e.duration_secs ?? 0), 0)
   const actionDetailCC = traceDetailLabel(trace)
+  const filesCount = trace.files_changed.filter(f => !f.startsWith('+') && !f.startsWith('-')).length
 
   return (
     <div style={{ background: BG_CARD, border: `1px solid ${BORDER}`, borderRadius: 10, padding: 14, marginTop: 12 }}>
@@ -229,16 +146,16 @@ function DetailPanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void
             {cycle.oc_action && <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: `${OC_COLOR}22`, color: OC_COLOR }}>{actionLabel(cycle.oc_action)}</span>}
             {ocDur > 0 && <span style={{ fontSize: 9, color: DIM_COLOR, marginLeft: 'auto' }}>{fmtDuration(ocDur)}</span>}
           </div>
-          {(trace.git_commit || trace.files_changed.filter(f => !f.startsWith('+') && !f.startsWith('-')).length > 0 || trace.skills_used.length > 0) && (
+          {(trace.git_commit || filesCount > 0 || trace.skills_used.length > 0) && (
             <div style={{ display: 'flex', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
               {trace.git_commit && (
                 <span style={{ fontSize: 9, color: `${OC_COLOR}99`, display: 'flex', alignItems: 'center', gap: 3 }}>
                   <GitCommit size={9} /> {trace.git_commit.slice(0, 7)}
                 </span>
               )}
-              {trace.files_changed.filter(f => !f.startsWith('+') && !f.startsWith('-')).length > 0 && (
+              {filesCount > 0 && (
                 <span style={{ fontSize: 9, color: `${OC_COLOR}99`, display: 'flex', alignItems: 'center', gap: 3 }}>
-                  <FileCode2 size={9} /> {trace.files_changed.filter(f => !f.startsWith('+') && !f.startsWith('-')).length} files
+                  <FileCode2 size={9} /> {filesCount} files
                 </span>
               )}
               {trace.skills_used.length > 0 && (
@@ -298,14 +215,14 @@ function DetailPanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void
       {trace.files_changed.length > 0 && (
         <div style={{ marginTop: 8, borderTop: `1px solid ${BORDER}`, paddingTop: 6 }}>
           <div style={{ fontSize: 9, color: DIM_COLOR, marginBottom: 3, display: 'flex', alignItems: 'center', gap: 4 }}>
-            <FileCode2 size={9} /> Files changed ({trace.files_changed.filter(f => !f.startsWith('+') && !f.startsWith('-')).length})
+            <FileCode2 size={9} /> Files changed ({filesCount})
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
             {trace.files_changed.filter(f => !f.startsWith('+') && !f.startsWith('-')).slice(0, 12).map((f, i) => (
               <span key={i} style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: '#21262d', color: '#8b949e' }}>{f}</span>
             ))}
-            {trace.files_changed.filter(f => !f.startsWith('+') && !f.startsWith('-')).length > 12 && (
-              <span style={{ fontSize: 9, color: DIM_COLOR }}>+{trace.files_changed.filter(f => !f.startsWith('+') && !f.startsWith('-')).length - 12} more</span>
+            {filesCount > 12 && (
+              <span style={{ fontSize: 9, color: DIM_COLOR }}>+{filesCount - 12} more</span>
             )}
           </div>
         </div>
@@ -342,27 +259,129 @@ function DetailPanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void
   )
 }
 
+function SwimLaneCell({ cycle, agent, isSelected, onClick }: { cycle: OrchCycle; agent: 'cc' | 'oc'; isSelected: boolean; onClick: () => void }) {
+  const isCC = agent === 'cc'
+  const color = isCC ? CC_COLOR : OC_COLOR
+  const events = isCC ? cycle.cc_events : cycle.oc_events
+  const action = isCC ? cycle.cc_action : cycle.oc_action
+  const dur = events.reduce((s, e) => s + (e.duration_secs ?? 0), 0)
+  const si = cycleStatusIcon(cycle)
+
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        minWidth: 140, maxWidth: 180,
+        background: BG_CARD,
+        border: `2px solid ${isSelected ? color : '#30363d'}`,
+        borderRadius: 8,
+        padding: '8px 10px',
+        cursor: 'pointer',
+        transition: 'border-color 0.2s',
+        position: 'relative',
+        flexShrink: 0,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: (cycle.status === 'error' && !isCC) || (cycle.status === 'error') ? si.color : isCC ? (cycle.status === 'active' ? si.color : color) : color, lineHeight: 1 }}>
+          {isCC ? (cycle.status === 'active' || cycle.cc_events.length > 0 ? si.icon : '○') : (cycle.oc_events.length > 0 ? '✓' : '○')}
+        </span>
+        {action && (
+          <span style={{ fontSize: 10, fontWeight: 600, color: '#c9d1d9' }}>{actionLabel(action)}</span>
+        )}
+      </div>
+      <div style={{ fontSize: 9, color: DIM_COLOR }}>
+        {dur > 0 ? fmtDuration(dur) : '—'}
+      </div>
+    </div>
+  )
+}
+
 export function OrchestrateView() {
   const [data, setData] = useState<OrchTimeline | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedCycle, setSelectedCycle] = useState<number | null>(null)
+  const [runs, setRuns] = useState<OrchRunSummary[]>([])
+  const [selectedRunKey, setSelectedRunKey] = useState<string | null>(null)
+  const [historicalData, setHistoricalData] = useState<OrchTimeline | null>(null)
+  const [resolveText, setResolveText] = useState('')
+  const [submitting, setSubmitting] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const pollRef = useRef<ReturnType<typeof setInterval>>()
 
-  useEffect(() => {
-    function fetchData() {
-      fetch('/api/orchestration/timeline')
-        .then(r => r.ok ? r.json() : null)
-        .then(d => {
-          if (d) setData(d)
-          setLoading(false)
-        })
-        .catch(() => setLoading(false))
-    }
-    fetchData()
-    pollRef.current = setInterval(fetchData, 5_000)
-    return () => clearInterval(pollRef.current)
+  const fetchData = useCallback(() => {
+    fetch('/api/orchestration/timeline')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d) setData(d)
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
   }, [])
+
+  const fetchRuns = useCallback(() => {
+    fetch('/api/orchestration/runs')
+      .then(r => r.ok ? r.json() : [])
+      .then((rs: OrchRunSummary[]) => setRuns(rs))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    fetchData()
+    fetchRuns()
+    pollRef.current = setInterval(fetchData, 3_000)
+    return () => clearInterval(pollRef.current)
+  }, [fetchData, fetchRuns])
+
+  const handleRunSelect = useCallback((runKey: string) => {
+    if (!runKey) {
+      setSelectedRunKey(null)
+      setHistoricalData(null)
+      return
+    }
+    setSelectedRunKey(runKey)
+    fetch(`/api/orchestration/runs/${runKey}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((run) => {
+        if (run?.snapshot_json) {
+          try {
+            setHistoricalData(JSON.parse(run.snapshot_json))
+          } catch {
+            setHistoricalData(null)
+          }
+        } else {
+          setHistoricalData(null)
+        }
+      })
+      .catch(() => setHistoricalData(null))
+  }, [])
+
+  const handleEmergencyStop = useCallback(() => {
+    if (!window.confirm('Emergency stop — halt the orchestration?')) return
+    setSubmitting(true)
+    fetch('/api/orchestration/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'emergency_stop' }),
+    })
+      .then(() => { fetchData(); setSubmitting(false) })
+      .catch(() => setSubmitting(false))
+  }, [fetchData])
+
+  const handleResolveDoubts = useCallback(() => {
+    if (!resolveText.trim()) return
+    setSubmitting(true)
+    fetch('/api/orchestration/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'resolve_doubts', response: resolveText.trim() }),
+    })
+      .then(() => { setResolveText(''); fetchData(); setSubmitting(false) })
+      .catch(() => setSubmitting(false))
+  }, [resolveText, fetchData])
+
+  const displayData = selectedRunKey ? historicalData : data
+  const isActiveView = !selectedRunKey
 
   if (loading) {
     return (
@@ -388,23 +407,44 @@ export function OrchestrateView() {
     )
   }
 
-  const cycles = data.cycles
+  const cycles = displayData?.cycles ?? []
   const hasErrors = cycles.some(c => c.status === 'error')
   const successCount = cycles.filter(c => c.status === 'success').length
   const failedCount = cycles.filter(c => c.status === 'verify_failed').length
   const errorCount = cycles.filter(c => c.status === 'error').length
-  const progressPct = data.total_phases > 0 ? Math.round((data.completed / data.total_phases) * 100) : 0
+  const totalPhases = displayData?.total_phases ?? 0
+  const completed = displayData?.completed ?? 0
+  const progressPct = totalPhases > 0 ? Math.round((completed / totalPhases) * 100) : 0
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={{ padding: '10px 16px', borderBottom: `1px solid ${BORDER}`, background: BG_DARK, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <Workflow size={16} color={CC_COLOR} />
-          <span style={{ fontSize: 13, fontWeight: 700, color: '#e6edf3' }}>{data.project_name ?? '—'}</span>
-          <StatusBadge status={data.status} />
-          {data.waiting_for_user && (
+          <span style={{ fontSize: 13, fontWeight: 700, color: '#e6edf3' }}>{displayData?.project_name ?? '—'}</span>
+          <StatusBadge status={displayData?.status ?? 'none'} />
+          {displayData?.waiting_for_user && (
             <span style={{ fontSize: 10, color: WARN_COLOR, fontWeight: 600 }}><AlertTriangle size={10} style={{ display: 'inline' }} /> Waiting</span>
           )}
+
+          {runs.length > 0 && (
+            <select
+              value={selectedRunKey ?? ''}
+              onChange={e => handleRunSelect(e.target.value)}
+              style={{
+                fontSize: 10, padding: '3px 8px', borderRadius: 4, background: BG_CARD, color: '#c9d1d9',
+                border: `1px solid ${BORDER}`, cursor: 'pointer', marginLeft: 4,
+              }}
+            >
+              <option value="">Current run</option>
+              {runs.map(run => (
+                <option key={run.run_key} value={run.run_key}>
+                  {run.project_name ?? 'run'} — {run.started_at.slice(0, 10)} ({run.total_cycles}c)
+                </option>
+              ))}
+            </select>
+          )}
+
           <div style={{ flex: 1 }} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: '#7d8590' }}>
             {successCount > 0 && <span style={{ color: OC_COLOR }}>{successCount} ✓</span>}
@@ -413,21 +453,76 @@ export function OrchestrateView() {
             <span>{cycles.length} cycle{cycles.length !== 1 ? 's' : ''}</span>
           </div>
         </div>
-        <div style={{ fontSize: 10, color: '#7d8590', marginTop: 3 }}>{data.goal}</div>
+        <div style={{ fontSize: 10, color: '#7d8590', marginTop: 3 }}>{displayData?.goal}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, fontSize: 10, color: '#484f58' }}>
-          {data.current_phase && <span style={{ color: '#c9d1d9' }}>{data.current_phase}</span>}
-          {data.total_phases > 0 && (
-            <span style={{ color: '#c9d1d9', fontWeight: 600 }}>{data.completed}/{data.total_phases} · {progressPct}%</span>
+          {displayData?.current_phase && <span style={{ color: '#c9d1d9' }}>{displayData.current_phase}</span>}
+          {totalPhases > 0 && (
+            <span style={{ color: '#c9d1d9', fontWeight: 600 }}>{completed}/{totalPhases} · {progressPct}%</span>
           )}
-          {data.phase_retry > 0 && <span style={{ color: WARN_COLOR }}>retry {data.phase_retry}</span>}
-          <span style={{ marginLeft: 'auto' }}>{fmtElapsed(data.started_at)}</span>
+          {displayData?.phase_retry != null && displayData.phase_retry > 0 && <span style={{ color: WARN_COLOR }}>retry {displayData.phase_retry}</span>}
+          <span style={{ marginLeft: 'auto' }}>{fmtElapsed(displayData?.started_at ?? null)}</span>
         </div>
-        {data.total_phases > 0 && (
+        {totalPhases > 0 && (
           <div style={{ height: 3, background: BORDER, borderRadius: 2, marginTop: 6, overflow: 'hidden' }}>
             <div style={{ width: `${Math.min(progressPct, 100)}%`, height: '100%', background: hasErrors ? ERR_COLOR : progressPct >= 100 ? OC_COLOR : CC_COLOR, borderRadius: 2, transition: 'width 0.5s ease' }} />
           </div>
         )}
       </div>
+
+      {isActiveView && data && (data.status === 'active' || data.status === 'paused') && (
+        <div style={{ padding: '6px 16px', borderBottom: `1px solid ${BORDER}`, background: BG_DARK, display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
+          <button
+            onClick={handleEmergencyStop}
+            disabled={submitting}
+            style={{
+              fontSize: 11, padding: '4px 10px', borderRadius: 6, border: `1px solid ${ERR_COLOR}`,
+              background: `${ERR_COLOR}15`, color: ERR_COLOR, cursor: submitting ? 'not-allowed' : 'pointer',
+              fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4,
+            }}
+          >
+            <StopCircle size={12} /> Emergency Stop
+          </button>
+          {data.waiting_for_user && (
+            <>
+              <button
+                onClick={() => setResolveText(resolveText ? '' : ' ')}
+                style={{
+                  fontSize: 11, padding: '4px 10px', borderRadius: 6, border: `1px solid ${WARN_COLOR}`,
+                  background: `${WARN_COLOR}15`, color: WARN_COLOR, cursor: 'pointer',
+                  fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4,
+                }}
+              >
+                <MessageSquare size={12} /> Resolve Doubts
+              </button>
+              {resolveText !== '' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 300px', minWidth: 200 }}>
+                  <textarea
+                    value={resolveText === ' ' ? '' : resolveText}
+                    onChange={e => setResolveText(e.target.value)}
+                    placeholder="Enter your response..."
+                    rows={1}
+                    style={{
+                      fontSize: 11, padding: '4px 8px', borderRadius: 4, border: `1px solid ${BORDER}`,
+                      background: BG_CARD, color: '#c9d1d9', flex: 1, resize: 'none', fontFamily: 'inherit',
+                    }}
+                  />
+                  <button
+                    onClick={handleResolveDoubts}
+                    disabled={submitting || !resolveText.trim()}
+                    style={{
+                      fontSize: 11, padding: '4px 10px', borderRadius: 6,
+                      border: `1px solid ${OC_COLOR}`, background: `${OC_COLOR}22`, color: OC_COLOR,
+                      cursor: submitting || !resolveText.trim() ? 'not-allowed' : 'pointer', fontWeight: 600,
+                    }}
+                  >
+                    Send
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       <div style={{ flex: 1, overflowY: 'auto' }}>
         <div style={{ padding: 16, minHeight: '100%' }}>
@@ -437,13 +532,21 @@ export function OrchestrateView() {
             </div>
           ) : (
             <>
-              <div ref={scrollRef} style={{ display: 'flex', alignItems: 'flex-start', gap: 0, overflowX: 'auto', paddingBottom: 8, scrollbarWidth: 'thin' }}>
-                {cycles.map((cycle, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'flex-start', flexShrink: 0 }}>
-                    {i > 0 && <ConnectorArrow />}
-                    <NodeCard cycle={cycle} isSelected={selectedCycle === i} onClick={() => setSelectedCycle(selectedCycle === i ? null : i)} />
+              <div ref={scrollRef} style={{ overflowX: 'auto', paddingBottom: 8, scrollbarWidth: 'thin' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: `48px repeat(${cycles.length}, minmax(140px, 180px))`, gap: 6, minWidth: 48 + cycles.length * 146 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 4px' }}>
+                    <span style={{ fontSize: 10, fontWeight: 800, color: CC_COLOR, letterSpacing: '0.08em', writingMode: 'horizontal-tb' }}>CC</span>
                   </div>
-                ))}
+                  {cycles.map((cycle, i) => (
+                    <SwimLaneCell key={i} cycle={cycle} agent="cc" isSelected={selectedCycle === i} onClick={() => setSelectedCycle(selectedCycle === i ? null : i)} />
+                  ))}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 4px' }}>
+                    <span style={{ fontSize: 10, fontWeight: 800, color: OC_COLOR, letterSpacing: '0.08em' }}>OC</span>
+                  </div>
+                  {cycles.map((cycle, i) => (
+                    <SwimLaneCell key={i} cycle={cycle} agent="oc" isSelected={selectedCycle === i} onClick={() => setSelectedCycle(selectedCycle === i ? null : i)} />
+                  ))}
+                </div>
               </div>
               {selectedCycle !== null && cycles[selectedCycle] && (
                 <DetailPanel cycle={cycles[selectedCycle]} onClose={() => setSelectedCycle(null)} />
@@ -455,9 +558,9 @@ export function OrchestrateView() {
 
       <div style={{ padding: '4px 16px', borderTop: `1px solid ${BORDER}`, background: BG_DARK, display: 'flex', alignItems: 'center', gap: 12, fontSize: 9, color: '#484f58', flexShrink: 0 }}>
         <span>Verify:</span>
-        <VerificationRow label="tsc" passed={data.tsc_passed} />
-        <VerificationRow label="tests" passed={data.tests_passed} />
-        <span style={{ marginLeft: 'auto' }}>auto-refresh 5s</span>
+        <VerificationRow label="tsc" passed={displayData?.tsc_passed ?? null} />
+        <VerificationRow label="tests" passed={displayData?.tests_passed ?? null} />
+        <span style={{ marginLeft: 'auto' }}>{isActiveView ? 'auto-refresh 3s' : 'historical view'}</span>
       </div>
     </div>
   )

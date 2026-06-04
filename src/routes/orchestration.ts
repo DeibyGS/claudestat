@@ -2,6 +2,7 @@ import path from 'path'
 import fs   from 'fs'
 import os   from 'os'
 import { execSync } from 'child_process'
+import { dbOps } from '../db'
 import { Router, type Request, type Response } from 'express'
 import { getOpencodeDir } from '../paths'
 
@@ -684,8 +685,72 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
     for (const e of detail.oc_events) { delete (e as any)._tool }
 
     _cache = { data: detail, ts: Date.now(), projectPath: active.projectPath }
+
+    try {
+      const runKey = `${active.projectPath}::${wf.created_at ?? 'unknown'}`
+      dbOps.upsertOrchRun({
+        run_key:      runKey,
+        project_path: active.projectPath,
+        project_name: active.projectName,
+        goal:         wf.goal ?? null,
+        status:       detail.status,
+        total_cycles: detail.completed,
+        started_at:   wf.created_at ?? new Date().toISOString(),
+        ended_at:     detail.status === 'complete' ? new Date().toISOString() : null,
+        metrics_json: null,
+        snapshot_json: JSON.stringify(detail),
+      })
+    } catch {}
+
     res.json(detail)
   } catch (err) {
     res.json({ status: 'none', project_path: null, project_name: null, goal: '', current_phase: null, total_phases: 0, completed: 0, phase_retry: 0, waiting_for_user: false, tsc_passed: null, tests_passed: null, started_at: null, cc_events: [], oc_events: [], cycles: [] })
+  }
+})
+
+orchestrationRouter.get('/api/orchestration/runs', (_req: Request, res: Response) => {
+  try {
+    const active = findActiveOrchestration()
+    const projectPath = active?.projectPath ?? ''
+    const runs = projectPath ? dbOps.getOrchRuns(projectPath) : []
+    res.json(runs)
+  } catch {
+    res.json([])
+  }
+})
+
+orchestrationRouter.get('/api/orchestration/runs/:runKey', (req: Request, res: Response) => {
+  try {
+    const runKey = decodeURIComponent(req.params.runKey)
+    const run = dbOps.getOrchRun(runKey)
+    if (!run) { res.status(404).json({ error: 'Run not found' }); return }
+    res.json(run)
+  } catch {
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+orchestrationRouter.post('/api/orchestration/control', (req: Request, res: Response) => {
+  try {
+    const action = req.body?.action as string | undefined
+    const active = findActiveOrchestration()
+    if (!active) { res.status(404).json({ error: 'No active orchestration' }); return }
+
+    if (action === 'resolve_doubts') {
+      const doubtsPath = path.join(active.projectPath, 'specs', 'DOUBTS.md')
+      const response = req.body?.response as string | undefined
+      if (response) {
+        fs.writeFileSync(doubtsPath, response, 'utf-8')
+      }
+      res.json({ ok: true, action })
+    } else if (action === 'emergency_stop') {
+      const taskPath = path.join(active.projectPath, 'specs', 'OC-TASK.md')
+      fs.writeFileSync(taskPath, '# EMERGENCY STOP — Orchestration halted by user', 'utf-8')
+      res.json({ ok: true, action })
+    } else {
+      res.status(400).json({ error: 'Unknown action. Valid: resolve_doubts, emergency_stop' })
+    }
+  } catch {
+    res.status(500).json({ error: 'Internal error' })
   }
 })

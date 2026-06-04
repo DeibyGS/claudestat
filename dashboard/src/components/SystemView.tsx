@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { GitBranch, Cpu, BrainCircuit, FileText, Zap, Settings2, ChevronDown, ChevronRight,
-         CheckCircle2, XCircle, Bot, Layers, Workflow, MemoryStick, Globe, Users, TriangleAlert } from 'lucide-react'
+         CheckCircle2, XCircle, Bot, Layers, Workflow, MemoryStick, Globe, Users, TriangleAlert,
+         MessageSquare, BookOpen } from 'lucide-react'
 import { Tip } from './Tip'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -29,6 +30,12 @@ export interface SystemConfig {
     projects:   number
     commands:   string[]
     plugins:    string[]
+  }
+  orchestration?: {
+    scripts:        { name: string; size: number; executable: boolean }[]
+    prompts:        { name: string; lines: number }[]
+    skill_lines:    number | null
+    status_json_valid: boolean
   }
 }
 
@@ -1020,6 +1027,84 @@ export function SystemView({ config, error, onRetry }: { config?: SystemConfig; 
                     ))}
                   </div>
                 )}
+              </Card>
+            </>
+          )
+        })()}
+
+        {(() => {
+          const orch = config.orchestration
+          if (!orch) return null
+          return (
+            <>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Orchestration Framework (CC+OC)</div>
+              </div>
+
+              <Card>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                  <FileText size={11} color="#a371f7" />
+                  <span style={{ fontSize: 11, color: '#8b949e' }}>Scripts</span>
+                  <span style={{ fontSize: 10, color: '#484f58', marginLeft: 'auto' }}>
+                    {orch.scripts.length} files
+                  </span>
+                </div>
+                {orch.scripts.map((s, i) => (
+                  <Tip key={s.name} position="top" align="left" content={
+                    <div>
+                      <div style={{ color: '#8b949e', fontWeight: 700, fontSize: 11, marginBottom: 3 }}>{s.name}</div>
+                      <div style={{ color: '#8b949e', fontSize: 10, lineHeight: 1.5 }}>
+                        Size: {(s.size / 1024).toFixed(1)} KB · {' '}
+                        {s.executable ? <span style={{ color: '#3fb950' }}>executable</span> : <span style={{ color: '#f85149' }}>not executable</span>}
+                      </div>
+                    </div>
+                  }>
+                    <TreeRow
+                      label={
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          {s.name}
+                          <span style={{ fontSize: 9, color: s.executable ? '#3fb950' : '#f85149' }}>
+                            {s.executable ? '✓' : '✗'}
+                          </span>
+                        </span>
+                      }
+                      last={i === orch.scripts.length - 1} color="#c9d1d9"
+                    />
+                  </Tip>
+                ))}
+              </Card>
+
+              <Card>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                  <MessageSquare size={11} color="#a371f7" />
+                  <span style={{ fontSize: 11, color: '#8b949e' }}>Prompts</span>
+                  <span style={{ fontSize: 10, color: '#484f58', marginLeft: 'auto' }}>
+                    {orch.prompts.length} files
+                  </span>
+                </div>
+                {orch.prompts.map((p, i) => (
+                  <TreeRow key={p.name} label={`${p.name} (${p.lines} lines)`} last={i === orch.prompts.length - 1} color="#c9d1d9" />
+                ))}
+              </Card>
+
+              <Card>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <BookOpen size={11} color="#a371f7" />
+                  <span style={{ fontSize: 11, color: '#8b949e' }}>cc-orchestrator SKILL.md</span>
+                  <span style={{ marginLeft: 'auto', fontSize: 10, color: orch.skill_lines !== null ? '#c9d1d9' : '#f85149' }}>
+                    {orch.skill_lines !== null ? `${orch.skill_lines} lines` : 'not found'}
+                  </span>
+                </div>
+              </Card>
+
+              <Card>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 11, color: '#8b949e' }}>STATUS.json</span>
+                  {orch.status_json_valid
+                    ? <span style={{ marginLeft: 'auto', fontSize: 10, color: '#3fb950' }}>valid</span>
+                    : <span style={{ marginLeft: 'auto', fontSize: 10, color: '#f85149' }}>invalid / missing</span>
+                  }
+                </div>
               </Card>
             </>
           )

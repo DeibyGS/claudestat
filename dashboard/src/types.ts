@@ -305,3 +305,71 @@ export interface DailyActivity {
   total_tokens: number
   tool_calls:   number
 }
+
+// ─── Orchestration timeline types ───────────────────────────────────────────
+
+export interface OrchEvent {
+  ts:            string
+  full_ts:       number
+  tool:          'cc' | 'oc'
+  action:        'planning' | 'executing' | 'reviewing' | 'correcting' | 'done' | 'error' | 'timeout' | 'paused'
+  phase:         string | null
+  description:   string
+  duration_secs: number | null
+  retry_count:   number | null
+  verified:      boolean | null
+}
+
+export interface OrchCycleTrace {
+  action_detail: 'planning' | 'reviewing' | 'escalation' | 'correction' | null
+  files_changed: string[]
+  git_commit: string | null
+  skills_used: string[]
+  verification: {
+    tsc_passed: boolean | null
+    tests_passed: boolean | null
+    grep_checks: { pattern: string; result: string }[]
+  } | null
+  disagreements: number
+  disagreement_texts: string[]
+  simplifications: number
+  artifacts: string[]
+}
+
+export interface OrchCycle {
+  index:            number
+  cc_events:        OrchEvent[]
+  oc_events:        OrchEvent[]
+  status:           'success' | 'verify_failed' | 'active' | 'error' | 'paused'
+  duration_secs:    number | null
+  verified:         boolean | null
+  label:            string
+  cc_action:        string | null
+  oc_action:        string | null
+  trace:            OrchCycleTrace
+}
+
+export interface OrchTimeline {
+  status:           'active' | 'paused' | 'complete' | 'none'
+  project_path:     string | null
+  project_name:     string | null
+  goal:             string
+  current_phase:    string | null
+  total_phases:     number
+  completed:        number
+  phase_retry:      number
+  waiting_for_user: boolean
+  tsc_passed:       boolean | null
+  tests_passed:     boolean | null
+  started_at:       string | null
+  cc_events:        OrchEvent[]
+  oc_events:        OrchEvent[]
+  cycles:           OrchCycle[]
+}
+
+export interface OrchFrameworkHealth {
+  scripts:        { name: string; size: number; executable: boolean }[]
+  prompts:        { name: string; lines: number }[]
+  skill_lines:    number | null
+  status_json_valid: boolean
+}

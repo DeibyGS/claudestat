@@ -16,8 +16,14 @@ function fmtCost(usd: number): string {
 interface Props {
   sources:    ActiveSource[]
   active:     string
-  onSelect:   (source: string) => void
+  onSelect:   (sessionId: string) => void
   toolStatus?: ToolStatus
+}
+
+function sessionLabel(source: string, sessionId: string): string {
+  const short = sessionId.length > 4 ? sessionId.slice(0, 4) : sessionId
+  const name = SOURCE_LABELS[source] ?? source
+  return `${name}·${short}`
 }
 
 export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Props) {
@@ -32,15 +38,16 @@ export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Pr
       background: '#0d1117', flexWrap: 'wrap',
     }}>
       {sources.map(s => {
-        const isActive   = s.source === active
+        const isActive   = s.sessionId === active
         const ts         = toolStatus[s.source]
         const lastTask   = ts?.last_task ?? null
         const waitingFor = ts?.waiting_for ?? null
         const dotColor   = s.source === 'opencode' ? '#3fb950' : s.source === 'claude-code' ? '#58a6ff' : '#8b949e'
+        const label      = sessionLabel(s.source, s.sessionId)
         return (
           <button
-            key={s.source}
-            onClick={() => onSelect(s.source)}
+            key={s.sessionId}
+            onClick={() => onSelect(s.sessionId)}
             style={{
               display:        'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2,
               padding:        '4px 10px', borderRadius: 6, cursor: 'pointer',
@@ -58,7 +65,7 @@ export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Pr
                 ...(isActive && (waitingFor || lastTask) ? { animation: 'pulse-dot 1.4s ease-in-out infinite' } : {}),
               }} />
               <span style={{ fontWeight: isActive ? 600 : 400 }}>
-                {SOURCE_LABELS[s.source] ?? s.source}
+                {label}
               </span>
               {s.cost_usd > 0 && (
                 <span style={{ color: '#7d8590', fontSize: 10 }}>

@@ -1,0 +1,15 @@
+{
+  "version": 3,
+  "goal": "Orchestration Command Center v2.0",
+  "project": "/Users/db/Documents/GitHub/claudestat",
+  "current_phase": "Fase 1 — Fase 1 — DB: tabla orchestration_runs",
+  "phase_retry_count": 0,
+  "phase_status": "done",
+  "last_disagreement": null,
+  "waiting_for_user": false,
+  "total_cycles": 1,
+  "last_verified_ts": 1780590376000,
+  "tsc_passed": "false",
+  "tests_passed": "false",
+  "created_at": "2026-06-04T16:21:05Z"
+}

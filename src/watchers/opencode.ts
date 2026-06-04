@@ -101,21 +101,35 @@ function groupOcSessions(
   }>
 ): typeof rows {
   const sorted = [...rows].sort((a, b) => a.time_created - b.time_created)
-  const groups: Map<string, typeof rows> = new Map() // master id → group
+  const groups: Map<string, typeof rows> = new Map()
   const grouped = new Set<string>()
+  const MAX_GROUP_SPAN_MS = 30 * 60 * 1000
 
   for (let i = 0; i < sorted.length; i++) {
     if (grouped.has(sorted[i].id)) continue
     const group: typeof rows = [sorted[i]]
     grouped.add(sorted[i].id)
+    let lastOtherDirCreated = 0
 
     for (let j = i + 1; j < sorted.length; j++) {
       const prev = group[group.length - 1]
       const curr = sorted[j]
       if (grouped.has(curr.id)) continue
-      if (curr.directory !== prev.directory) continue
+
+      if (curr.directory !== prev.directory) {
+        lastOtherDirCreated = curr.time_created
+        continue
+      }
+
+      if (lastOtherDirCreated > prev.time_created) break
+
       const gap = curr.time_created - prev.time_created
-      if (gap > 60_000) break // too far apart, stop looking
+      if (gap > 60_000) break
+      if (curr.time_created < prev.time_updated) continue
+
+      const groupSpan = curr.time_created - group[0].time_created
+      if (groupSpan > MAX_GROUP_SPAN_MS) break
+
       group.push(curr)
       grouped.add(curr.id)
     }

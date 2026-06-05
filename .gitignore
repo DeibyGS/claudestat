@@ -12,6 +12,7 @@ AGENTS.md
 implementar.md
 GROWTH.md
 docs/
+specs/
 *.md
 !README.md
 !CONTRIBUTING.md
@@ -20,3 +21,6 @@ docs/
 !ROADMAP.md
 workflow.json
 .orchestrate-metrics.json
+*.db
+*.db-shm
+*.db-wal

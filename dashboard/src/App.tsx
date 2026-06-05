@@ -401,7 +401,7 @@ export default function App() {
 
   const lastBlock = state.blockCosts.at(-1)
   const ccHeavyTokens = lastBlock && lastBlock.inputTokens >= HEAVY_BLOCK_THRESHOLD ? lastBlock.inputTokens : null
-  const ccHeavyCache = lastBlock && lastBlock.cacheRead >= HEAVY_BLOCK_THRESHOLD ? lastBlock.cacheRead : undefined
+  const ccHeavyCache = lastBlock && lastBlock.cacheRead != null && lastBlock.cacheRead >= HEAVY_BLOCK_THRESHOLD ? lastBlock.cacheRead : lastBlock && lastBlock.context_used != null && lastBlock.context_used >= HEAVY_BLOCK_THRESHOLD ? lastBlock.context_used : undefined
   const ocSource = freshSources.find(s => s.source === 'opencode')
   const ocHeavyTokens = ocSource && ocSource.input_tokens >= HEAVY_BLOCK_THRESHOLD ? ocSource.input_tokens : null
   const ocHeavyCache = ocSource && ocSource.cache_read >= HEAVY_BLOCK_THRESHOLD ? ocSource.cache_read : undefined

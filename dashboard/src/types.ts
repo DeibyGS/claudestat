@@ -45,6 +45,8 @@ export interface BlockCost {
   totalUsd:      number
   inputTokens:   number   // tokens de entrada de este bloque
   outputTokens:  number   // tokens de salida de este bloque
+  cacheRead?:      number  // tokens de cache leídos
+  cache_creation?: number  // tokens de cache creados
   context_used?:   number  // tokens de contexto activo al final del bloque
   context_window?: number  // tamaño máximo del modelo
 }

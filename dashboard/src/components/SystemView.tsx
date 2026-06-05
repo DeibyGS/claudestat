@@ -93,7 +93,7 @@ function SectionHeader({
 
 /** Línea de árbol con conector visual */
 function TreeRow({ label, value, last = false, color = '#8b949e', tip }: {
-  label: string; value?: React.ReactNode; last?: boolean; color?: string; tip?: string
+  label: React.ReactNode; value?: React.ReactNode; last?: boolean; color?: string; tip?: string
 }) {
   const row = (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, paddingLeft: 16, position: 'relative' }}>

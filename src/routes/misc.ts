@@ -4,6 +4,7 @@
 
 import path from 'path'
 import fs   from 'fs'
+import os   from 'os'
 import { Router, type Request, type Response } from 'express'
 import { dbOps }                from '../db'
 import { analyzeSession }       from '../intelligence'
@@ -150,43 +151,50 @@ miscRouter.get('/claude-stats', (_req: Request, res: Response) => {
 // ─── GET /api/active-sessions — fuentes activas en los últimos 5 min ──────────
 
 miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
-  const cutoff   = Date.now() - 24 * 60 * 60 * 1000
+  const cutoff   = Date.now() - 30 * 60 * 1000
   const sessions = dbOps.getAllSessions()
+  const KNOWN_SOURCES = new Set(['claude-code', 'opencode', 'codex', 'amp', 'droid', 'codebuff'])
 
-  const bySource = new Map<string, {
-    sessionId: string; model: string; cost_usd: number; last_seen_ms: number
+  const result: Array<{
+    source: string; sessionId: string; model: string; cost_usd: number; last_seen_ms: number
     input_tokens: number; output_tokens: number; cache_read: number; cache_creation: number
     project: string | null
-  }>()
+  }> = []
+
+  const activeIds = new Set(sessions.filter(s => (s.last_event_at ?? s.started_at) >= cutoff).map(s => s.id))
+  const supersededIds = new Set(
+    sessions.filter(s => s.parent_session_id && activeIds.has(s.parent_session_id)).map(s => s.parent_session_id!)
+  )
+
   for (const s of sessions) {
     const lastSeen = s.last_event_at ?? s.started_at
     if (lastSeen < cutoff) continue
     const src = s.source ?? 'unknown'
-    const existing = bySource.get(src)
-    if (!existing || lastSeen > existing.last_seen_ms) {
-      bySource.set(src, {
-        sessionId:     s.id,
-        model:         s.dominant_model ?? 'unknown',
-        cost_usd:      s.total_cost_usd ?? 0,
-        last_seen_ms:  lastSeen,
-        input_tokens:  s.total_input_tokens ?? 0,
-        output_tokens: s.total_output_tokens ?? 0,
-        cache_read:    s.total_cache_read ?? 0,
-        cache_creation: s.total_cache_creation ?? 0,
-        project:       s.project_path ?? s.cwd ?? null,
-      })
+    if (!KNOWN_SOURCES.has(src)) continue
+    if (s.id.startsWith('agent-')) continue
+    if (supersededIds.has(s.id)) continue
+    if (s.parent_session_id && activeIds.has(s.parent_session_id)) {
+      const parent = sessions.find(p => p.id === s.parent_session_id)
+      const sameProject = parent && (parent.project_path ?? parent.cwd) === (s.project_path ?? s.cwd)
+      if (sameProject) continue
     }
+    if (src === 'opencode' && isSessionArchived(s.id)) continue
+    result.push({
+      source:         src,
+      sessionId:      s.id,
+      model:          s.dominant_model ?? 'unknown',
+      cost_usd:       s.total_cost_usd ?? 0,
+      last_seen_ms:   lastSeen,
+      input_tokens:   s.total_input_tokens ?? 0,
+      output_tokens:  s.total_output_tokens ?? 0,
+      cache_read:     s.total_cache_read ?? 0,
+      cache_creation: s.total_cache_creation ?? 0,
+      project:        s.project_path ?? s.cwd ?? null,
+    })
   }
 
-  const KNOWN_SOURCES = new Set(['claude-code', 'opencode', 'codex', 'amp', 'droid', 'codebuff'])
-  let result = Array.from(bySource.entries())
-    .filter(([source]) => KNOWN_SOURCES.has(source))
-    .map(([source, v]) => ({ source, ...v }))
-
-  // OpenCode: filter out archived sessions (user closed the tool)
-  result = result.filter(s => s.source !== 'opencode' || !isSessionArchived(s.sessionId))
-
-  res.json(result)
+  result.sort((a, b) => b.last_seen_ms - a.last_seen_ms)
+  res.json(result.slice(0, 6))
 })
 
 // ─── GET /system-config — mapa completo del setup de Claude ──────────────────
@@ -351,6 +359,44 @@ miscRouter.get('/system-config', (_req: Request, res: Response) => {
       opencodePlugins.push(...fs.readdirSync(pluginsDir).filter(f => f.endsWith('.ts') || f.endsWith('.js')))
     } catch {}
 
+    // ─── 8. Orchestration framework data ─────────────────────────────────────────
+    const aiCollabDir = path.join(os.homedir(), '.ai-collab')
+    let orchScripts: { name: string; size: number; executable: boolean }[] = []
+    try {
+      const scriptsDir = path.join(aiCollabDir, 'scripts')
+      for (const entry of fs.readdirSync(scriptsDir, { withFileTypes: true })) {
+        if (entry.isFile() && entry.name.endsWith('.sh')) {
+          const fp = path.join(scriptsDir, entry.name)
+          const stat = fs.statSync(fp)
+          orchScripts.push({ name: entry.name, size: stat.size, executable: (stat.mode & 0o111) !== 0 })
+        }
+      }
+    } catch {}
+
+    let orchPrompts: { name: string; lines: number }[] = []
+    try {
+      const promptsDir = path.join(aiCollabDir, 'prompts')
+      for (const entry of fs.readdirSync(promptsDir, { withFileTypes: true })) {
+        if (entry.isFile() && entry.name.endsWith('.md')) {
+          const content = fs.readFileSync(path.join(promptsDir, entry.name), 'utf-8')
+          orchPrompts.push({ name: entry.name, lines: content.split('\n').length })
+        }
+      }
+    } catch {}
+
+    let orchSkillLines: number | null = null
+    try {
+      const skillPath = path.join(aiCollabDir, 'skills', 'cc-orchestrator', 'SKILL.md')
+      orchSkillLines = fs.readFileSync(skillPath, 'utf-8').split('\n').length
+    } catch {}
+
+    let statusJsonValid = false
+    try {
+      const statusPath = path.join(aiCollabDir, 'STATUS.json')
+      JSON.parse(fs.readFileSync(statusPath, 'utf-8'))
+      statusJsonValid = true
+    } catch {}
+
     _systemConfigCache = {
       hooks, agents, workflows, skills, contextFiles, memoryFiles, memoryMdLines,
       modeDistribution, claudestatConfig,
@@ -363,6 +409,12 @@ miscRouter.get('/system-config', (_req: Request, res: Response) => {
         projects: opencodeProjects,
         commands: opencodeCommands,
         plugins: opencodePlugins,
+      },
+      orchestration: {
+        scripts: orchScripts,
+        prompts: orchPrompts,
+        skill_lines: orchSkillLines,
+        status_json_valid: statusJsonValid,
       },
     }
     _systemConfigCacheTs = Date.now()

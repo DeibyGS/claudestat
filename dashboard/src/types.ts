@@ -45,6 +45,8 @@ export interface BlockCost {
   totalUsd:      number
   inputTokens:   number   // tokens de entrada de este bloque
   outputTokens:  number   // tokens de salida de este bloque
+  cacheRead?:      number  // tokens de cache leídos
+  cache_creation?: number  // tokens de cache creados
   context_used?:   number  // tokens de contexto activo al final del bloque
   context_window?: number  // tamaño máximo del modelo
 }
@@ -304,4 +306,99 @@ export interface DailyActivity {
   cost_usd:     number
   total_tokens: number
   tool_calls:   number
+}
+
+// ─── Orchestration timeline types ───────────────────────────────────────────
+
+export interface OrchEvent {
+  ts:            string
+  full_ts:       number
+  tool:          'cc' | 'oc'
+  action:        'planning' | 'executing' | 'reviewing' | 'correcting' | 'done' | 'error' | 'timeout' | 'paused'
+  phase:         string | null
+  description:   string
+  duration_secs: number | null
+  retry_count:   number | null
+  verified:      boolean | null
+}
+
+export interface OrchCycleTrace {
+  action_detail: 'planning' | 'reviewing' | 'escalation' | 'correction' | null
+  files_changed: string[]
+  git_commit: string | null
+  skills_used: string[]
+  verification: {
+    tsc_passed: boolean | null
+    tests_passed: boolean | null
+    grep_checks: { pattern: string; result: string }[]
+    tsc_errors: string[]
+    tests_errors: string[]
+  } | null
+  disagreements: number
+  disagreement_texts: string[]
+  simplifications: number
+  artifacts: string[]
+}
+
+export interface OrchCycle {
+  index:            number
+  cc_events:        OrchEvent[]
+  oc_events:        OrchEvent[]
+  status:           'success' | 'verify_failed' | 'active' | 'error' | 'paused'
+  duration_secs:    number | null
+  verified:         boolean | null
+  label:            string
+  cc_action:        string | null
+  oc_action:        string | null
+  trace:            OrchCycleTrace
+  cc_cost:          number | null
+  oc_cost:          number | null
+  cc_input_tokens:  number | null
+  cc_output_tokens: number | null
+  cc_cache_tokens:  number | null
+  oc_input_tokens:  number | null
+  oc_output_tokens: number | null
+  oc_cache_tokens:  number | null
+  cc_model:         string | null
+  oc_model:         string | null
+}
+
+export interface OrchTimeline {
+  status:           'active' | 'paused' | 'complete' | 'none'
+  project_path:     string | null
+  project_name:     string | null
+  goal:             string
+  current_phase:    string | null
+  total_phases:     number
+  completed:        number
+  phase_retry:      number
+  waiting_for_user: boolean
+  tsc_passed:       boolean | null
+  tests_passed:     boolean | null
+  tsc_errors:       string[]
+  tests_errors:     string[]
+  started_at:       string | null
+  cc_events:        OrchEvent[]
+  oc_events:        OrchEvent[]
+  cycles:           OrchCycle[]
+  cc_total_cost:    number
+  oc_total_cost:    number
+}
+
+export interface OrchRunSummary {
+  id:           number
+  run_key:      string
+  project_name: string | null
+  goal:         string | null
+  status:       string
+  total_cycles: number
+  started_at:   string
+  ended_at:     string | null
+}
+
+export interface OrchFrameworkHealth {
+  scripts:        { name: string; size: number; executable: boolean }[]
+  prompts:        { name: string; lines: number }[]
+  skill_lines:    number | null
+  status_json_valid: boolean
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Radio, History, FolderGit2, FolderOpen, Zap, Settings2, Wrench, Layers, TrendingUp, Trophy, type LucideIcon } from 'lucide-react'
+import { Radio, History, FolderGit2, FolderOpen, Zap, Settings2, Wrench, Layers, TrendingUp, Trophy, Workflow, type LucideIcon } from 'lucide-react'
 import type { AppState, TraceEvent, QuotaData, ActiveSource } from '../types'
 import { Tip } from './Tip'
 
@@ -18,7 +18,7 @@ import { Tip } from './Tip'
   document.head.appendChild(s)
 })()
 
-export type Tab = 'live' | 'history' | 'projects' | 'top' | 'analytics' | 'system'
+export type Tab = 'live' | 'history' | 'projects' | 'top' | 'analytics' | 'system' | 'orchestrator'
 
 interface Props {
   state:          AppState
@@ -62,6 +62,7 @@ const TAB_LABELS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'top',       label: 'Top',       icon: Trophy     },
   { id: 'analytics', label: 'Analytics', icon: TrendingUp  },
   { id: 'system',    label: 'System',    icon: Layers     },
+  { id: 'orchestrator', label: 'Orchestrator', icon: Workflow },
 ]
 
 function fmtUptime(startedAt: number): string {
@@ -304,44 +305,59 @@ export function Header({ activeSources: as, state, connStatus, activeTab, onTabC
       {/* Right section */}
       <div style={S.right}>
 
-        {/* Badge por cada tool activo */}
-        {activeSources.map(as => {
-          const ml = fmtModel(as.model)
-          const srcLabel = SOURCE_LABELS[as.source] ?? as.source
-          const srcColor = SOURCE_COLORS[as.source] ?? '#8b949e'
-          const projName = as.project ? as.project.split('/').at(-1) : null
-          return (
-            <Tip key={as.source} content={
-              <div>
-                <div style={{ color: srcColor, fontWeight: 700, fontSize: 13, marginBottom: 4 }}>
-                  {srcLabel}
+        {/* Badge por cada tool activo (agrupado por source, no por sesión) */}
+        {(() => {
+          const bySource = new Map<string, { cost: number; model: string; count: number; project: string | null }>()
+          for (const s of activeSources) {
+            const existing = bySource.get(s.source)
+            if (!existing) {
+              bySource.set(s.source, { cost: s.cost_usd, model: s.model, count: 1, project: s.project ?? null })
+            } else {
+              existing.cost += s.cost_usd
+              existing.count++
+              if (existing.project !== (s.project ?? null)) existing.project = null
+            }
+          }
+          return [...bySource.entries()].map(([src, info]) => {
+            const ml = fmtModel(info.model)
+            const srcLabel = SOURCE_LABELS[src] ?? src
+            const srcColor = SOURCE_COLORS[src] ?? '#8b949e'
+            return (
+              <Tip key={src} content={
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 6 }}>
+                    <span style={{ color: srcColor, fontWeight: 700, fontSize: 15 }}>{srcLabel}</span>
+                    {info.count > 1 && <span style={{ color: '#484f58', fontSize: 10 }}>{info.count} sessions</span>}
+                  </div>
+                  {ml && (
+                    <div style={{ marginBottom: 3 }}>
+                      <span style={{ color: ml.color, fontWeight: 600, fontSize: 11 }}>{ml.name}</span>
+                    </div>
+                  )}
+                  {info.project && (
+                    <div style={{ color: '#7d8590', fontSize: 10, marginBottom: 3 }}>{info.project.split('/').pop() ?? info.project}</div>
+                  )}
+                  <div style={{ color: '#484f58', fontSize: 10 }}>
+                    {info.count} active session{info.count !== 1 ? 's' : ''} · {fmtCost(info.cost)}
+                  </div>
                 </div>
-                <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
-                  {ml && <><span style={{ color: ml.color, fontWeight: 600 }}>{ml.name}</span><br /></>}
-                  {projName && <>Project: <span style={{ color: '#79c0ff' }}>{projName}</span><br /></>}
-                  Session: <code style={{ color: '#8b949e', fontSize: 9 }}>{as.sessionId.slice(0, 16)}…</code>
-                </div>
-              </div>
-            }>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-                background: '#21262d', border: `1px solid ${srcColor}44`,
-                borderRadius: 5, padding: '2px 8px',
-                fontSize: 11, fontWeight: 600, color: srcColor,
-                flexShrink: 0, cursor: 'default',
-              }}>
+              }>
                 <span style={{
-                  width: 6, height: 6, borderRadius: '50%',
-                  background: srcColor, flexShrink: 0,
-                }} />
-                {srcLabel}
-                {ml && <span style={{ color: '#8b949e', fontWeight: 400 }}>{ml.name}</span>}
-                {projName && <FolderOpen size={10} style={{ color: '#6e7681', marginLeft: 2 }} />}
-                {projName && <span style={{ color: '#8b949e', fontWeight: 400 }}>{projName}</span>}
-              </span>
-            </Tip>
-          )
-        })}
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  background: '#21262d', border: `1px solid ${srcColor}44`,
+                  borderRadius: 5, padding: '2px 8px',
+                  fontSize: 11, fontWeight: 600, color: srcColor,
+                  flexShrink: 0, cursor: 'default',
+                }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: srcColor, flexShrink: 0 }} />
+                  {srcLabel}
+                  {info.project && <span style={{ color: `${srcColor}99`, fontWeight: 400, fontSize: 10 }}>· {info.project.split('/').pop() ?? info.project}</span>}
+                  {info.cost > 0 && <span style={{ color: '#8b949e', fontWeight: 400 }}>{fmtCost(info.cost)}</span>}
+                </span>
+              </Tip>
+            )
+          })
+        })()}
 
         {/* Costo agregado de todos los sources activos */}
         {activeSources.length > 0 && (() => {
@@ -474,14 +490,18 @@ function UptimeBadge({ startedAt }: { startedAt: number }) {
 
 function fmtModel(model?: string): { name: string; color: string; bg: string } | null {
   if (!model) return null
-  if (model.includes('opus'))     return { name: 'Opus 4.6',    color: '#d29922', bg: '#d2992212' }
-  if (model.includes('haiku'))    return { name: 'Haiku 4.5',   color: '#3fb950', bg: '#3fb95012' }
-  if (model.includes('sonnet'))   return { name: 'Sonnet 4.6',  color: '#58a6ff', bg: '#58a6ff12' }
-  if (model.includes('deepseek')) return { name: 'DeepSeek',    color: '#c9a0ff', bg: '#c9a0ff12' }
-  if (model.includes('gpt'))      return { name: 'GPT',         color: '#74aa9c', bg: '#74aa9c12' }
-  // Fallback: recortar a "claude-X-Y" → "X Y"
-  const parts = model.replace('claude-', '').split('-').slice(0, 2).join(' ')
-  return { name: parts || model, color: '#8b949e', bg: '#8b949e12' }
+  const m = model.includes('/') ? (model.split('/').pop() ?? model) : model
+  if (m.includes('opus'))     return { name: 'Opus 4.6',    color: '#d29922', bg: '#d2992212' }
+  if (m.includes('haiku'))    return { name: 'Haiku 4.5',   color: '#3fb950', bg: '#3fb95012' }
+  if (m.includes('sonnet'))   return { name: 'Sonnet 4.6',  color: '#58a6ff', bg: '#58a6ff12' }
+  if (m.includes('deepseek')) return { name: 'DeepSeek',    color: '#c9a0ff', bg: '#c9a0ff12' }
+  if (m.includes('gpt'))      return { name: 'GPT',         color: '#74aa9c', bg: '#74aa9c12' }
+  if (m.includes('qwen'))     return { name: 'Qwen',        color: '#f0883e', bg: '#f0883e12' }
+  if (m.includes('gemini'))   return { name: 'Gemini',      color: '#4285f4', bg: '#4285f412' }
+  if (m.includes('llama'))    return { name: 'Llama',       color: '#b39ddb', bg: '#b39ddb12' }
+  if (m.includes('glm'))      return { name: 'GLM',         color: '#00bcd4', bg: '#00bcd412' }
+  const parts = m.replace('claude-', '').split('-').slice(0, 2).join(' ')
+  return { name: parts || m, color: '#8b949e', bg: '#8b949e12' }
 }
 
 function ContextBar({ pct, color }: { pct: number; color: string }) {

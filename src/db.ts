@@ -143,6 +143,22 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
   { version: 21, sql: `CREATE UNIQUE INDEX IF NOT EXISTS idx_events_ext ON events(session_id, external_id) WHERE external_id IS NOT NULL` },
   { version: 22, sql: `ALTER TABLE sessions ADD COLUMN context_used INTEGER DEFAULT 0` },
   { version: 23, sql: `ALTER TABLE sessions ADD COLUMN context_window INTEGER DEFAULT 0` },
+  { version: 24, sql: `
+    CREATE TABLE IF NOT EXISTS orchestration_runs (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_key       TEXT    NOT NULL UNIQUE,
+      project_path  TEXT    NOT NULL,
+      project_name  TEXT,
+      goal          TEXT,
+      status        TEXT    NOT NULL DEFAULT 'active',
+      total_cycles  INTEGER DEFAULT 0,
+      started_at    TEXT    NOT NULL,
+      ended_at      TEXT,
+      metrics_json  TEXT,
+      snapshot_json TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_orch_runs_project ON orchestration_runs(project_path);
+  ` },
 ]
 
 function runMigrations() {
@@ -261,6 +277,20 @@ export interface DailySummary {
   vs_yesterday_sessions_delta: number | null
   vs_7d_avg_cost_pct: number | null
   weekly_pace_cost: number
+}
+
+export interface OrchRunRow {
+  id:            number
+  run_key:       string
+  project_path:  string
+  project_name:  string | null
+  goal:          string | null
+  status:        string
+  total_cycles:  number
+  started_at:    string
+  ended_at:      string | null
+  metrics_json:  string | null
+  snapshot_json: string | null
 }
 
 // ─── Prepared statements (se compilan una vez al iniciar) ─────────────────────
@@ -735,6 +765,28 @@ const stmts = {
     SELECT (pc.total_cost - ac.attributed) AS other_cost_usd
     FROM period_cost pc, attributed_cost ac
   `),
+
+  upsertOrchRun: db.prepare(`
+    INSERT INTO orchestration_runs (run_key, project_path, project_name, goal, status, total_cycles, started_at, ended_at, metrics_json, snapshot_json)
+    VALUES (@run_key, @project_path, @project_name, @goal, @status, @total_cycles, @started_at, @ended_at, @metrics_json, @snapshot_json)
+    ON CONFLICT(run_key) DO UPDATE SET
+      status = excluded.status,
+      total_cycles = excluded.total_cycles,
+      ended_at = excluded.ended_at,
+      metrics_json = excluded.metrics_json,
+      snapshot_json = excluded.snapshot_json
+  `),
+
+  getOrchRuns: db.prepare(`
+    SELECT * FROM orchestration_runs
+    WHERE project_path = ?
+    ORDER BY started_at DESC
+    LIMIT 20
+  `),
+
+  getOrchRun: db.prepare(`
+    SELECT * FROM orchestration_runs WHERE run_key = ?
+  `),
 }
 
 // ─── Operaciones públicas ─────────────────────────────────────────────────────
@@ -827,6 +879,10 @@ export const dbOps = {
 
   getAllSessions(limit = 500): SessionRow[] {
     return db.prepare(`SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?`).all(limit) as SessionRow[]
+  },
+
+  getSessionsInRange(startMs: number, endMs: number): SessionRow[] {
+    return db.prepare(`SELECT id, started_at, total_cost_usd, total_input_tokens, total_output_tokens, total_cache_read, dominant_model FROM sessions WHERE started_at >= ? AND started_at <= ? ORDER BY started_at ASC`).all(startMs, endMs) as SessionRow[]
   },
 
   getSessionEventsRecent(sessionId: string, limit = 200): EventRow[] {
@@ -1313,5 +1369,17 @@ export const dbOps = {
         : null,
       weekly_pace_cost: (weekCostRow.cost / daysElapsed) * 7,
     }
+  },
+
+  upsertOrchRun(row: Omit<OrchRunRow, 'id'>): void {
+    stmts.upsertOrchRun.run(row)
+  },
+
+  getOrchRuns(projectPath: string): OrchRunRow[] {
+    return stmts.getOrchRuns.all(projectPath) as OrchRunRow[]
+  },
+
+  getOrchRun(runKey: string): OrchRunRow | undefined {
+    return stmts.getOrchRun.get(runKey) as OrchRunRow | undefined
   },
 }

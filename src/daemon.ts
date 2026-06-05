@@ -33,10 +33,11 @@ import { topRouter }                                                  from './ro
 import { opencodeReaderRouter }                                       from './routes/opencode-reader'
 import { replayRouter }                                               from './routes/replay'
 import { intentsRouter }                                             from './routes/intents'
+import { orchestrationRouter }                                        from './routes/orchestration'
 import { getProjectsCached, invalidateProjectsCache }               from './cache/projects-cache'
 import { stopRateLimiter }                                            from './middleware/rate-limiter'
 import { summarizeSession }                                         from './summarizer'
-import { getPidFile, getClaudestatDir, getDashboardDir, portCheckCmd, writePortFile, getPauseSignalFile }            from './paths'
+import { getPidFile, getClaudestatDir, getDashboardDir, portCheckCmd, writePortFile, getPauseSignalFile, getOpencodeDir }            from './paths'
 import { logger } from './logger'
 
 const PORT = readConfig().port
@@ -65,6 +66,7 @@ app.use(topRouter)
 app.use(opencodeReaderRouter)
 app.use(replayRouter)
 app.use(intentsRouter)
+app.use(orchestrationRouter)
 
 // ─── GET /health — necesita acceso al tamaño del pool SSE ─────────────────────
 
@@ -165,8 +167,7 @@ let _lastWeeklyAlertLevel: string | null = null
 let _resetReminderFired = false
 let _weeklyThresholdsFired = new Set<number>()
 let _lastWeeklyPctSeen = 0
-let _contextThresholdsFired = new Set<number>()
-let _lastContextSessionId = ''
+let _contextThresholdsFired = new Map<string, Set<number>>()
 const CONTEXT_THRESHOLDS = [50, 75, 90]
 
 function checkAlertLevel(
@@ -286,18 +287,17 @@ function startAlertPolling() {
 
       // ── Context percentage alerts ────────────────────────────────────────────
       try {
-        const session = dbOps.getLatestSession()
+        const session = dbOps.getLatestClaudeSession()
         if (session && session.context_window && session.context_window > 0 && session.context_used != null) {
-          // Reset thresholds on new session
-          if (session.id !== _lastContextSessionId) {
-            _contextThresholdsFired.clear()
-            _lastContextSessionId = session.id
+          if (!_contextThresholdsFired.has(session.id)) {
+            _contextThresholdsFired.set(session.id, new Set())
           }
+          const fired = _contextThresholdsFired.get(session.id)!
           const pct = Math.round((session.context_used / session.context_window) * 100)
           if (pct >= 50) {
             for (const th of CONTEXT_THRESHOLDS) {
-              if (pct >= th && !_contextThresholdsFired.has(th)) {
-                _contextThresholdsFired.add(th)
+              if (pct >= th && !fired.has(th)) {
+                fired.add(th)
                 logger.warn(`[claudestat] Context at ${pct}% (${session.context_used.toLocaleString()} / ${session.context_window.toLocaleString()} tokens) — threshold ${th}%`)
                 process.stderr.write(`\x1b[33m[claudestat] ⚠️  Context at ${pct}% — ${session.context_used.toLocaleString()} / ${session.context_window.toLocaleString()} tokens\x1b[0m\n`)
                 sendDesktopNotification(
@@ -318,6 +318,41 @@ function startAlertPolling() {
           }
         }
       } catch { /* context check non-critical */ }
+
+      // ── Orchestration alerts ──────────────────────────────────────────────
+      try {
+        const projFile = path.join(getOpencodeDir(), 'projects.json')
+        if (fs.existsSync(projFile)) {
+          const projects: Record<string, string> = JSON.parse(fs.readFileSync(projFile, 'utf-8')).projects ?? {}
+          for (const [name, p] of Object.entries(projects)) {
+            const wfPath = path.join(p as string, 'workflow.json')
+            if (!fs.existsSync(wfPath)) continue
+            try {
+              const wf = JSON.parse(fs.readFileSync(wfPath, 'utf-8'))
+              if (!wf?.version || wf.version < 2) continue
+
+              if (wf.phase_retry_count >= 3 && wf.phase_status !== 'done') {
+                sendDesktopNotification(
+                  'Orchestrator — Loop breaker',
+                  `${name}: Fase "${wf.current_phase}" con ${wf.phase_retry_count} correcciones consecutivas`
+                )
+              }
+              if (wf.phase_status === 'interrupted') {
+                sendDesktopNotification(
+                  'Orchestrator — Interrupted',
+                  `${name}: Orquestación interrumpida — usa --resume para retomar`
+                )
+              }
+              if (wf.waiting_for_user) {
+                broadcast({
+                  type: 'orchestration_alert',
+                  payload: { project: name, alert: 'waiting_for_user', phase: wf.current_phase }
+                })
+              }
+            } catch {}
+          }
+        }
+      } catch { /* orchestration check non-critical */ }
 
       // Write or remove pause signal file based on kill switch state
       const signalFile = getPauseSignalFile()

@@ -1,4 +1,4 @@
-import type { ActiveSource, ToolStatus } from '../types'
+import type { ActiveSource, ToolStatus, ToolStatusEntry } from '../types'
 
 export const SOURCE_LABELS: Record<string, string> = {
   'claude-code': 'Claude Code',
@@ -16,8 +16,29 @@ function fmtCost(usd: number): string {
 interface Props {
   sources:    ActiveSource[]
   active:     string
-  onSelect:   (source: string) => void
+  onSelect:   (sessionId: string) => void
   toolStatus?: ToolStatus
+}
+
+function sessionLabel(source: string, sessionId: string): string {
+  const short = sessionId.length > 4 ? sessionId.slice(0, 4) : sessionId
+  const name = SOURCE_LABELS[source] ?? source
+  return `${name}·${short}`
+}
+
+function relativeTime(ms: number): string {
+  const sec = Math.floor((Date.now() - ms) / 1000)
+  if (sec < 60)  return `${sec}s ago`
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`
+  return `${Math.floor(sec / 3600)}h ago`
+}
+
+function deriveStatus(ts: ToolStatusEntry | undefined, lastSeenMs: number): { label: string; color: string } {
+  if (ts?.waiting_for) return { label: `waiting · ${ts.waiting_for}`, color: '#d29922' }
+  if (ts?.status === 'working') return { label: 'working', color: '#3fb950' }
+  const sec = (Date.now() - lastSeenMs) / 1000
+  if (sec < 90) return { label: 'active', color: '#3fb950' }
+  return { label: `idle · ${relativeTime(lastSeenMs)}`, color: '#484f58' }
 }
 
 export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Props) {
@@ -32,15 +53,17 @@ export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Pr
       background: '#0d1117', flexWrap: 'wrap',
     }}>
       {sources.map(s => {
-        const isActive   = s.source === active
+        const isActive   = s.sessionId === active
         const ts         = toolStatus[s.source]
-        const lastTask   = ts?.last_task ?? null
-        const waitingFor = ts?.waiting_for ?? null
+        const isWorking  = ts?.status === 'working'
+        const lastTask   = isWorking ? (ts?.last_task ?? null) : null
         const dotColor   = s.source === 'opencode' ? '#3fb950' : s.source === 'claude-code' ? '#58a6ff' : '#8b949e'
+        const label      = sessionLabel(s.source, s.sessionId)
+        const derived    = deriveStatus(ts, s.last_seen_ms)
         return (
           <button
-            key={s.source}
-            onClick={() => onSelect(s.source)}
+            key={s.sessionId}
+            onClick={() => onSelect(s.sessionId)}
             style={{
               display:        'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2,
               padding:        '4px 10px', borderRadius: 6, cursor: 'pointer',
@@ -55,36 +78,25 @@ export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Pr
               <span style={{
                 width: 6, height: 6, borderRadius: '50%',
                 background: dotColor, display: 'inline-block', flexShrink: 0,
-                ...(isActive && (waitingFor || lastTask) ? { animation: 'pulse-dot 1.4s ease-in-out infinite' } : {}),
+                ...(isWorking ? { animation: 'pulse-dot 1.4s ease-in-out infinite' } : {}),
               }} />
               <span style={{ fontWeight: isActive ? 600 : 400 }}>
-                {SOURCE_LABELS[s.source] ?? s.source}
+                {label}
               </span>
               {s.cost_usd > 0 && (
                 <span style={{ color: '#7d8590', fontSize: 10 }}>
                   {fmtCost(s.cost_usd)}
                 </span>
               )}
-              {waitingFor && (
-                <span style={{
-                  fontSize: 9, color: '#d29922',
-                  background: '#d2992220', border: '1px solid #d2992240',
-                  borderRadius: 3, padding: '1px 4px',
-                }}>
-                  ⏳ {waitingFor}
-                </span>
-              )}
             </div>
-            {lastTask && (
-              <div style={{
-                fontSize: 9, color: '#484f58',
-                maxWidth: 240, overflow: 'hidden',
-                textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                paddingLeft: 12,
-              }}>
-                {lastTask}
-              </div>
-            )}
+            <div style={{
+              fontSize: 9, paddingLeft: 12,
+              color: derived.color,
+              maxWidth: 240, overflow: 'hidden',
+              textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {lastTask ?? derived.label}
+            </div>
           </button>
         )
       })}

@@ -29,6 +29,10 @@ claudestat top        # rank tools by cost, count, or duration (--json)
 - CLI commands: setup, start, stop, restart, watch, logs, update, status, top, weekly, insights, project, export, doctor, config, resume, roast
 - Export session data to JSON or CSV
 - Self-update via `claudestat update` (checks npm registry, shows changelog, reinstalls hooks)
+- Orchestration Command Center — swim-lane dashboard for CC+OC multi-agent workflows
+- Per-cycle cost, model, tokens, and skill attribution in orchestration runs
+- Context window notifications per-session (50/75/90/100% thresholds, no duplicates)
+- MCP server with weekly push notifications and daily summary tool
 
 ## Use cases
 - Monitor Claude Code / OpenCode token usage in real time
@@ -39,6 +43,7 @@ claudestat top        # rank tools by cost, count, or duration (--json)
 - Export usage data for reporting or financial analysis
 - Compare current week vs previous week cost and session volume
 - Diagnose installation health with `claudestat doctor`
+- Monitor multi-agent CC+OC orchestration runs in real time via swim-lane dashboard
 
 ## Compatibility
 - Claude Pro, Max 5, Max 20
@@ -73,4 +78,5 @@ claudestat top        # rank tools by cost, count, or duration (--json)
 claude code monitoring, opencode monitoring, token tracking, AI cost analytics, quota management,
 claude code dashboard, opencode dashboard, ai observability, claude code hooks, rate limit detection,
 llm cost tracker, claude code token usage, opencode token usage, ai agent observability,
-claude code cost tracking, opencode cost tracking, agentic workflow monitoring, claude code kill switch
+claude code cost tracking, opencode cost tracking, agentic workflow monitoring, claude code kill switch,
+orchestration monitoring, multi-agent dashboard, cc oc orchestration

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, Component, type ReactNode } from 'react'
 import { AlertTriangle, WifiOff, Zap, TrendingUp } from 'lucide-react'
 import type {
   AppState, TraceEvent, CostInfo, BlockCost, DailyActivity,
@@ -21,12 +21,29 @@ const SystemView   = lazy(() => import('./components/SystemView').then(m => ({ d
 const OrchestrateView = lazy(() => import('./components/OrchestrateView').then(m => ({ default: m.OrchestrateView })))
 
 const HEAVY_BLOCK_THRESHOLD = 500_000
+const STALE_SOURCE_MS = 5 * 60 * 1000
 const MAX_EVENTS = 10_000
 
 
 const EMPTY: AppState = {
   sessionId: '', cwd: '', startedAt: Date.now(), events: [], weeklyData: [],
   sessionState: 'idle', blockCosts: [], pendingBlockCost: null, subAgentSessions: []
+}
+
+class OrchErrorBoundary extends Component<{ children: ReactNode }, { err: string | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props)
+    this.state = { err: null }
+  }
+  static getDerivedStateFromError(e: Error) { return { err: e.message } }
+  render() {
+    if (this.state.err) return (
+      <div style={{ padding: 24, color: '#f85149', fontFamily: 'monospace', fontSize: 12 }}>
+        Orchestrator view crashed: {this.state.err}
+      </div>
+    )
+    return this.props.children
+  }
 }
 
 export default function App() {
@@ -251,13 +268,15 @@ export default function App() {
       fetch('/api/active-sessions')
         .then(r => r.ok ? r.json() : null)
         .then((d: ActiveSource[] | null) => {
-          if (!d || d.length === 0) return
-          setActiveSources(d)
-          setActiveLiveSessionId(prev => {
-            if (d.find(s => s.sessionId === prev)) return prev
-            if (d.find(s => s.source === 'claude-code')) return d.find(s => s.source === 'claude-code')!.sessionId
-            return d[0].sessionId
-          })
+          const sources = d ?? []
+          setActiveSources(sources)
+          if (sources.length > 0) {
+            setActiveLiveSessionId(prev => {
+              if (sources.find(s => s.sessionId === prev)) return prev
+              const cc = sources.find(s => s.source === 'claude-code')
+              return cc ? cc.sessionId : sources[0].sessionId
+            })
+          }
         })
         .catch(() => {})
     }
@@ -280,8 +299,9 @@ export default function App() {
   }, [])
 
   // ── OpenCode events polling (5s when active non-CC session) ─────────────────
-  const orchProjectPath = orchData && orchData.status !== 'none' ? orchData.project_path : null
+  const orchProjectPath = orchData && (orchData.status === 'active' || orchData.status === 'paused') ? orchData.project_path : null
   const liveSources = activeSources.filter(s => !orchProjectPath || !s.project || s.project !== orchProjectPath)
+  const freshSources = activeSources.filter(s => Date.now() - s.last_seen_ms < STALE_SOURCE_MS)
   const selectedSession = activeSources.find(s => s.sessionId === activeLiveSessionId)
   const isOcActive = selectedSession && selectedSession.source !== 'claude-code'
   const ocSessionId = selectedSession?.sessionId
@@ -382,7 +402,7 @@ export default function App() {
   const lastBlock = state.blockCosts.at(-1)
   const ccHeavyTokens = lastBlock && lastBlock.inputTokens >= HEAVY_BLOCK_THRESHOLD ? lastBlock.inputTokens : null
   const ccHeavyCache = lastBlock && lastBlock.cacheRead >= HEAVY_BLOCK_THRESHOLD ? lastBlock.cacheRead : undefined
-  const ocSource = activeSources.find(s => s.source === 'opencode')
+  const ocSource = freshSources.find(s => s.source === 'opencode')
   const ocHeavyTokens = ocSource && ocSource.input_tokens >= HEAVY_BLOCK_THRESHOLD ? ocSource.input_tokens : null
   const ocHeavyCache = ocSource && ocSource.cache_read >= HEAVY_BLOCK_THRESHOLD ? ocSource.cache_read : undefined
 
@@ -527,9 +547,11 @@ export default function App() {
 
       {activeTab === 'orchestrator' && (
         <div style={{ flex: 1, overflow: 'hidden' }}>
-          <Suspense fallback={null}>
-            <OrchestrateView />
-          </Suspense>
+          <OrchErrorBoundary>
+            <Suspense fallback={null}>
+              <OrchestrateView />
+            </Suspense>
+          </OrchErrorBoundary>
         </div>
       )}
 

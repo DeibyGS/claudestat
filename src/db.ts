@@ -881,6 +881,10 @@ export const dbOps = {
     return db.prepare(`SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?`).all(limit) as SessionRow[]
   },
 
+  getSessionsInRange(startMs: number, endMs: number): SessionRow[] {
+    return db.prepare(`SELECT id, started_at, total_cost_usd, total_input_tokens, total_output_tokens, total_cache_read, dominant_model FROM sessions WHERE started_at >= ? AND started_at <= ? ORDER BY started_at ASC`).all(startMs, endMs) as SessionRow[]
+  },
+
   getSessionEventsRecent(sessionId: string, limit = 200): EventRow[] {
     return stmts.getSessionEventsRecent.all(sessionId, limit) as EventRow[]
   },

@@ -161,12 +161,23 @@ miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
     project: string | null
   }> = []
 
+  const activeIds = new Set(sessions.filter(s => (s.last_event_at ?? s.started_at) >= cutoff).map(s => s.id))
+  const supersededIds = new Set(
+    sessions.filter(s => s.parent_session_id && activeIds.has(s.parent_session_id)).map(s => s.parent_session_id!)
+  )
+
   for (const s of sessions) {
     const lastSeen = s.last_event_at ?? s.started_at
     if (lastSeen < cutoff) continue
     const src = s.source ?? 'unknown'
     if (!KNOWN_SOURCES.has(src)) continue
-    if (s.parent_session_id || s.id.startsWith('agent-')) continue
+    if (s.id.startsWith('agent-')) continue
+    if (supersededIds.has(s.id)) continue
+    if (s.parent_session_id && activeIds.has(s.parent_session_id)) {
+      const parent = sessions.find(p => p.id === s.parent_session_id)
+      const sameProject = parent && (parent.project_path ?? parent.cwd) === (s.project_path ?? s.cwd)
+      if (sameProject) continue
+    }
     if (src === 'opencode' && isSessionArchived(s.id)) continue
     result.push({
       source:         src,

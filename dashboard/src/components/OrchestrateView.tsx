@@ -11,6 +11,19 @@ const BG_DARK   = '#0d1117'
 const BG_CARD   = '#161b22'
 const BORDER    = '#21262d'
 
+function fmtTokens(n: number | null): string {
+  if (!n) return '—'
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`
+  return String(n)
+}
+
+function fmtModel(m: string | null): string {
+  if (!m) return ''
+  const name = m.split('/').pop() ?? m
+  return name.replace(/^claude-|-\d{8}$|-latest$/g, '')
+}
+
 function fmtDuration(secs: number | null): string {
   if (secs === null || secs === 0) return ''
   if (secs < 60) return `${secs}s`
@@ -82,11 +95,27 @@ function traceDetailLabel(trace: OrchCycleTrace): string | null {
   return null
 }
 
-function VerificationRow({ label, passed }: { label: string; passed: boolean | null }) {
+function VerificationRow({ label, passed, errors }: { label: string; passed: boolean | null; errors?: string[] }) {
   if (passed === null) return <span>{label} —</span>
-  return passed
-    ? <span style={{ color: OC_COLOR }}><CheckCircle2 size={8} style={{ display: 'inline' }} /> {label}</span>
-    : <span style={{ color: ERR_COLOR }}><XCircle size={8} style={{ display: 'inline' }} /> {label}</span>
+  if (passed) return <span style={{ color: OC_COLOR }}><CheckCircle2 size={8} style={{ display: 'inline' }} /> {label}</span>
+  const first = errors?.[0]
+  return (
+    <span title={errors?.join('\n')} style={{ color: ERR_COLOR, cursor: first ? 'help' : undefined }}>
+      <XCircle size={8} style={{ display: 'inline' }} /> {label}
+      {first && <span style={{ fontFamily: 'monospace', opacity: 0.75, marginLeft: 4 }}>
+        {first.length > 55 ? first.slice(0, 55) + '…' : first}
+      </span>}
+    </span>
+  )
+}
+
+function TokenRow({ input, output, cache }: { input: number | null; output: number | null; cache: number | null }) {
+  if (input === null) return null
+  return (
+    <div style={{ marginTop: 5, paddingTop: 4, borderTop: `1px solid ${BORDER}`, fontSize: 8, color: DIM_COLOR, fontFamily: 'monospace' }}>
+      in {fmtTokens(input)} · out {fmtTokens(output)} · cache {fmtTokens(cache)}
+    </div>
+  )
 }
 
 function DetailPanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void }) {
@@ -116,7 +145,9 @@ function DetailPanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void
             <Cpu size={12} color={CC_COLOR} />
             <span style={{ fontSize: 11, fontWeight: 700, color: CC_COLOR }}>Claude Code</span>
             {actionDetailCC && <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: `${CC_COLOR}22`, color: CC_COLOR }}>{actionDetailCC}</span>}
-            {ccDur > 0 && <span style={{ fontSize: 9, color: DIM_COLOR, marginLeft: 'auto' }}>{fmtDuration(ccDur)}</span>}
+            {cycle.cc_model && <span style={{ fontSize: 8, color: DIM_COLOR, fontFamily: 'monospace' }}>{fmtModel(cycle.cc_model)}</span>}
+            {cycle.cc_cost !== null && <span style={{ fontSize: 9, color: `${CC_COLOR}cc`, fontWeight: 600, marginLeft: 'auto' }}>${cycle.cc_cost.toFixed(2)}</span>}
+            {ccDur > 0 && !cycle.cc_cost && <span style={{ fontSize: 9, color: DIM_COLOR, marginLeft: 'auto' }}>{fmtDuration(ccDur)}</span>}
           </div>
           {cycle.cc_events.length === 0 ? (
             <div style={{ fontSize: 10, color: DIM_COLOR }}>No CC events</div>
@@ -129,6 +160,7 @@ function DetailPanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void
               </div>
             ))
           )}
+          <TokenRow input={cycle.cc_input_tokens} output={cycle.cc_output_tokens} cache={cycle.cc_cache_tokens} />
           {trace.artifacts.length > 0 && (
             <div style={{ marginTop: 6, borderTop: `1px solid ${BORDER}`, paddingTop: 4 }}>
               <div style={{ fontSize: 9, color: DIM_COLOR, marginBottom: 2 }}>Artifacts</div>
@@ -144,7 +176,9 @@ function DetailPanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void
             <Bot size={12} color={OC_COLOR} />
             <span style={{ fontSize: 11, fontWeight: 700, color: OC_COLOR }}>OpenCode</span>
             {cycle.oc_action && <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: `${OC_COLOR}22`, color: OC_COLOR }}>{actionLabel(cycle.oc_action)}</span>}
-            {ocDur > 0 && <span style={{ fontSize: 9, color: DIM_COLOR, marginLeft: 'auto' }}>{fmtDuration(ocDur)}</span>}
+            {cycle.oc_model && <span style={{ fontSize: 8, color: DIM_COLOR, fontFamily: 'monospace' }}>{fmtModel(cycle.oc_model)}</span>}
+            {cycle.oc_cost !== null && <span style={{ fontSize: 9, color: `${OC_COLOR}cc`, fontWeight: 600, marginLeft: 'auto' }}>${cycle.oc_cost.toFixed(2)}</span>}
+            {ocDur > 0 && !cycle.oc_cost && <span style={{ fontSize: 9, color: DIM_COLOR, marginLeft: 'auto' }}>{fmtDuration(ocDur)}</span>}
           </div>
           {(trace.git_commit || filesCount > 0 || trace.skills_used.length > 0) && (
             <div style={{ display: 'flex', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
@@ -166,7 +200,9 @@ function DetailPanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void
             </div>
           )}
           {cycle.oc_events.length === 0 ? (
-            <div style={{ fontSize: 10, color: DIM_COLOR }}>No OC events</div>
+            <div style={{ fontSize: 10, color: DIM_COLOR }}>
+              {cycle.cc_action?.includes('done') ? 'Orchestration complete — OC not required' : 'No OC events'}
+            </div>
           ) : (
             cycle.oc_events.map((ev, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0', borderTop: i > 0 ? `1px solid ${BORDER}` : 'none' }}>
@@ -176,9 +212,10 @@ function DetailPanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void
               </div>
             ))
           )}
+          <TokenRow input={cycle.oc_input_tokens} output={cycle.oc_output_tokens} cache={cycle.oc_cache_tokens} />
           {cycle.verified !== null && (
-            <div style={{ marginTop: 6, fontSize: 10, fontWeight: 600, color: cycle.verified ? OC_COLOR : ERR_COLOR, display: 'flex', alignItems: 'center', gap: 4 }}>
-              {cycle.verified ? <><CheckCircle2 size={10} /> verify OK</> : <><XCircle size={10} /> verify FAILED</>}
+            <div style={{ marginTop: 6, fontSize: 10, fontWeight: 600, color: cycle.verified ? OC_COLOR : WARN_COLOR, display: 'flex', alignItems: 'center', gap: 4 }}>
+              {cycle.verified ? <><CheckCircle2 size={10} /> verify OK</> : <><AlertTriangle size={10} /> verify FAILED</>}
             </div>
           )}
         </div>
@@ -187,7 +224,7 @@ function DetailPanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void
       <div style={{ display: 'flex', gap: 16, marginTop: 10, flexWrap: 'wrap' }}>
         {trace.verification && (
           <div style={{ fontSize: 9, color: DIM_COLOR }}>
-            <VerificationRow label="tsc" passed={trace.verification.tsc_passed} /> · <VerificationRow label="tests" passed={trace.verification.tests_passed} />
+            <VerificationRow label="tsc" passed={trace.verification.tsc_passed} errors={trace.verification.tsc_errors} /> · <VerificationRow label="tests" passed={trace.verification.tests_passed} errors={trace.verification.tests_errors} />
           </div>
         )}
         {trace.git_commit && (
@@ -266,6 +303,17 @@ function SwimLaneCell({ cycle, agent, isSelected, onClick }: { cycle: OrchCycle;
   const action = isCC ? cycle.cc_action : cycle.oc_action
   const dur = events.reduce((s, e) => s + (e.duration_secs ?? 0), 0)
   const si = cycleStatusIcon(cycle)
+  const cost = isCC ? cycle.cc_cost : cycle.oc_cost
+  const model = fmtModel(isCC ? cycle.cc_model : cycle.oc_model)
+
+  const files = !isCC ? cycle.trace.files_changed.filter(f => !f.startsWith('+') && !f.startsWith('-')) : []
+  const skills = !isCC ? cycle.trace.skills_used.filter(s =>
+    ['simplify-lean','checkpoint','git','sdd','multi-agent'].some(k => s.includes(k))
+  ) : []
+
+  const hasEvents = isCC ? cycle.cc_events.length > 0 : cycle.oc_events.length > 0
+  const statusIcon = hasEvents ? si.icon : '○'
+  const statusColor = hasEvents ? si.color : DIM_COLOR
 
   return (
     <div
@@ -278,21 +326,41 @@ function SwimLaneCell({ cycle, agent, isSelected, onClick }: { cycle: OrchCycle;
         padding: '8px 10px',
         cursor: 'pointer',
         transition: 'border-color 0.2s',
-        position: 'relative',
         flexShrink: 0,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: (cycle.status === 'error' && !isCC) || (cycle.status === 'error') ? si.color : isCC ? (cycle.status === 'active' ? si.color : color) : color, lineHeight: 1 }}>
-          {isCC ? (cycle.status === 'active' || cycle.cc_events.length > 0 ? si.icon : '○') : (cycle.oc_events.length > 0 ? '✓' : '○')}
-        </span>
-        {action && (
-          <span style={{ fontSize: 10, fontWeight: 600, color: '#c9d1d9' }}>{actionLabel(action)}</span>
-        )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: statusColor, lineHeight: 1 }}>{statusIcon}</span>
+        {action && <span style={{ fontSize: 10, fontWeight: 600, color: '#c9d1d9' }}>{actionLabel(action)}</span>}
+        {dur > 0 && <span style={{ fontSize: 9, color: DIM_COLOR, marginLeft: 'auto' }}>{fmtDuration(dur)}</span>}
       </div>
-      <div style={{ fontSize: 9, color: DIM_COLOR }}>
-        {dur > 0 ? fmtDuration(dur) : '—'}
-      </div>
+
+      {(cost !== null || model) && (
+        <div style={{ display: 'flex', gap: 5, alignItems: 'center', marginTop: 3 }}>
+          {cost !== null && <span style={{ fontSize: 9, color: `${color}cc`, fontWeight: 600 }}>${cost.toFixed(2)}</span>}
+          {model && <span style={{ fontSize: 8, color: DIM_COLOR, fontFamily: 'monospace' }}>{model}</span>}
+        </div>
+      )}
+
+      {files.length > 0 && (
+        <div style={{ marginTop: 4 }}>
+          {files.slice(0, 2).map((f, i) => (
+            <div key={i} style={{ fontSize: 8, color: '#8b949e', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 136 }}>
+              {f.split('/').pop()}
+            </div>
+          ))}
+          {files.length > 2 && <div style={{ fontSize: 8, color: `${DIM_COLOR}88` }}>+{files.length - 2} more</div>}
+        </div>
+      )}
+
+      {skills.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2, marginTop: 3 }}>
+          {skills.slice(0, 2).map((s, i) => (
+            <span key={i} style={{ fontSize: 7, background: `${OC_COLOR}18`, color: OC_COLOR, borderRadius: 3, padding: '1px 4px', fontFamily: 'monospace' }}>{s}</span>
+          ))}
+          {skills.length > 2 && <span style={{ fontSize: 7, color: DIM_COLOR }}>+{skills.length - 2}</span>}
+        </div>
+      )}
     </div>
   )
 }
@@ -305,6 +373,7 @@ export function OrchestrateView() {
   const [selectedRunKey, setSelectedRunKey] = useState<string | null>(null)
   const [historicalData, setHistoricalData] = useState<OrchTimeline | null>(null)
   const [resolveText, setResolveText] = useState('')
+  const [showResolveInput, setShowResolveInput] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const pollRef = useRef<ReturnType<typeof setInterval>>()
@@ -376,11 +445,11 @@ export function OrchestrateView() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'resolve_doubts', response: resolveText.trim() }),
     })
-      .then(() => { setResolveText(''); fetchData(); setSubmitting(false) })
+      .then(() => { setResolveText(''); setShowResolveInput(false); fetchData(); setSubmitting(false) })
       .catch(() => setSubmitting(false))
   }, [resolveText, fetchData])
 
-  const displayData = selectedRunKey ? historicalData : data
+  const displayData = (selectedRunKey ? historicalData : data) as OrchTimeline | null
   const isActiveView = !selectedRunKey
 
   if (loading) {
@@ -403,6 +472,22 @@ export function OrchestrateView() {
         <div style={{ fontSize: 11, maxWidth: 360, textAlign: 'center', lineHeight: 1.6, color: '#484f58' }}>
           Run <code style={{ background: BG_CARD, padding: '2px 6px', borderRadius: 3, fontSize: 10, color: '#7d8590' }}>orchestrate.sh "goal" /path/to/project</code> to start
         </div>
+      </div>
+    )
+  }
+
+  if (!displayData) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12, color: '#8b949e' }}>
+        <Workflow size={32} color="#21262d" />
+        <div style={{ fontSize: 14, fontWeight: 600, color: '#c9d1d9' }}>No data available for this run</div>
+        <div style={{ fontSize: 11, color: '#8b949e' }}>The historical run has no snapshot data. Select <b>Current run</b> to see the active orchestration.</div>
+        <button
+          onClick={() => { setSelectedRunKey(null); setHistoricalData(null) }}
+          style={{ fontSize: 11, padding: '6px 14px', borderRadius: 6, background: BG_CARD, color: '#c9d1d9', border: `1px solid ${BORDER}`, cursor: 'pointer' }}
+        >
+          Back to current run
+        </button>
       </div>
     )
   }
@@ -446,6 +531,16 @@ export function OrchestrateView() {
           )}
 
           <div style={{ flex: 1 }} />
+          {((displayData?.cc_total_cost ?? 0) > 0 || (displayData?.oc_total_cost ?? 0) > 0) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 9 }}>
+              <Cpu size={9} color={CC_COLOR} />
+              <span style={{ color: CC_COLOR, fontWeight: 600 }}>${(displayData?.cc_total_cost ?? 0).toFixed(2)}</span>
+              <span style={{ color: DIM_COLOR }}>·</span>
+              <Bot size={9} color={OC_COLOR} />
+              <span style={{ color: OC_COLOR, fontWeight: 600 }}>${(displayData?.oc_total_cost ?? 0).toFixed(2)}</span>
+              <span style={{ color: DIM_COLOR }}>= ${((displayData?.cc_total_cost ?? 0) + (displayData?.oc_total_cost ?? 0)).toFixed(2)}</span>
+            </div>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 10, color: '#7d8590' }}>
             {successCount > 0 && <span style={{ color: OC_COLOR }}>{successCount} ✓</span>}
             {failedCount > 0 && <span style={{ color: WARN_COLOR }}>{failedCount} !</span>}
@@ -485,7 +580,7 @@ export function OrchestrateView() {
           {data.waiting_for_user && (
             <>
               <button
-                onClick={() => setResolveText(resolveText ? '' : ' ')}
+                onClick={() => setShowResolveInput(v => !v)}
                 style={{
                   fontSize: 11, padding: '4px 10px', borderRadius: 6, border: `1px solid ${WARN_COLOR}`,
                   background: `${WARN_COLOR}15`, color: WARN_COLOR, cursor: 'pointer',
@@ -494,10 +589,10 @@ export function OrchestrateView() {
               >
                 <MessageSquare size={12} /> Resolve Doubts
               </button>
-              {resolveText !== '' && (
+              {showResolveInput && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 300px', minWidth: 200 }}>
                   <textarea
-                    value={resolveText === ' ' ? '' : resolveText}
+                    value={resolveText}
                     onChange={e => setResolveText(e.target.value)}
                     placeholder="Enter your response..."
                     rows={1}
@@ -558,8 +653,8 @@ export function OrchestrateView() {
 
       <div style={{ padding: '4px 16px', borderTop: `1px solid ${BORDER}`, background: BG_DARK, display: 'flex', alignItems: 'center', gap: 12, fontSize: 9, color: '#484f58', flexShrink: 0 }}>
         <span>Verify:</span>
-        <VerificationRow label="tsc" passed={displayData?.tsc_passed ?? null} />
-        <VerificationRow label="tests" passed={displayData?.tests_passed ?? null} />
+        <VerificationRow label="tsc" passed={displayData?.tsc_passed ?? null} errors={displayData?.tsc_errors} />
+        <VerificationRow label="tests" passed={displayData?.tests_passed ?? null} errors={displayData?.tests_errors} />
         <span style={{ marginLeft: 'auto' }}>{isActiveView ? 'auto-refresh 3s' : 'historical view'}</span>
       </div>
     </div>

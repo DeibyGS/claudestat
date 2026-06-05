@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-06-05
+
+### Added
+
+- **Orchestration Command Center v2** — swim-lane canvas with CC/OC rows, cycle detail panel, run history, and emergency stop / resolve doubts controls
+- **Orchestrator run history** — `orchestration_runs` DB table (migration 24), snapshot endpoints, and run selector dropdown for viewing past orchestrations
+- **Cycle cost & model data** — each cycle in the swim lane shows CC/OC cost, model name, input/output/cache tokens, and skill badges
+- **Error detail in verification** — tsc/test failures show first error line inline with tooltip for full output
+- **"Orchestration complete" message** — OC event panel shows contextual message when CC marks a phase done without OC needed
+- **MCP 5h cycle alerts in CC terminal** — thresholds at 50/75/90/100% now appear as `notifications/message` via the MCP server so Claude Code shows them directly in its output
+- **OrchErrorBoundary** — React error boundary wraps OrchestrateView to prevent full dashboard crash on unexpected data
+- **Derived tool status** — LiveSourceBar shows working/active/idle with relative time instead of raw last_task
+- **Stale source filtering** — sources inactive for >5 min are excluded from the live session bar
+- **`getSessionsInRange`** — new DB method for querying sessions by timestamp range (used by orchestration cost enrichment)
+
+### Changed
+
+- **Context threshold tracking** — changed from `Set<number>` to `Map<sessionId, Set<number>>` so thresholds reset correctly per-session instead of globally
+- **OrchestrateView null safety** — all `displayData` property accesses use optional chaining to prevent crash when selecting a historical run without snapshot data
+- **VerificationRow** — now accepts optional `errors` prop and shows first error line on failure
+- **SwimLaneCell** — shows cost, model, top 2 file names, and skill badges per cycle
+- **DetailPanel** — shows model name, cost, and TokenRow (in/out/cache) for both CC and OC sections
+
+### Fixed
+
+- **OrchestrateView crash on historical run** — `Cannot read properties of null (reading 'cc_total_cost')` when selecting a run without snapshot data; now shows graceful fallback message
+- **Active sessions filtering** — OC sub-agent sessions no longer pollute the live source bar; parent sessions are deduplicated correctly
+- **`none` status response** — orchestration/timeline endpoint now includes `cc_total_cost`, `oc_total_cost`, `tsc_errors`, and `tests_errors` in the idle state to match the TypeScript interface
+- **Skill name extraction** — captures `→ Skill "name"` pattern from log lines as primary skill source, Engram saves as fallback
+- **Test result parsing** — recognizes `✗` and `not ok` patterns in addition to vitest summary lines
+
+## [1.9.2] - 2026-06-04
+
+### Added
+
+- **Session-close desktop notification** — P1: sends a notification when Claude Code session ends (Stop event)
+- **Weekly plan threshold alerts** — P2: proactive notifications at 25/50/75/90/100% of weekly usage with days-left estimate and daily burn rate
+- **MCP `get_daily_summary` tool** — personalized daily comparison (cost, tokens, sessions) vs. 7-day average with model breakdown and insights
+- **MCP context push notifications** — 50/75/90% context usage alerts sent as JSON-RPC `notifications/message` to the MCP client (shown in CC terminal)
+
+### Changed
+
+- **Simplified notification logic** — removed noisy real-time loop in favor of session-close summary notification
+- **Event handler refactor** — `onCostUpdate` and `onStopCallback` use shared `broadcast` function instead of inline SSE pushes
+
+## [1.9.1] - 2026-06-03
+
+### Added
+
+- **M1 sparklines** — 7-day mini charts for cost, prompts, and efficiency in session tooltip and System tab
+- **M5 DB stats** — SQLite size and session count visible in System tab
+- **M6 pulse animation** — active session cards get a pulsing dot indicator
+- **Top tab: DB stats** — total sessions and database size in the tools ranking view
+- **`/api/db-stats` endpoint** — exposes SQLite stats for dashboard consumption
+
 ## [1.9.0] - 2026-06-02
 
 ### Added

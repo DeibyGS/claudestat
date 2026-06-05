@@ -329,6 +329,8 @@ export interface OrchCycleTrace {
     tsc_passed: boolean | null
     tests_passed: boolean | null
     grep_checks: { pattern: string; result: string }[]
+    tsc_errors: string[]
+    tests_errors: string[]
   } | null
   disagreements: number
   disagreement_texts: string[]
@@ -347,6 +349,16 @@ export interface OrchCycle {
   cc_action:        string | null
   oc_action:        string | null
   trace:            OrchCycleTrace
+  cc_cost:          number | null
+  oc_cost:          number | null
+  cc_input_tokens:  number | null
+  cc_output_tokens: number | null
+  cc_cache_tokens:  number | null
+  oc_input_tokens:  number | null
+  oc_output_tokens: number | null
+  oc_cache_tokens:  number | null
+  cc_model:         string | null
+  oc_model:         string | null
 }
 
 export interface OrchTimeline {
@@ -361,10 +373,14 @@ export interface OrchTimeline {
   waiting_for_user: boolean
   tsc_passed:       boolean | null
   tests_passed:     boolean | null
+  tsc_errors:       string[]
+  tests_errors:     string[]
   started_at:       string | null
   cc_events:        OrchEvent[]
   oc_events:        OrchEvent[]
   cycles:           OrchCycle[]
+  cc_total_cost:    number
+  oc_total_cost:    number
 }
 
 export interface OrchRunSummary {

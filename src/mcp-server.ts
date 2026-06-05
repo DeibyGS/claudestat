@@ -38,7 +38,7 @@ Data shown below is from the last recorded session.
 ---`
 
 const SERVER_NAME = 'claudestat'
-const SERVER_VERSION = '1.2.2'
+const SERVER_VERSION = '1.10.0'
 const PROTOCOL_VERSION = '2025-03-26'
 
 // ─── Context threshold notification tracking ────────────────────────────
@@ -50,6 +50,10 @@ const MCP_CONTEXT_POLL_MS = 30_000
 let _mcpWeeklyThresholdsFired = new Set<number>()
 let _mcpLastWeeklyPct = 0
 const MCP_WEEKLY_THRESHOLDS = [25, 50, 75, 90, 100] as const
+
+let _mcpCycleThresholdsFired = new Set<number>()
+let _mcpLastCycleResetAt = 0
+const MCP_CYCLE_THRESHOLDS = [50, 75, 90, 100] as const
 
 type JsonRpcRequest = { jsonrpc: '2.0'; id?: number | string; method: string; params?: Record<string, unknown> }
 type JsonRpcResponse = { jsonrpc: '2.0'; id?: number | string; result?: unknown; error?: { code: number; message: string } }
@@ -592,6 +596,39 @@ function startContextPolling() {
               jsonrpc: '2.0',
               method: 'notifications/message',
               params: { level: 'warning', message: msg }
+            })
+            process.stdout.write(notif + '\n')
+          }
+        }
+      }
+    // ── 5h cycle threshold alerts ──────────────────────────────────────
+      // Reset thresholds when cycle resets (cycleResetAt advances)
+      if (q.cycleResetAt !== _mcpLastCycleResetAt) {
+        _mcpCycleThresholdsFired.clear()
+        _mcpLastCycleResetAt = q.cycleResetAt
+      }
+      const cyclePct = q.cyclePct
+      if (cyclePct > 0) {
+        for (const th of MCP_CYCLE_THRESHOLDS) {
+          if (cyclePct >= th && !_mcpCycleThresholdsFired.has(th)) {
+            _mcpCycleThresholdsFired.add(th)
+            const resetMins = Math.ceil(q.cycleResetMs / 60_000)
+            const msg = `claudestat — 5h cycle at ${th}% (${cyclePct}% used, resets in ${resetMins}m)`
+            process.stderr.write(`\x1b[33m[MCP] ${msg}\x1b[0m\n`)
+            const planLabel = q.detectedPlan === 'pro' ? 'Pro'
+              : q.detectedPlan === 'free' ? 'Free'
+              : q.detectedPlan === 'max5' ? 'Max5'
+              : q.detectedPlan === 'max20' ? 'Max20'
+              : q.detectedPlan
+            const extra = th === 100
+              ? ` — ${planLabel} cycle limit reached`
+              : th >= 90
+                ? ` — ${planLabel} plan, ${resetMins}m until reset`
+                : ` — ${planLabel} plan`
+            const notif = JSON.stringify({
+              jsonrpc: '2.0',
+              method: 'notifications/message',
+              params: { level: th >= 90 ? 'error' : 'warning', message: msg + extra }
             })
             process.stdout.write(notif + '\n')
           }

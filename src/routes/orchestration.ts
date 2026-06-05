@@ -25,6 +25,8 @@ interface WorkflowJson {
   last_verified_ts?:    number
   tsc_passed?:          string | boolean
   tests_passed?:        string | boolean
+  tsc_errors?:          string[]
+  tests_errors?:        string[]
 }
 
 interface OrchEvent {
@@ -48,6 +50,8 @@ interface OrchCycleTrace {
     tsc_passed: boolean | null
     tests_passed: boolean | null
     grep_checks: { pattern: string; result: string }[]
+    tsc_errors: string[]
+    tests_errors: string[]
   } | null
   disagreements: number
   disagreement_texts: string[]
@@ -66,6 +70,16 @@ interface OrchCycle {
   cc_action:        string | null
   oc_action:        string | null
   trace:            OrchCycleTrace
+  cc_cost:          number | null
+  oc_cost:          number | null
+  cc_input_tokens:  number | null
+  cc_output_tokens: number | null
+  cc_cache_tokens:  number | null
+  oc_input_tokens:  number | null
+  oc_output_tokens: number | null
+  oc_cache_tokens:  number | null
+  cc_model:         string | null
+  oc_model:         string | null
 }
 
 interface OrchDetail {
@@ -80,10 +94,14 @@ interface OrchDetail {
   waiting_for_user: boolean
   tsc_passed:     boolean | null
   tests_passed:   boolean | null
+  tsc_errors:     string[]
+  tests_errors:   string[]
   started_at:     string | null
   cc_events:      OrchEvent[]
   oc_events:      OrchEvent[]
   cycles:         OrchCycle[]
+  cc_total_cost:  number
+  oc_total_cost:  number
 }
 
 let _cache: { data: OrchDetail | null; ts: number; projectPath: string } = { data: null, ts: 0, projectPath: '' }
@@ -368,7 +386,9 @@ function extractTraceForRange(startTs: number, endTs: number, tool: 'cc' | 'oc',
   const trace = emptyTrace()
   let tscResult:   boolean | null = null
   let testsResult: boolean | null = null
-  const grepChecks: { pattern: string; result: string }[] = []
+  const grepChecks:  { pattern: string; result: string }[] = []
+  const tscErrors:   string[] = []
+  const testsErrors: string[] = []
 
   for (const raw of allLines.slice(startIdx, endIdx + 1)) {
     const line = stripAnsi(raw).trim()
@@ -399,7 +419,11 @@ function extractTraceForRange(startTs: number, endTs: number, tool: 'cc' | 'oc',
     const ctxMatch = line.match(/PHASE-[A-Za-z0-9-]+-CONTEXT\.md/)
     if (ctxMatch) trace.artifacts.push(ctxMatch[0])
 
-    // Engram saves → skills_used
+    // Skill invocations (real skill names from log: → Skill "name")
+    const skillMatch = line.match(/→\s+Skill\s+"([^"]+)"/)
+    if (skillMatch) trace.skills_used.push(skillMatch[1])
+
+    // Engram saves → fallback skill context when no explicit skill invocations
     const engMatch = line.match(/engram_mem_(?:save|session_summary).*?"title"\s*:\s*"([^"]+)"/)
     if (engMatch) trace.skills_used.push(engMatch[1])
 
@@ -410,14 +434,21 @@ function extractTraceForRange(startTs: number, endTs: number, tool: 'cc' | 'oc',
     // TSC: look for "Found N error(s)" or inline error count
     const tscErrMatch = line.match(/Found (\d+) error/)
     if (tscErrMatch) tscResult = parseInt(tscErrMatch[1]) === 0
-    if (/error TS\d+:/.test(line)) tscResult = false
+    if (/error TS\d+:/.test(line)) {
+      tscResult = false
+      if (tscErrors.length < 10) tscErrors.push(line)
+    }
 
-    // Tests: vitest summary line "Tests  N passed (N)"
+    // Tests: vitest summary line "Tests  N passed (N)" or node:test "✗ / not ok"
     if (/^\s*Tests\s+(\d+) passed \((\d+)\)/.test(line)) {
       const m = line.match(/Tests\s+(\d+) passed \((\d+)\)/)!
       testsResult = parseInt(m[1]) === parseInt(m[2])
     }
     if (/\bfailed\b/.test(line) && /\bTests?\b/.test(line)) testsResult = false
+    if (/✗|not ok\s+\d+/.test(line)) {
+      testsResult = false
+      if (testsErrors.length < 10) testsErrors.push(line)
+    }
 
     // verify_phase.sh
     if (line.includes('verify_phase.sh passed')) { tscResult = true;  testsResult = true  }
@@ -442,7 +473,7 @@ function extractTraceForRange(startTs: number, endTs: number, tool: 'cc' | 'oc',
   trace.files_changed = [...new Set(trace.files_changed)]
 
   if (tscResult !== null || testsResult !== null || grepChecks.length > 0) {
-    trace.verification = { tsc_passed: tscResult, tests_passed: testsResult, grep_checks: grepChecks }
+    trace.verification = { tsc_passed: tscResult, tests_passed: testsResult, grep_checks: grepChecks, tsc_errors: tscErrors, tests_errors: testsErrors }
   }
 
   // If git_commit found, use git show --stat as authoritative source for files_changed
@@ -553,6 +584,10 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
         cc_action: ccActions.join('+'),
         oc_action: ocActions.join('+'),
         trace: mergedTrace,
+        cc_cost: null, oc_cost: null,
+        cc_input_tokens: null, cc_output_tokens: null, cc_cache_tokens: null,
+        oc_input_tokens: null, oc_output_tokens: null, oc_cache_tokens: null,
+        cc_model: null, oc_model: null,
       })
       i += 2
     } else if (ccGroup && !ocGroup) {
@@ -576,6 +611,10 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
         cc_action: ccActions.join('+'),
         oc_action: null,
         trace: ccTrace,
+        cc_cost: null, oc_cost: null,
+        cc_input_tokens: null, cc_output_tokens: null, cc_cache_tokens: null,
+        oc_input_tokens: null, oc_output_tokens: null, oc_cache_tokens: null,
+        cc_model: null, oc_model: null,
       })
       i += 1
     } else if (!ccGroup && ocGroup) {
@@ -599,6 +638,10 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
         cc_action: null,
         oc_action: ocActions.join('+'),
         trace: ocTrace,
+        cc_cost: null, oc_cost: null,
+        cc_input_tokens: null, cc_output_tokens: null, cc_cache_tokens: null,
+        oc_input_tokens: null, oc_output_tokens: null, oc_cache_tokens: null,
+        cc_model: null, oc_model: null,
       })
       i += 1
     } else {
@@ -623,7 +666,7 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
   try {
     const active = findActiveOrchestration()
     if (!active) {
-      res.json({ status: 'none', project_path: null, project_name: null, goal: '', current_phase: null, total_phases: 0, completed: 0, phase_retry: 0, waiting_for_user: false, tsc_passed: null, tests_passed: null, started_at: null, cc_events: [], oc_events: [], cycles: [] })
+      res.json({ status: 'none', project_path: null, project_name: null, goal: '', current_phase: null, total_phases: 0, completed: 0, phase_retry: 0, waiting_for_user: false, tsc_passed: null, tests_passed: null, tsc_errors: [], tests_errors: [], started_at: null, cc_events: [], oc_events: [], cycles: [], cc_total_cost: 0, oc_total_cost: 0 })
       return
     }
 
@@ -633,19 +676,39 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
     }
 
     const wf = active.wf
-    let totalPhases = 0
-    const specPath = path.join(active.projectPath, 'specs', 'SPEC.md')
-    try {
-      const specContent = fs.readFileSync(specPath, 'utf-8')
-      const phaseMatches = specContent.match(/^###\s+Fase\s+\d+/gm)
-      totalPhases = phaseMatches ? phaseMatches.length : 0
-    } catch {}
-
     const specPhases = parseSpecPhases(active.projectPath)
+    const totalPhases = specPhases.length
     const completed = wf?.total_cycles ?? 0
     const wfStartTs = wf.created_at ? new Date(wf.created_at).getTime() : undefined
     const { cc, oc } = parseLog(wfStartTs)
     const cycles = buildCycles(cc, oc, active.projectPath, specPhases)
+
+    // Enrich cycles with DB session cost/token data
+    if (wf.created_at) {
+      const runStartMs = new Date(wf.created_at).getTime()
+      const sessions = dbOps.getSessionsInRange(runStartMs, Date.now() + 60_000)
+      const ccSess = sessions.filter(s => !s.id.startsWith('ses_') && !s.id.startsWith('agent-')).sort((a, b) => a.started_at - b.started_at)
+      const ocSess = sessions.filter(s => s.id.startsWith('ses_')).sort((a, b) => a.started_at - b.started_at)
+      let ci = 0, oi = 0
+      for (const cycle of cycles) {
+        if (cycle.cc_events.length > 0 && ci < ccSess.length) {
+          const s = ccSess[ci++]
+          cycle.cc_cost = s.total_cost_usd ?? null
+          cycle.cc_input_tokens = s.total_input_tokens ?? null
+          cycle.cc_output_tokens = s.total_output_tokens ?? null
+          cycle.cc_cache_tokens = s.total_cache_read ?? null
+          cycle.cc_model = s.dominant_model ?? null
+        }
+        if (cycle.oc_events.length > 0 && oi < ocSess.length) {
+          const s = ocSess[oi++]
+          cycle.oc_cost = s.total_cost_usd ?? null
+          cycle.oc_input_tokens = s.total_input_tokens ?? null
+          cycle.oc_output_tokens = s.total_output_tokens ?? null
+          cycle.oc_cache_tokens = s.total_cache_read ?? null
+          cycle.oc_model = s.dominant_model ?? null
+        }
+      }
+    }
 
     let status: OrchDetail['status'] = 'active'
     if (wf?.waiting_for_user) status = 'paused'
@@ -671,10 +734,14 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
       waiting_for_user: wf?.waiting_for_user ?? false,
       tsc_passed:     typeof wf.tsc_passed === 'string' ? wf.tsc_passed === 'true' : (wf.tsc_passed ?? null),
       tests_passed:   typeof wf.tests_passed === 'string' ? wf.tests_passed === 'true' : (wf.tests_passed ?? null),
+      tsc_errors:     Array.isArray(wf.tsc_errors) ? wf.tsc_errors : [],
+      tests_errors:   Array.isArray(wf.tests_errors) ? wf.tests_errors : [],
       started_at:     wf?.created_at ?? null,
       cc_events:      cc,
       oc_events:      oc,
       cycles,
+      cc_total_cost:  cycles.reduce((s, c) => s + (c.cc_cost ?? 0), 0),
+      oc_total_cost:  cycles.reduce((s, c) => s + (c.oc_cost ?? 0), 0),
     }
 
     for (const c of detail.cycles) {
@@ -704,7 +771,7 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
 
     res.json(detail)
   } catch (err) {
-    res.json({ status: 'none', project_path: null, project_name: null, goal: '', current_phase: null, total_phases: 0, completed: 0, phase_retry: 0, waiting_for_user: false, tsc_passed: null, tests_passed: null, started_at: null, cc_events: [], oc_events: [], cycles: [] })
+    res.json({ status: 'none', project_path: null, project_name: null, goal: '', current_phase: null, total_phases: 0, completed: 0, phase_retry: 0, waiting_for_user: false, tsc_passed: null, tests_passed: null, tsc_errors: [], tests_errors: [], started_at: null, cc_events: [], oc_events: [], cycles: [], cc_total_cost: 0, oc_total_cost: 0 })
   }
 })
 

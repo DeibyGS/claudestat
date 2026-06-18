@@ -67,7 +67,7 @@
   },
   "scripts": {
     "build": "tsc && npm run build:dashboard",
-    "build:dashboard": "cd dashboard && npm install && npm run build",
+    "build:dashboard": "cd dashboard && npm install && npm run build:only",
     "build:dashboard:only": "cd dashboard && npm run build:only",
     "build:bun": "bun run scripts/build-binary.ts",
     "build:bun:all": "bun run scripts/build-binary.ts --all",

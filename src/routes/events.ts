@@ -271,7 +271,7 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
               dbOps.updateSessionSummary(session_id, summary)
               broadcast({ type: 'summary_ready', payload: { session_id, summary } })
             }
-          } catch (err) { logger.error('[events] Summary error:', err) }
+          } catch (err) { logger.error('[events] Summary error: ' + String(err)) }
         })()
       })
     }
@@ -440,7 +440,7 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
         if (semLoops.length > 0) {
           broadcast({ type: 'semantic_loop', payload: { session_id: sessionId, loops: semLoops } })
         }
-      } catch (err) { logger.warn('[events] Semantic extraction error:', err) }
+      } catch (err) { logger.warn('[events] Semantic extraction error: ' + String(err)) }
     }, 3_000))
   }
 }

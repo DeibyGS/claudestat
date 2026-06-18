@@ -11,7 +11,7 @@ function getBackoff(): number {
 }
 
 function spawnDaemon(): ChildProcess {
-  const env = { ...process.env, CLAUDESTAT_DAEMON: '1' }
+  const env: Record<string, string | undefined> = { ...process.env, CLAUDESTAT_DAEMON: '1' }
   delete env.CLAUDESTAT_WATCHDOG
   const child = spawn(process.execPath, process.argv.slice(2), {
     stdio: 'inherit',

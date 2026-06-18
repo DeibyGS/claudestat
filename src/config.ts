@@ -99,22 +99,22 @@ export function validateConfig(raw: unknown): string | null {
   const cfg = raw as Record<string, unknown>
 
   if ('killSwitchEnabled' in cfg && typeof cfg.killSwitchEnabled !== 'boolean')
-    return 'killSwitchEnabled debe ser boolean'
+    return 'killSwitchEnabled must be a boolean'
 
   if ('killSwitchThreshold' in cfg) {
     const v = cfg.killSwitchThreshold
     if (typeof v !== 'number' || isNaN(v) || v < 1 || v > 100)
-      return 'killSwitchThreshold debe ser un número entre 1 y 100'
+      return 'killSwitchThreshold must be a number between 1 and 100'
   }
 
   if ('warnThresholds' in cfg) {
     const v = cfg.warnThresholds
     if (!Array.isArray(v) || v.length !== 3 || v.some(n => typeof n !== 'number' || isNaN(n) || n < 1 || n > 100))
-      return 'warnThresholds debe ser un array de 3 números entre 1 y 100'
+      return 'warnThresholds must be an array of 3 numbers between 1 and 100'
   }
 
   if ('plan' in cfg && !VALID_PLANS.has(cfg.plan as string | null))
-    return `plan debe ser uno de: free, pro, max5, max20 o null`
+    return `plan must be one of: free, pro, max5, max20, or null`
 
   if ('weeklyWarnThresholds' in cfg) {
     const v = cfg.weeklyWarnThresholds
@@ -131,11 +131,11 @@ export function validateConfig(raw: unknown): string | null {
   if ('sessionCostLimitUsd' in cfg) {
     const v = cfg.sessionCostLimitUsd
     if (typeof v !== 'number' || isNaN(v) || v < 0)
-      return 'sessionCostLimitUsd debe ser un número >= 0 (0 = desactivado)'
+      return 'sessionCostLimitUsd must be a number >= 0 (0 = disabled)'
   }
 
   if ('alertsEnabled' in cfg && typeof cfg.alertsEnabled !== 'boolean')
-    return 'alertsEnabled debe ser boolean'
+    return 'alertsEnabled must be a boolean'
 
   if ('killSwitchForce' in cfg && typeof cfg.killSwitchForce !== 'boolean')
     return 'killSwitchForce must be boolean'

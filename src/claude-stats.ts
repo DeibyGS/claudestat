@@ -98,7 +98,7 @@ export function readClaudeStats(): ClaudeStatsData {
     const todayData = actByDate[todayStr] ?? null
     const yesterdayData = actByDate[yestStr] ?? null
     let mostRecentDay: DayActivity | null = todayData ?? yesterdayData
-    let mostRecentLabel: string | null = todayData ? 'Hoy' : yesterdayData ? 'Ayer' : null
+    let mostRecentLabel: string | null = todayData ? 'Today' : yesterdayData ? 'Yesterday' : null
 
     if (!mostRecentDay) {
       // Cache antiguo — buscar el día más reciente disponible

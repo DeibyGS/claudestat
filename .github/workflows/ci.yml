@@ -54,7 +54,8 @@ jobs:
         run: npm run build
 
       - name: Check dashboard build freshness
-        run: node -e "
+        run: |
+          node -e "
           const fs = require('fs'), path = require('path');
           function latestMtime(dir) {
             let t = 0;
@@ -65,7 +66,7 @@ jobs:
           if (!dist) { console.error('❌ dashboard/dist/ is empty or missing'); process.exit(1); }
           if (src > dist) { console.error('❌ dashboard/dist/ is stale — source files are newer than built output'); process.exit(1); }
           console.log('✅ dashboard build is up to date');
-        "
+          "
 
       - name: Test
         run: npm test

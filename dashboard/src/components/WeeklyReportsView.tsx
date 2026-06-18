@@ -105,10 +105,10 @@ export function WeeklyReportsView() {
     try {
       const r = await fetch('/api/weekly-reports/import-local', { method: 'POST' })
       const d = await r.json()
-      setImportMsg(`${d.imported} importado(s), ${d.skipped} ya existían`)
+      setImportMsg(`${d.imported} imported, ${d.skipped} already existing`)
       if (d.imported > 0) fetchReports()
     } catch {
-      setImportMsg('Error al importar')
+      setImportMsg('Import error')
     }
     setImporting(false)
   }
@@ -295,10 +295,10 @@ export function WeeklyReportsView() {
 
         {/* Contenido del reporte seleccionado */}
         <div style={S.content}>
-          {loading && <div style={S.empty}>Cargando…</div>}
+          {loading && <div style={S.empty}>Loading…</div>}
           {!loading && !selected && (
             <div style={S.empty}>
-              {reports.length > 0 ? 'Seleccioná un informe para verlo' : 'Aún no hay informes generados'}
+              {reports.length > 0 ? 'Select a report to view' : 'No reports generated yet'}
             </div>
           )}
           {!loading && selected && <MarkdownView content={selected.report_markdown} />}

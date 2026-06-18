@@ -9,26 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Watchdog recovery** — proceso separado con exponential backoff (1s→30s max) para auto-restart del daemon
-- **Flag `--verbose`** — logging verbose a nivel global para daemon, enricher, events y reports
-- **CI dashboard freshness check** — verifica que `dashboard/dist/` no esté obsoleto respecto a `dashboard/src/`
-- **Test split** — `npm run test:fast` (~9s) corre tests en paralelo con `tests/unit-index.ts` (110 unit) y `tests/integration-index.ts` (175 integration)
-- **GitHub badges** — Issues y Discussions en README
-- **Discussions redirect** — CONTRIBUTING.md apunta preguntas a GitHub Discussions
-- **`build:only` script** — build rápido del dashboard sin typecheck (dashboard/package.json)
+- **Watchdog recovery** — separate process with exponential backoff (1s→30s max) for auto-restart of the daemon
+- **`--verbose` flag** — global verbose logging for daemon, enricher, events, and reports
+- **CI dashboard freshness check** — verifies `dashboard/dist/` is not stale relative to `dashboard/src/`
+- **Test split** — `npm run test:fast` (~9s) runs unit (110) and integration (175) tests in parallel
+- **GitHub badges** — Issues and Discussions in README
+- **Discussions redirect** — CONTRIBUTING.md points questions to GitHub Discussions
+- **`build:only` script** — fast dashboard build without typecheck (dashboard/package.json)
 
 ### Changed
 
-- **Logger migration** — daemon, enricher, events y reports migrados a logger.ts unificado
-- **`docs/COMMANDS.md`** — rewrite completo con tabla de flags, ejemplos y opciones
-- **`docs/CONFIG.md`** — rewrite completo con todas las variables de entorno documentadas
-- **Watchdog** — refactor a proceso independiente (ya no es thread interno)
-- **README** — enlace a Discussions en el header
+- **Logger migration** — daemon, enricher, events, and reports migrated to unified logger.ts
+- **`docs/COMMANDS.md`** — full rewrite with flags table, examples, and options
+- **`docs/CONFIG.md`** — full rewrite with all documented environment variables
+- **Watchdog** — refactored to independent process (no longer an internal thread)
+- **README** — Discussions link in header
 
 ### Fixed
 
-- **Watchdog restart loop** — exponential backoff previene restart infinitos en crash persistentes
-- **Log timestamps** — `--verbose` muestra full_ts con offset horario correcto
+- **Watchdog restart loop** — exponential backoff prevents infinite restarts on persistent crashes
+- **Log timestamps** — `--verbose` shows full_ts with correct time offset
 
 ## [1.10.0] - 2026-06-05
 

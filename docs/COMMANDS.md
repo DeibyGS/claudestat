@@ -1,288 +1,430 @@
-# claudestat Commands Reference
+# claudestat — Command Reference
 
-### `claudestat watch`
+## Global flags
 
-Live terminal trace — every tool call as it happens, with duration and token cost.
+Available before any subcommand:
 
-```
-claudestat watch
+| Flag | Description |
+|------|-------------|
+| `-v, --verbose` | Enable verbose (debug) logging |
+| `--version` | Show version number |
+| `--help` | Show help |
 
-  ● Session a3f1bc · my-project · claude-sonnet-4-5
+---
 
-  16:42:01  Bash            342ms    1,240 tok   $0.0018
-  16:42:03  Read             89ms      420 tok   $0.0006
-  16:42:05  Edit            124ms      890 tok   $0.0013
-  16:42:08  Agent (haiku)    2.1s    3,200 tok   $0.0024
-  16:42:11  Write            67ms      310 tok   $0.0004
+## `claudestat start`
 
-  Context: 42,800 / 200,000 (21%)  │  Session cost: $0.0065  │  🟢 healthy
-```
-
-### `claudestat top`
-
-Ranks your most-used tools by estimated cost, call count, or duration across all sessions.
+Start the background daemon.
 
 ```
-claudestat top
-
-🏆 claudestat top  by est. cost (last 30 days)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-   1  Edit                ████████████████░░░░     $146.47  21%
-     2479 calls · 38.5m
-   2  Bash                ███████████████░░░░░     $140.66  20%
-     2651 calls · 153.6m
-   3  Read                ██████████████░░░░░░     $126.08  18%
-     2315 calls · 34.0m
-   4  Grep                ████░░░░░░░░░░░░░░░░      $39.93  6%
-     699 calls · 9.3m
-   5  ToolSearch          ██░░░░░░░░░░░░░░░░░░      $21.83  3%
-     469 calls · 7.4m
-   6  Glob                ██░░░░░░░░░░░░░░░░░░      $13.96  2%
-     269 calls · 5.7m
-   7  Write               █░░░░░░░░░░░░░░░░░░░      $12.93  2%
-     237 calls · 87.1m
-   8  mcp__plugin_engr…   █░░░░░░░░░░░░░░░░░░░       $8.10  1%
-     149 calls · 2.6m
-   9  Agent               █░░░░░░░░░░░░░░░░░░░       $8.09  1%
-     168 calls · 95.7m
-  10  WebFetch            █░░░░░░░░░░░░░░░░░░░       $5.86  1%
-     106 calls · 9.9m
-  Other                     —     $184.79  26%
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+claudestat start
+claudestat start --watchdog
+claudestat start --wait
+claudestat start --verbose
 ```
 
-Options: `--by cost|count|duration` · `--days 7|30|90` · `--limit N`
+| Option | Description |
+|--------|-------------|
+| `--watchdog` | Auto-restart daemon if it crashes (spawns separate watchdog process) |
+| `--wait` | Wait until daemon responds on `/health` before returning (max 10s) |
+| `-v, --verbose` | Enable verbose (debug) logging |
 
-### `claudestat weekly`
-
-Weekly usage summary with an actionable tip. Detects patterns like Bash overuse, low efficiency, high session count, and loop frequency.
-
+**Example:**
 ```
-claudestat weekly
+$ claudestat start
+✅ claudestat daemon started (pid 12345)
+   Dashboard → http://localhost:7337
 
-📊 claudestat weekly  May 8 – May 13
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  💰  $198.38 total  ·  40 sessions  ·  114 loops
-
-  🔧  Top tool    Bash  22% of cost
-
-  📈  Efficiency    ██████████████████░░  91/100
-
-  💾  Cache hit     ████████████████████  100%
-
-  📦  Tokens  73K in + 1.2M out
-
-  ⚡  Tip: 114 loops detected — consider using /compact earlier to prevent context thrashing
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+$ claudestat start --watchdog
+✅ Watchdog active (pid 12346)
+   Dashboard → http://localhost:7337
 ```
 
-Options: `--json` for machine-readable output.
+---
 
-### `claudestat status`
+## `claudestat stop`
 
-Shows your current quota usage with visual progress bars, plan detection, and burn rate.
+Stop the claudestat daemon.
+
+```
+claudestat stop
+```
+
+Attempts graceful shutdown via `POST /shutdown` first, then falls back to `SIGTERM`.
+
+**Example:**
+```
+$ claudestat stop
+✅ claudestat daemon stopped
+```
+
+---
+
+## `claudestat restart`
+
+Restart the claudestat daemon.
+
+```
+claudestat restart
+```
+
+---
+
+## `claudestat status`
+
+Show current quota, cost, and burn rate.
 
 ```
 claudestat status
+claudestat status --json
+```
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output raw JSON instead of formatted text |
+
+**Example:**
+```
+$ claudestat status
 
 📊 claudestat  PRO plan
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  5h      ████████████████████  100%   resets 4:10 AM
+  5h      ████████░░░░░░░░░░░░  42%   resets in 2h 15m
 
-  Week    ██████░░░░░░░░░░░░░░  31%   resets May 18
+  Week    ██████████████░░░░░░  72%   resets Mon
 
-  🔥 490 tok/min  ·  101 prompts used
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🔥 12,340 tok/min  ·  156 prompts used
 ```
 
-Options: `--json` for machine-readable output.
+---
 
-### `claudestat insights`
+## `claudestat config`
 
-Deep usage insights: cost breakdown by project, cache savings, output/input ratio, efficiency trend, peak activity hours, and model breakdown.
-
-```
-claudestat insights
-
-💡 claudestat insights  last 7 days
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  💰  $4.96/session  ·  40 sessions  ·  $198.38 total
-
-  🗂  Top projects
-     no project      █████████░░░░░░░░░░░  $93.69  47%
-     claudestat      ████████░░░░░░░░░░░░  $74.60  38%
-     wodrival        ███░░░░░░░░░░░░░░░░░  $24.95  13%
-     aprendiendo-in  ░░░░░░░░░░░░░░░░░░░░  $3.32   2%
-     other           ░░░░░░░░░░░░░░░░░░░░  $1.81   1%
-
-  ⚡  Cache ~$1029.43 saved  ·  100% hit rate
-
-  📊  16× output/input  ·  cache-heavy workload
-
-  📈  Efficiency  91/100  ↓ -2 vs prev period  ·  114 loops
-
-  ⏰  Activity by time of day
-     🌙  00:00–05:59  ████████████████████  18 sessions
-     🌅  06:00–11:59  ███████░░░░░░░░░░░░░   6 sessions
-     ☀️  12:00–17:59  ███░░░░░░░░░░░░░░░░░   3 sessions
-     🌆  18:00–23:59  ██████████████░░░░░░  13 sessions
-
-  🤖  Models
-     claude-sonnet-4-6             ████████████████████  $197.11  99% · 23 sessions
-     claude-haiku-4-5-20251001     ░░░░░░░░░░░░░░░░░░░░  $1.26   1% · 15 sessions
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
-
-Options: `--days 7|14|30|90` · `--json` for machine-readable output.
-
-### `claudestat config`
-
-View or edit your configuration.
+View or edit configuration.
 
 ```
 claudestat config
+claudestat config --kill-switch true --threshold 90
+claudestat config --plan max5
+```
+
+| Option | Description |
+|--------|-------------|
+| `--kill-switch <bool>` | Enable/disable kill switch: `true` or `false` |
+| `--threshold <number>` | Quota percentage to trigger kill switch (default: 95) |
+| `--plan <plan>` | Force plan: `pro`, `max5`, `max20`, `auto` |
+| `--alerts <bool>` | Enable/disable rate limit alerts |
+| `--session-limit <usd>` | Alert when session exceeds this cost (0 = disabled) |
+| `--kill-switch-force <bool>` | Hard-block on kill switch instead of warning |
+| `--log-level <level>` | Set log level: `debug`, `info`, `warn`, `error` |
+| `--loop-threshold <number>` | Tool calls in window to trigger loop detection |
+| `--loop-window <seconds>` | Detection window in seconds |
+| `--alias <path=name>` | Set a project alias: `--alias "/path/to/repo=MyApp"` |
+| `--remove-alias <path>` | Remove a project alias |
+| `--webhook <url>` | Set webhook URL for alerts. Use `"off"` to disable. |
+
+**Example:**
+```
+$ claudestat config
 
 ⚙️  claudestat config
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Plan              PRO
+  Plan              AUTO
+  Port              7337
   Alerts            enabled
 
   Kill switch       OFF
-                    ████████████████████
+  Session limit     OFF
+  Kill switch mode  warn-only
+  Log level         INFO
+  Loop detection    8 calls in 120s
+  Webhook           off
 
   Cycle thresholds  70%, 85%, 95%
-                    yellow ████████░░  orange █████████░  red ██████████
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    yellow ████░░  orange ██████░░  red ████████░░
 ```
 
-See [CONFIG.md](CONFIG.md) for the full reference.
+---
 
-### `claudestat project`
+## `claudestat watch`
 
-Cost projection with linear regression — weekly and monthly spend, trend direction, and 80% confidence intervals.
+Live terminal trace view.
+
+```
+claudestat watch
+```
+
+Opens a real-time SSE connection to the daemon. Displays tool calls as they fire.
+
+---
+
+## `claudestat top`
+
+Rank tools by cost, frequency, or duration.
+
+```
+claudestat top
+claudestat top --by cost --limit 10 --days 30
+claudestat top --json
+```
+
+| Option | Description |
+|--------|-------------|
+| `--by <metric>` | Sort by: `cost`, `count`, `duration` (default: `cost`) |
+| `--limit <number>` | Number of tools to show (default: 10) |
+| `--days <number>` | Look back N days (default: 30) |
+| `--json` | Output as JSON |
+
+**Example:**
+```
+$ claudestat top --by cost --limit 5
+
+🏆 claudestat top  by est. cost (last 30 days)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ 1  Bash              ████████████████░░░░   $12.34    45%
+     ░ 234 calls · 12.3m · avg/call $0.0527
+ 2  Read              ██████████░░░░░░░░░░   $5.67     21%
+     ░ 89 calls · 3.2m · avg/call $0.0637
+ 3  Edit              ███████░░░░░░░░░░░░░   $3.21     12%
+     ░ 45 calls · 2.1m · avg/call $0.0713
+ 4  Write             ████░░░░░░░░░░░░░░░░   $1.98     7%
+     ░ 23 calls · 1.5m · avg/call $0.0861
+ 5  Grep              ██░░░░░░░░░░░░░░░░░░   $0.87     3%
+     ░ 12 calls · 0.8m · avg/call $0.0725
+```
+
+---
+
+## `claudestat weekly`
+
+Show weekly usage summary.
+
+```
+claudestat weekly
+claudestat weekly --json
+```
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output as JSON |
+
+---
+
+## `claudestat insights`
+
+Deep usage insights: cost breakdown, cache savings, efficiency, models.
+
+```
+claudestat insights
+claudestat insights --days 14
+claudestat insights --json
+```
+
+| Option | Description |
+|--------|-------------|
+| `--days <number>` | Look back N days (default: 7) |
+| `--json` | Output raw JSON |
+
+---
+
+## `claudestat project`
+
+Cost projection with linear regression.
 
 ```
 claudestat project
-
-Cost Projection (R²=0.873, trend=↑ increasing)
-──────────────────────────────────────────
-  Weekly  | projected: $45.23  (80% CI: $32.10–$58.36)
-          | avg $0.0048/day over 90 days
-  Monthly | projected: $198.15  (80% CI: $140.50–$255.80)
-          | avg $0.0048/day over 90 days
-──────────────────────────────────────────
+claudestat project --days 180
+claudestat project --json
 ```
 
-Options: `--days N` · `--json`
+| Option | Description |
+|--------|-------------|
+| `--days <number>` | Look back N days (default: 90) |
+| `--json` | Output raw JSON |
 
-### `claudestat roast`
+---
 
-Get a sarcastic analysis of your Claude Code usage — humor with insights.
+## `claudestat blocks`
 
-```bash
-claudestat roast
+Show 5-hour billing block history.
 
-🔥 Your Claude Code Roast  (30 days)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  Score  ██████████████████░░  92/100  ★★★★★
-
-  Scorecard
-  ┌─────────────────┬──────────────┬──────────────┐
-  │ Metric          │ Value        │ Rating       │
-  ├─────────────────┼──────────────┼──────────────┤
-  │ Sessions        │ 47           │ normal       │
-  │ Total cost      │ $12.40       │ frugal       │
-  │ Avg/session     │ $0.26/session│ efficient    │
-  │ Bash calls      │ 1240         │ 🔨 overload  │
-  │ Loops           │ 8            │ clean        │
-  │ Efficiency      │ 92/100       │ 🏆 elite     │
-  │ Tokens          │ 4.2M         │ —            │
-  │ Top tool        │ Bash 38%     │ —            │
-  └─────────────────┴──────────────┴──────────────┘
-
-  Roast Cards
-
-  ┌──────────────────────────────────────────────────┐
-  │ 🖥️  BASH OVERLOAD                                │
-  │ 1240 calls in 30d — once every 2.3 min           │
-  │ Are you okay?                                    │
-  └──────────────────────────────────────────────────┘
-
-  ┌──────────────────────────────────────────────────┐
-  │ 🔄  LOOP MONEY PIT                               │
-  │ $4.20 wasted on loops — that's 14 coffees        │
-  │ Just saying.                                     │
-  └──────────────────────────────────────────────────┘
-
-  Verdict
-  You're a machine. Or maybe you're just not using Claude enough.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  github.com/DeibyGS/claudestat
+```
+claudestat blocks
+claudestat blocks --limit 10
 ```
 
-Options: `--stats` for raw stats · `--months N`
+| Option | Description |
+|--------|-------------|
+| `--limit <n>` | Number of blocks to show (default: 20, max: 100) |
 
-### `claudestat doctor`
+---
 
-Diagnoses common installation problems — run this first if something isn't working.
+## `claudestat logs`
+
+Show or tail the daemon log.
+
+```
+claudestat logs
+claudestat logs -n 100
+claudestat logs --follow
+claudestat logs --level warn
+```
+
+| Option | Description |
+|--------|-------------|
+| `-n <number>` | Number of lines to show (default: 50) |
+| `--follow` | Tail the log in real time |
+| `--level <level>` | Filter by minimum level: `debug`, `info`, `warn`, `error` |
+
+---
+
+## `claudestat loops`
+
+List sessions with detected loops (context thrashing).
+
+```
+claudestat loops
+claudestat loops --days 7 --limit 5
+claudestat loops --json
+```
+
+| Option | Description |
+|--------|-------------|
+| `--days <number>` | Look back N days (default: 30) |
+| `--limit <number>` | Max sessions to show (default: 10) |
+| `--json` | Output raw JSON |
+
+---
+
+## `claudestat export [format]`
+
+Export session data.
+
+```
+claudestat export
+claudestat export csv
+claudestat export markdown --since 7d
+claudestat export json --from 2026-01-01 --to 2026-06-01 --output sessions.json
+```
+
+| Argument / Option | Description |
+|---|---|
+| `format` | Output format: `json` (default), `csv`, `markdown` |
+| `--from <date>` | Start date YYYY-MM-DD (inclusive) |
+| `--to <date>` | End date YYYY-MM-DD (inclusive) |
+| `--since <period>` | Shorthand: `7d`, `30d`, `90d` (overrides `--from`) |
+| `--project <name>` | Filter by project path (case-insensitive substring) |
+| `--output <path>` | Write to file (default: stdout) |
+
+---
+
+## `claudestat share [session-id]`
+
+Export a session summary.
+
+```
+claudestat share
+claudestat share abc123
+claudestat share abc123 --format json --copy
+```
+
+| Option | Description |
+|--------|-------------|
+| `--format <fmt>` | Output format: `ascii` (default) or `json` |
+| `--copy` | Copy output to clipboard (macOS only) |
+
+---
+
+## `claudestat doctor`
+
+Check installation health.
 
 ```
 claudestat doctor
-
-🩺 claudestat doctor
-──────────────────────────────────────────────
-  ✓  Node.js version (22.17.0)
-  ✓  Claude Code installed
-  ✓  Hooks installed in Claude Code
-  ✓  ~/.claudestat/ data directory exists
-  ✓  Hook script deployed (~/.claudestat/hooks/event.js)
-  ✓  Daemon running (localhost:7337)
-  ✓  Global CLI symlink valid
-  ✓  No duplicate claudestat binaries in PATH
-  ✓  Version match (installed: v1.3.0)
-  ✓  NVM prefix matches active binary
-  ✓  MCP server registered in Claude Code
-──────────────────────────────────────────────
-  All checks passed — claudestat is healthy!
 ```
 
-### `claudestat version`
+Runs checks for: Node version, config file, hooks, PID file, daemon connectivity, SQLite DB, MCP registration.
 
-Shows the current version and checks npm for updates.
+---
 
-```bash
+## `claudestat roast`
+
+Sarcastic usage analysis.
+
+```
+claudestat roast
+claudestat roast --stats --months 3
+```
+
+| Option | Description |
+|--------|-------------|
+| `--stats` | Show raw stats only, no roast |
+| `--months <n>` | Look back N months (default: 1) |
+
+---
+
+## `claudestat setup`
+
+One-command setup: install hooks + register system service.
+
+```
+claudestat setup
+claudestat setup --uninstall
+claudestat setup --port 8337
+claudestat setup --reset
+```
+
+| Option | Description |
+|--------|-------------|
+| `--uninstall` | Remove hooks and system service |
+| `--port <number>` | Custom daemon port (default: 7337) |
+| `--reset` | Reinstall from scratch (keeps SQLite history) |
+
+---
+
+## `claudestat install` / `uninstall`
+
+Install or remove Claude Code hooks.
+
+```
+claudestat install
+claudestat uninstall
+```
+
+---
+
+## `claudestat resume`
+
+Remove the pause signal — allows Claude Code to continue after a quota warning.
+
+```
+claudestat resume
+```
+
+---
+
+## `claudestat version`
+
+Show version and check for updates.
+
+```
 claudestat version
-
-1.3.0
-  latest ✓
 ```
 
-If a newer version is available, it shows: `latest: 1.4.0 — run npm update`.
+---
 
-### `claudestat export`
+## `claudestat update`
 
-Export session data to JSON or CSV. Supports date and project filters.
+Check for updates and install the latest version from npm.
 
-```bash
-claudestat export                       # all sessions as JSON to stdout
-claudestat export csv --output ~/sessions.csv
-claudestat export json --from 2025-05-01 --to 2025-05-31
-claudestat export csv --project myapp --output myapp-sessions.csv
-claudestat export json --from 2025-05-01 --project claudestat --output may-claudestat.json
+```
+claudestat update
+claudestat update --dry-run
 ```
 
-**Options:** `--from YYYY-MM-DD` · `--to YYYY-MM-DD` · `--project <name>` · `--output <path>`
-
-Each row includes: `id`, `started_at`, `cwd`, `project_path`, `total_cost_usd`, `total_input_tokens`, `total_output_tokens`, `efficiency_score`, `loops_detected`, `source`.
+| Option | Description |
+|--------|-------------|
+| `--dry-run` | Only check for updates, do not install |

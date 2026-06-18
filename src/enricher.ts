@@ -22,6 +22,7 @@ import './watchers/amp'
 import './watchers/droid'
 import './watchers/codebuff'
 import { dbOps, type CostUpdate } from './db'
+import { logger } from './logger'
 // Re-export Claude Code-specific utilities for routes/stream and routes/misc
 export { getAllBlockCostsForSession, getSessionPrompts } from './watchers/claude-code'
 export { getContextWindow } from './pricing'
@@ -77,7 +78,7 @@ export function startEnricher(
 ) {
   const adapters = getActiveAdapters()
   if (adapters.length === 0) {
-    console.warn('[enricher] No supported CLI tools detected')
+    logger.warn('[enricher] No supported CLI tools detected')
     return
   }
 
@@ -91,7 +92,7 @@ export function startEnricher(
   }
 
   const watchPaths = adapters.flatMap(a => a.getWatchPaths())
-  console.log(`[enricher] Watching ${adapters.map(a => a.label).join(', ')}`)
+  logger.info(`[enricher] Watching ${adapters.map(a => a.label).join(', ')}`)
 
   watcher = chokidar.watch(watchPaths, {
     persistent: true,
@@ -154,7 +155,7 @@ export function stopEnricher() {
   pollIntervals.length = 0
   prevContextBySession.clear()
   adapterByDir.clear()
-  console.log('[enricher] Stopped')
+  logger.info('[enricher] Stopped')
 }
 
 export function cleanupSession(sessionId: string) {

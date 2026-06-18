@@ -13,6 +13,7 @@ import { isRateLimited }                       from '../middleware/rate-limiter'
 import { broadcast, sessionLastEvent }         from './stream'
 import { sendDesktopNotification }             from '../notifier'
 import { findProjectCwdForFile }               from './helpers'
+import { logger }                              from '../logger'
 import {
   processLatestForSession,
   cleanupSession,
@@ -270,7 +271,7 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
               dbOps.updateSessionSummary(session_id, summary)
               broadcast({ type: 'summary_ready', payload: { session_id, summary } })
             }
-          } catch (err) { console.error('[events] Summary error:', err) }
+          } catch (err) { logger.error('[events] Summary error: ' + String(err)) }
         })()
       })
     }
@@ -439,7 +440,7 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
         if (semLoops.length > 0) {
           broadcast({ type: 'semantic_loop', payload: { session_id: sessionId, loops: semLoops } })
         }
-      } catch (err) { console.warn('[events] Semantic extraction error:', err) }
+      } catch (err) { logger.warn('[events] Semantic extraction error: ' + String(err)) }
     }, 3_000))
   }
 }
@@ -448,7 +449,7 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
 
 export const onCompactDetected: CompactDetectedCallback = (sessionId) => {
   broadcast({ type: 'compact_detected', payload: { session_id: sessionId, ts: Date.now() } })
-  console.log(`[daemon] Auto-compact detected for session ${sessionId.slice(0, 8)}`)
+  logger.info(`[daemon] Auto-compact detected for session ${sessionId.slice(0, 8)}`)
 }
 
 export function setSessionStopCallback(fn: (sessionId: string) => void): void {

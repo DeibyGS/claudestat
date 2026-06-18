@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-06-18
+
+### Added
+
+- **Watchdog recovery** — separate process with exponential backoff (1s→30s max) for auto-restart of the daemon
+- **`--verbose` flag** — global verbose logging for daemon, enricher, events, and reports
+- **CI dashboard freshness check** — verifies `dashboard/dist/` is not stale relative to `dashboard/src/`
+- **Test split** — `npm run test:fast` (~9s) runs unit (110) and integration (175) tests in parallel
+- **GitHub badges** — Issues and Discussions in README
+- **Discussions redirect** — CONTRIBUTING.md points questions to GitHub Discussions
+- **`build:only` script** — fast dashboard build without typecheck (dashboard/package.json)
+
+### Changed
+
+- **Logger migration** — daemon, enricher, events, and reports migrated to unified logger.ts
+- **`docs/COMMANDS.md`** — full rewrite with flags table, examples, and options
+- **`docs/CONFIG.md`** — full rewrite with all documented environment variables
+- **Watchdog** — refactored to independent process (no longer an internal thread)
+- **README** — Discussions link in header
+
+### Fixed
+
+- **Watchdog restart loop** — exponential backoff prevents infinite restarts on persistent crashes
+- **Log timestamps** — `--verbose` shows full_ts with correct time offset
+
 ## [1.10.0] - 2026-06-05
 
 ### Added

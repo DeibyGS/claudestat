@@ -86,13 +86,33 @@ if (!SKIP_UPDATE_NOTICE.has(subcommand)) {
 }
 
 function spawnDaemon() {
-  const child = spawn(process.execPath, [process.argv[1], 'start'], {
+  const args = [process.argv[1], 'start']
+  const opts = program.opts()
+  if (opts.verbose) args.push('--verbose')
+  const child = spawn(process.execPath, args, {
     detached: true,
     stdio: 'ignore',
     env: { ...process.env, CLAUDESTAT_DAEMON: '1' },
   })
   child.unref()
   console.log(`✅ claudestat daemon started (pid ${child.pid})`)
+  console.log(`   Dashboard → http://localhost:${PORT}`)
+}
+
+function spawnWatchdog() {
+  const args = [process.argv[1], 'start']
+  const opts = program.opts()
+  if (opts.verbose) args.push('--verbose')
+  const logFile = getDaemonLogFile()
+  const out = fs.openSync(logFile, 'a')
+  const child = spawn(process.execPath, args, {
+    detached: true,
+    stdio: ['ignore', out, out],
+    env: { ...process.env, CLAUDESTAT_WATCHDOG: '1' },
+  })
+  fs.closeSync(out)
+  child.unref()
+  console.log(`✅ Watchdog active (pid ${child.pid})`)
   console.log(`   Dashboard → http://localhost:${PORT}`)
 }
 
@@ -164,6 +184,7 @@ program
   .name('claudestat')
   .description('Real-time execution trace and cost intelligence for Claude Code · github.com/DeibyGS/claudestat')
   .version(PKG_VERSION)
+  .option('-v, --verbose', 'Enable verbose (debug) logging')
 
 program
   .command('version')
@@ -250,18 +271,28 @@ program
 program
   .command('start')
   .description('Start the background daemon (receives Claude Code hook events)')
+  .option('-v, --verbose', 'Enable verbose (debug) logging')
   .option('--watchdog', 'Auto-restart daemon if it crashes')
   .option('--wait',    'Wait until daemon responds on /health before returning (max 10s)')
   .action(async (opts) => {
-    if (process.env.CLAUDESTAT_DAEMON) {
+    if (process.env.CLAUDESTAT_WATCHDOG) {
+      const { startWatchdog } = require('./watchdog') as { startWatchdog: () => void }
+      startWatchdog()
+    } else if (process.env.CLAUDESTAT_DAEMON) {
+      if (program.opts().verbose || opts.verbose) {
+        const cfg = readConfig()
+        if (cfg.logLevel !== 'debug') {
+          writeConfig({ ...cfg, logLevel: 'debug' })
+        }
+      }
       const { startDaemon }   = require('./daemon')  as { startDaemon: () => void }
       startDaemon()
-      if (opts.watchdog) {
-        const { startWatchdog } = require('./watchdog') as { startWatchdog: () => void }
-        startWatchdog()
-      }
     } else {
-      spawnDaemon()
+      if (opts.watchdog) {
+        spawnWatchdog()
+      } else {
+        spawnDaemon()
+      }
       if (opts.wait) {
         const deadline = Date.now() + 10_000
         while (Date.now() < deadline) {

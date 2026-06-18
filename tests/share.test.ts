@@ -2,6 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { runShare } from '../src/share'
 
+process.env.CLAUDESTAT_DB_PATH ??= ':memory:'
+process.env.CLAUDESTAT_DATA_DIR ??= require('os').tmpdir()
+
 test('runShare: exports a function', () => {
   assert.strictEqual(typeof runShare, 'function')
 })

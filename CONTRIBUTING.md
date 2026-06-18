@@ -174,4 +174,4 @@ Open an issue and include:
 
 ## Questions
 
-Open an issue with the `question` label. No question is too small.
+Ask in [GitHub Discussions](https://github.com/DeibyGS/claudestat/discussions) — no question is too small.

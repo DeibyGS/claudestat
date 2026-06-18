@@ -17,12 +17,15 @@ Works with **Claude Code** and **OpenCode**. Zero cloud dependencies. Pure Node.
 [![CI](https://github.com/DeibyGS/claudestat/actions/workflows/ci.yml/badge.svg)](https://github.com/DeibyGS/claudestat/actions/workflows/ci.yml)
 [![Download](https://img.shields.io/badge/download-binary-blue)](https://github.com/DeibyGS/claudestat/releases/latest)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
+[![GitHub Issues](https://img.shields.io/github/issues/DeibyGS/claudestat)](https://github.com/DeibyGS/claudestat/issues)
+[![GitHub Discussions](https://img.shields.io/github/discussions/DeibyGS/claudestat)](https://github.com/DeibyGS/claudestat/discussions)
 
 [Installation](#installation) •
 [Quick Start](#quick-start) •
 [Commands](#commands) •
 [Dashboard](#dashboard) •
 [FAQ](#faq) •
+[Discussions](https://github.com/DeibyGS/claudestat/discussions) •
 [Contributing](#contributing)
 
 ![ClaudeStat banner](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/banner.png)

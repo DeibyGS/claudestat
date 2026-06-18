@@ -1,6 +1,6 @@
 {
   "name": "@statforge/claudestat",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "private": false,
   "publishConfig": {
     "access": "public"
@@ -68,6 +68,7 @@
   "scripts": {
     "build": "tsc && npm run build:dashboard",
     "build:dashboard": "cd dashboard && npm install && npm run build",
+    "build:dashboard:only": "cd dashboard && npm run build:only",
     "build:bun": "bun run scripts/build-binary.ts",
     "build:bun:all": "bun run scripts/build-binary.ts --all",
     "prepublishOnly": "npm run build",
@@ -75,6 +76,9 @@
     "dev:full": "tsx src/index.ts start & sleep 1 && cd dashboard && npm run dev",
     "start": "node dist/index.js",
     "test": "node --require tsx/cjs tests/index.ts",
+    "test:unit": "node --require tsx/cjs tests/unit-index.ts",
+    "test:integration": "node --require tsx/cjs tests/integration-index.ts",
+    "test:fast": "node --require tsx/cjs tests/unit-index.ts && node --require tsx/cjs tests/integration-index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit --strict"
   },

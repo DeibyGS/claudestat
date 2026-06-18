@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import { generateTip, renderWeeklyInsight } from '../src/insights'
 import type { WeeklyInsightData } from '../src/insights'
 
+process.env.CLAUDESTAT_DB_PATH ??= ':memory:'
+process.env.CLAUDESTAT_DATA_DIR ??= require('os').tmpdir()
+
 const BASE: WeeklyInsightData = {
   total_sessions: 10,
   total_cost: 5,

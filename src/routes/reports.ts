@@ -7,6 +7,7 @@ import { Router, type Request, type Response } from 'express'
 import { dbOps }                               from '../db'
 import { readConfig, type ClaudestatConfig }   from '../config'
 import { getClaudeDir }                        from '../paths'
+import { logger }                              from '../logger'
 
 export const reportsRouter = Router()
 
@@ -84,7 +85,7 @@ reportsRouter.post('/api/weekly-reports/generate-now', (_req: Request, res: Resp
   }
   const markdown = generateReport(dateLabel, cfg)
   dbOps.insertWeeklyReport(dateLabel, markdown)
-  console.log(`[daemon] Informe generado manualmente: ${dateLabel}`)
+  logger.info(`[daemon] Informe generado manualmente: ${dateLabel}`)
   res.json({ ok: true, date: dateLabel })
 })
 

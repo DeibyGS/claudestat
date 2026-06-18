@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build"
+    "build": "tsc -b && vite build",
+    "build:only": "vite build"
   },
   "dependencies": {
     "@xyflow/react": "^12.3.6",

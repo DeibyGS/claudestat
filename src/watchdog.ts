@@ -1,80 +1,38 @@
-/**
- * watchdog.ts — Daemon auto-restart mechanism
- *
- * NOTE: The watchdog currently runs in the same process as the daemon.
- * This means it cannot restart the daemon if the process crashes.
- * For true resilience, the watchdog should be spawned as a separate
- * process via `child_process.spawn()` with `detached: true`.
- *
- * If the daemon process crashes or is killed unexpectedly, the watchdog
- * detects the stale PID file and relaunches the daemon automatically.
- *
- * Usage: `claudestat start --watchdog`
- * The watchdog runs as a separate lightweight process that periodically
- * checks if the daemon PID is still alive.
- */
+import { spawn, type ChildProcess } from 'child_process'
 
-import fs from 'fs'
-import { spawn } from 'child_process'
-import { getPidFile } from './paths'
+const BACKOFF_BASE_MS = 1_000
+const BACKOFF_MAX_MS = 30_000
+let attempt = 0
 
-const PID_FILE = getPidFile()
-const CHECK_INTERVAL_MS = 10_000
-const RESTART_COOLDOWN_MS = 30_000
-
-let lastRestart = 0
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
+function getBackoff(): number {
+  const delay = Math.min(BACKOFF_BASE_MS * Math.pow(2, attempt), BACKOFF_MAX_MS)
+  attempt++
+  return delay
 }
 
-function readPid(): number | null {
-  try {
-    const raw = fs.readFileSync(PID_FILE, 'utf8').trim()
-    const pid = parseInt(raw, 10)
-    return isNaN(pid) ? null : pid
-  } catch {
-    return null
-  }
-}
-
-function restartDaemon() {
-  const now = Date.now()
-  if (now - lastRestart < RESTART_COOLDOWN_MS) return
-  lastRestart = now
-
-  console.log(`[watchdog] Daemon not running — restarting...`)
-
-  const child = spawn(process.execPath, [process.argv[1] ?? 'claudestat', 'start'], {
-    detached: true,
-    stdio: 'ignore',
+function spawnDaemon(): ChildProcess {
+  const env = { ...process.env, CLAUDESTAT_DAEMON: '1' }
+  delete env.CLAUDESTAT_WATCHDOG
+  const child = spawn(process.execPath, process.argv.slice(2), {
+    stdio: 'inherit',
+    env,
   })
-  child.unref()
-
-  console.log(`[watchdog] Daemon restarted (pid ${child.pid})`)
+  attempt = 0
+  return child
 }
 
-export function startWatchdog() {
-  console.log(`[watchdog] Starting — monitoring daemon every ${CHECK_INTERVAL_MS / 1000}s`)
+export function startWatchdog(): void {
+  let child = spawnDaemon()
 
-  const interval = setInterval(() => {
-    const pid = readPid()
-    if (pid === null) {
-      restartDaemon()
-      return
+  child.on('exit', (code, signal) => {
+    if (signal === 'SIGTERM' || signal === 'SIGINT') {
+      process.exit(0)
     }
-    if (!isProcessAlive(pid)) {
-      console.log(`[watchdog] Daemon pid ${pid} is dead`)
-      try { fs.unlinkSync(PID_FILE) } catch {}
-      restartDaemon()
-    }
-  }, CHECK_INTERVAL_MS).unref()
+    const delay = getBackoff()
+    console.error(`[watchdog] Daemon exited (code=${code}) — restarting in ${delay}ms`)
+    setTimeout(() => { child = spawnDaemon() }, delay)
+  })
 
-  process.on('SIGTERM', () => { clearInterval(interval); process.exit(0) })
-  process.on('SIGINT',  () => { clearInterval(interval); process.exit(0) })
+  process.on('SIGTERM', () => { child.kill('SIGTERM') })
+  process.on('SIGINT',  () => { child.kill('SIGINT')  })
 }

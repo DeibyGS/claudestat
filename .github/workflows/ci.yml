@@ -53,6 +53,20 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Check dashboard build freshness
+        run: |
+          SRC_MTIME=$(find dashboard/src -type f -exec stat -c %Y {} + | sort -rn | head -1)
+          DIST_MTIME=$(find dashboard/dist -type f -exec stat -c %Y {} + 2>/dev/null | sort -rn | head -1)
+          if [ -z "$DIST_MTIME" ]; then
+            echo "❌ dashboard/dist/ is empty or missing"
+            exit 1
+          fi
+          if [ "$SRC_MTIME" -gt "$DIST_MTIME" ]; then
+            echo "❌ dashboard/dist/ is stale — source files are newer than built output"
+            exit 1
+          fi
+          echo "✅ dashboard build is up to date"
+
       - name: Test
         run: npm test
 

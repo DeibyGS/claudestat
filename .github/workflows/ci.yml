@@ -54,18 +54,18 @@ jobs:
         run: npm run build
 
       - name: Check dashboard build freshness
-        run: |
-          SRC_MTIME=$(find dashboard/src -type f -exec stat -c %Y {} + | sort -rn | head -1)
-          DIST_MTIME=$(find dashboard/dist -type f -exec stat -c %Y {} + 2>/dev/null | sort -rn | head -1)
-          if [ -z "$DIST_MTIME" ]; then
-            echo "❌ dashboard/dist/ is empty or missing"
-            exit 1
-          fi
-          if [ "$SRC_MTIME" -gt "$DIST_MTIME" ]; then
-            echo "❌ dashboard/dist/ is stale — source files are newer than built output"
-            exit 1
-          fi
-          echo "✅ dashboard build is up to date"
+        run: node -e "
+          const fs = require('fs'), path = require('path');
+          function latestMtime(dir) {
+            let t = 0;
+            function walk(d) { for (const e of fs.readdirSync(d,{withFileTypes:!0})) { const f = path.join(d,e.name); if (e.isDirectory()) walk(f); else { const s = fs.statSync(f); if (s.mtimeMs > t) t = s.mtimeMs; } } }
+            try { walk(dir); } catch { return 0; } return t;
+          }
+          const src = latestMtime('dashboard/src'), dist = latestMtime('dashboard/dist');
+          if (!dist) { console.error('❌ dashboard/dist/ is empty or missing'); process.exit(1); }
+          if (src > dist) { console.error('❌ dashboard/dist/ is stale — source files are newer than built output'); process.exit(1); }
+          console.log('✅ dashboard build is up to date');
+        "
 
       - name: Test
         run: npm test

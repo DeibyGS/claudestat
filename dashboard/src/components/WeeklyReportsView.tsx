@@ -88,13 +88,13 @@ export function WeeklyReportsView() {
       const r = await fetch('/api/weekly-reports/generate-now', { method: 'POST' })
       const d = await r.json()
       if (d.skipped) {
-        setImportMsg(`Ya existe un informe para hoy (${d.date})`)
+        setImportMsg(`Report already exists for today (${d.date})`)
       } else {
-        setImportMsg(`Informe generado: ${d.date}`)
+        setImportMsg(`Report generated: ${d.date}`)
         fetchReports()
       }
     } catch {
-      setImportMsg('Error al generar')
+      setImportMsg('Generation failed')
     }
     setGenerating(false)
   }
@@ -194,11 +194,11 @@ export function WeeklyReportsView() {
       <div style={S.sidebar}>
         <div style={S.sidebarHeader}>
           <FileText size={12} />
-          <span style={{ flex: 1 }}>Informes semanales</span>
+          <span style={{ flex: 1 }}>Weekly reports</span>
           <button
             onClick={handleGenerateNow}
             disabled={generating}
-            title="Generar informe ahora"
+            title="Generate report now"
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
               background: 'none', border: '1px solid #30363d',
@@ -208,12 +208,12 @@ export function WeeklyReportsView() {
             }}
           >
             <Zap size={10} />
-            {generating ? '…' : 'Generar'}
+            {generating ? '…' : 'Generate'}
           </button>
           <button
             onClick={handleImport}
             disabled={importing}
-            title="Importar reportes de ~/.claude/reports/"
+            title="Import reports from ~/.claude/reports/"
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
               background: 'none', border: '1px solid #30363d',
@@ -223,7 +223,7 @@ export function WeeklyReportsView() {
             }}
           >
             <Download size={10} />
-            {importing ? '…' : 'Importar'}
+            {importing ? '…' : 'Import'}
           </button>
         </div>
         {importMsg && (
@@ -234,7 +234,7 @@ export function WeeklyReportsView() {
         <div style={S.reportList}>
           {reports.length === 0 && (
             <div style={{ padding: 14, fontSize: 11, color: '#484f58' }}>
-              Sin reportes. El script weekly-review.sh los genera cada lunes.
+              No reports yet. Run weekly-review.sh to generate them (runs every Monday).
             </div>
           )}
           {reports.map(r => (
@@ -274,7 +274,7 @@ export function WeeklyReportsView() {
         {/* Gráfica de tareas por semana */}
         {reports.length > 1 && (
           <div style={S.chartSection}>
-            <div style={S.chartTitle}>TAREAS POR SEMANA</div>
+            <div style={S.chartTitle}>TASKS PER WEEK</div>
             <ResponsiveContainer width="100%" height={90}>
               <BarChart data={chartData} barSize={14} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
                 <XAxis dataKey="week" tick={{ fontSize: 10, fill: '#6e7681' }} axisLine={false} tickLine={false} />
@@ -286,8 +286,8 @@ export function WeeklyReportsView() {
                   cursor={{ fill: '#21262d' }}
                 />
                 <Legend iconSize={8} wrapperStyle={{ fontSize: 10, color: '#8b949e' }} />
-                <Bar dataKey="done"    name="Completadas" fill="#3fb950" radius={[2, 2, 0, 0]} />
-                <Bar dataKey="pending" name="Pendientes"  fill="#30363d" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="done"    name="Completed" fill="#3fb950" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="pending" name="Pending"   fill="#30363d" radius={[2, 2, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

@@ -428,7 +428,7 @@ export default function App() {
       {activeTab === 'live' && (
         <>
           <LiveSourceBar
-            sources={liveSources}
+            sources={freshSources}
             active={activeLiveSessionId}
             onSelect={setActiveLiveSessionId}
             toolStatus={toolStatus}

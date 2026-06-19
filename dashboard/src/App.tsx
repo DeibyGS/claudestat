@@ -484,7 +484,7 @@ export default function App() {
                 : 'idle'
               return (
                 <TracePanel
-                  events={isClaudeCode ? ccEvents : opencodeEvents}
+                  events={isClaudeCode || !selectedSession ? ccEvents : opencodeEvents}
                   startedAt={isClaudeCode ? (ccEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now()) : (opencodeEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now())}
                   cost={sourceCost}
                   blockCosts={isClaudeCode ? state.blockCosts : []}

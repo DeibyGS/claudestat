@@ -20,6 +20,8 @@ const DB_PATH = process.env.CLAUDESTAT_DB_PATH ?? path.join(CLAUDESTAT_DIR, 'eve
 fs.mkdirSync(CLAUDESTAT_DIR, { recursive: true })
 
 const db = new DatabaseSync(DB_PATH)
+db.prepare('PRAGMA journal_mode=WAL').get()
+db.exec('PRAGMA busy_timeout=5000')
 
 // ─── Tool response size cap ────────────────────────────────────────────────────
 

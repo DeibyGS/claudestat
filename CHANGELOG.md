@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-06-20
+
+### Added
+
+- **Persistent alert state** — cycle, weekly, and context thresholds now survive daemon restarts via `~/.claudestat/alert-state.json`; no more notification spam on restart
+- **Actionable MCP push notifications** — context/cycle/weekly messages now include hints like `/compact`, `/checkpoint`, and estimated days remaining
+
+### Fixed
+
+- **CC disappearing from Live navbar** — `supersededIds` logic now scoped to `source !== 'claude-code'`; CC main session no longer suppressed by its own Agent sub-sessions
+- **MCP context re-fire on sub-agent switch** — thresholds only reset when context drops below 40%, preventing duplicate alerts when CC spawns sub-agents
+
 ## [1.11.1] - 2026-06-19
 
 ### Fixed

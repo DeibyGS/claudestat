@@ -21,7 +21,7 @@ const SystemView   = lazy(() => import('./components/SystemView').then(m => ({ d
 const OrchestrateView = lazy(() => import('./components/OrchestrateView').then(m => ({ default: m.OrchestrateView })))
 
 const HEAVY_BLOCK_THRESHOLD = 500_000
-const STALE_SOURCE_MS = 5 * 60 * 1000
+const STALE_SOURCE_MS = 30 * 60 * 1000
 const MAX_EVENTS = 10_000
 
 

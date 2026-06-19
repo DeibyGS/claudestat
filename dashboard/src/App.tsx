@@ -301,14 +301,14 @@ export default function App() {
   const orchProjectPath = orchData && (orchData.status === 'active' || orchData.status === 'paused') ? orchData.project_path : null
   const liveSources = activeSources.filter(s => !orchProjectPath || !s.project || s.project !== orchProjectPath)
   const freshSources = activeSources.filter(s => Date.now() - s.last_seen_ms < STALE_SOURCE_MS)
-  // Always keep SSE-active CC session and compacting session visible even if >5min stale
+  // Always keep selected, SSE-active, and compacting sessions visible even if >5min stale
   const visibleSources = useMemo(() => {
-    const pinned = new Set([state.sessionId, compactingSessionId].filter(Boolean) as string[])
+    const pinned = new Set([activeLiveSessionId, state.sessionId, compactingSessionId].filter(Boolean) as string[])
     const base = freshSources
     const extra = [...pinned].filter(id => !base.find(s => s.sessionId === id))
       .map(id => activeSources.find(s => s.sessionId === id)).filter(Boolean) as typeof activeSources
     return extra.length ? [...extra, ...base] : base
-  }, [activeSources, freshSources, state.sessionId, compactingSessionId])
+  }, [activeSources, freshSources, activeLiveSessionId, state.sessionId, compactingSessionId])
   const selectedSession = activeSources.find(s => s.sessionId === activeLiveSessionId)
   const isOcActive = selectedSession && selectedSession.source !== 'claude-code'
   const ocSessionId = selectedSession?.sessionId

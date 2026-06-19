@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, Component, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, Component, type ReactNode } from 'react'
 import { AlertTriangle, WifiOff, Zap, TrendingUp } from 'lucide-react'
 import type {
   AppState, TraceEvent, CostInfo, BlockCost, DailyActivity,
@@ -58,7 +58,7 @@ export default function App() {
   const [projects,        setProjects]       = useState<ProjectSummary[]>([])
   const [activeProject,   setActiveProject]  = useState<string | null>(null)
   const [projectsLoading, setProjectsLoading] = useState(true)
-  const [compacting,      setCompacting]     = useState(false)
+  const [compactingSessionId, setCompactingSessionId] = useState<string | null>(null)
   const [killSwitchActive, setKillSwitchActive] = useState(false)
   const [quota,        setQuota]       = useState<QuotaData | undefined>()
   const [configOpen,   setConfigOpen]  = useState(false)
@@ -154,10 +154,9 @@ export default function App() {
           }
 
           if (msg.type === 'compact_detected') {
-            setCompacting(true)
-            setTimeout(() => setCompacting(false), 15_000)
-            // Limpiar contexto: tras compactación el dato anterior ya no es válido.
-            // El siguiente cost_update traerá el valor real post-compact.
+            const sid = msg.payload?.session_id ?? null
+            setCompactingSessionId(sid)
+            setTimeout(() => setCompactingSessionId(null), 30_000)
             setState(prev => prev.cost
               ? { ...prev, cost: { ...prev.cost, context_used: undefined, context_window: undefined } }
               : prev
@@ -302,6 +301,14 @@ export default function App() {
   const orchProjectPath = orchData && (orchData.status === 'active' || orchData.status === 'paused') ? orchData.project_path : null
   const liveSources = activeSources.filter(s => !orchProjectPath || !s.project || s.project !== orchProjectPath)
   const freshSources = activeSources.filter(s => Date.now() - s.last_seen_ms < STALE_SOURCE_MS)
+  // Always keep SSE-active CC session and compacting session visible even if >5min stale
+  const visibleSources = useMemo(() => {
+    const pinned = new Set([state.sessionId, compactingSessionId].filter(Boolean) as string[])
+    const base = freshSources
+    const extra = [...pinned].filter(id => !base.find(s => s.sessionId === id))
+      .map(id => activeSources.find(s => s.sessionId === id)).filter(Boolean) as typeof activeSources
+    return extra.length ? [...extra, ...base] : base
+  }, [activeSources, freshSources, state.sessionId, compactingSessionId])
   const selectedSession = activeSources.find(s => s.sessionId === activeLiveSessionId)
   const isOcActive = selectedSession && selectedSession.source !== 'claude-code'
   const ocSessionId = selectedSession?.sessionId
@@ -421,17 +428,18 @@ export default function App() {
       {/* Alertas globales — visibles en cualquier pestaña */}
       {connStatus === 'error'  && <DisconnectedBanner />}
       {killSwitchActive        && <KillSwitchBanner />}
-      {compacting && <CompactBanner />}
+      {compactingSessionId && <CompactBanner />}
       {ccHeavyTokens !== null && <HeavyContextBanner source="claude-code" tokens={ccHeavyTokens} cacheTokens={ccHeavyCache} />}
       {ocHeavyTokens !== null && <HeavyContextBanner source="opencode" tokens={ocHeavyTokens} cacheTokens={ocHeavyCache} />}
 
       {activeTab === 'live' && (
         <>
           <LiveSourceBar
-            sources={freshSources}
+            sources={visibleSources}
             active={activeLiveSessionId}
             onSelect={setActiveLiveSessionId}
             toolStatus={toolStatus}
+            compactingSessionId={compactingSessionId}
           />
           <div style={{
             padding: '3px 16px', borderBottom: '1px solid #21262d',

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.1] - 2026-06-19
+
+### Fixed
+
+- **Live view flash** — TracePanel no longer shows "Waiting for activity" during the 10s active-sessions poll gap; falls back to SSE events when no session is selected
+- **SQLite WAL mode** — enabled `PRAGMA journal_mode=WAL` and `PRAGMA busy_timeout=5000` to prevent `database is locked` errors and CPU spin (98% CPU) when daemon and MCP server write concurrently
+- **Watchdog test hang** — `tests/index.ts` hung indefinitely because `startWatchdog()` spawned real child processes in tests; test now verifies the export without calling it
+- **i18n WeeklyReportsView** — translated remaining Spanish strings to English (labels, tooltips, chart legend, status messages)
+- **Dashboard build memory** — added `rollupOptions.maxParallelFileOps: 2` to prevent vite being killed by macOS memory pressure (SIGTERM) during `npm publish`
+
 ## [1.11.0] - 2026-06-18
 
 ### Added

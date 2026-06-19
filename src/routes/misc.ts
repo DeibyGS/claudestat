@@ -148,6 +148,19 @@ miscRouter.get('/claude-stats', (_req: Request, res: Response) => {
   res.json(readClaudeStats())
 })
 
+// ─── GET /api/build-id — mtime del dashboard build para auto-reload ──────────
+
+miscRouter.get('/api/build-id', (_req: Request, res: Response) => {
+  try {
+    const { getDashboardDir } = require('../paths')
+    const indexPath = path.join(getDashboardDir(), 'index.html')
+    const mtime = fs.statSync(indexPath).mtimeMs
+    res.json({ buildId: String(Math.floor(mtime)) })
+  } catch {
+    res.json({ buildId: '0' })
+  }
+})
+
 // ─── GET /api/active-sessions — fuentes activas en los últimos 5 min ──────────
 
 miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {

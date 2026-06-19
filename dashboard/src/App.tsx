@@ -126,9 +126,18 @@ export default function App() {
   useEffect(() => {
     let es: EventSource
     let retryTimer: ReturnType<typeof setTimeout>
+    let initialBuildId: string | null = null
+    fetch('/api/build-id').then(r => r.json()).then(d => { initialBuildId = d.buildId }).catch(() => {})
     function connect() {
       es = new EventSource('/stream')
-      es.addEventListener('open', () => setConnStatus('connected'))
+      es.addEventListener('open', () => {
+        setConnStatus('connected')
+        if (initialBuildId !== null) {
+          fetch('/api/build-id').then(r => r.json()).then(d => {
+            if (d.buildId !== initialBuildId) window.location.reload()
+          }).catch(() => {})
+        }
+      })
       es.addEventListener('message', (e: MessageEvent) => {
         try {
           const msg = JSON.parse(e.data)

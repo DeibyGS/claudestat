@@ -8,6 +8,7 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     rollupOptions: {
+      maxParallelFileOps: 2,
       output: {
         manualChunks: {
           'vendor-react': ['react', 'react-dom'],

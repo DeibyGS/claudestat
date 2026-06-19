@@ -14,10 +14,11 @@ function fmtCost(usd: number): string {
 }
 
 interface Props {
-  sources:    ActiveSource[]
-  active:     string
-  onSelect:   (sessionId: string) => void
-  toolStatus?: ToolStatus
+  sources:              ActiveSource[]
+  active:               string
+  onSelect:             (sessionId: string) => void
+  toolStatus?:          ToolStatus
+  compactingSessionId?: string | null
 }
 
 function sessionLabel(source: string, sessionId: string): string {
@@ -41,7 +42,7 @@ function deriveStatus(ts: ToolStatusEntry | undefined, lastSeenMs: number): { la
   return { label: `idle · ${relativeTime(lastSeenMs)}`, color: '#484f58' }
 }
 
-export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Props) {
+export function LiveSourceBar({ sources, active, onSelect, toolStatus = {}, compactingSessionId }: Props) {
   if (sources.length === 0) return null
 
   return (
@@ -53,13 +54,16 @@ export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Pr
       background: '#0d1117', flexWrap: 'wrap',
     }}>
       {sources.map(s => {
-        const isActive   = s.sessionId === active
-        const ts         = toolStatus[s.source]
-        const isWorking  = ts?.status === 'working'
-        const lastTask   = isWorking ? (ts?.last_task ?? null) : null
-        const dotColor   = s.source === 'opencode' ? '#3fb950' : s.source === 'claude-code' ? '#58a6ff' : '#8b949e'
-        const label      = sessionLabel(s.source, s.sessionId)
-        const derived    = deriveStatus(ts, s.last_seen_ms)
+        const isActive      = s.sessionId === active
+        const isCompacting  = s.sessionId === compactingSessionId
+        const ts            = toolStatus[s.source]
+        const isWorking     = ts?.status === 'working'
+        const lastTask      = isWorking ? (ts?.last_task ?? null) : null
+        const dotColor      = isCompacting ? '#d29922' : s.source === 'opencode' ? '#3fb950' : s.source === 'claude-code' ? '#58a6ff' : '#8b949e'
+        const label         = sessionLabel(s.source, s.sessionId)
+        const derived       = isCompacting
+          ? { label: 'compacting…', color: '#d29922' }
+          : deriveStatus(ts, s.last_seen_ms)
         return (
           <button
             key={s.sessionId}
@@ -69,7 +73,7 @@ export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Pr
               padding:        '4px 10px', borderRadius: 6, cursor: 'pointer',
               fontSize:       11, fontFamily: 'inherit',
               background:     isActive ? '#161b22' : 'transparent',
-              border:         isActive ? '1px solid #1f6feb' : '1px solid #30363d',
+              border:         isActive ? '1px solid #1f6feb' : isCompacting ? '1px solid #d29922' : '1px solid #30363d',
               color:          isActive ? '#e6edf3' : '#8b949e',
               transition:     'all 0.15s',
             }}
@@ -78,7 +82,7 @@ export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Pr
               <span style={{
                 width: 6, height: 6, borderRadius: '50%',
                 background: dotColor, display: 'inline-block', flexShrink: 0,
-                ...(isWorking ? { animation: 'pulse-dot 1.4s ease-in-out infinite' } : {}),
+                animation: (isWorking || isCompacting) ? 'pulse-dot 1.4s ease-in-out infinite' : undefined,
               }} />
               <span style={{ fontWeight: isActive ? 600 : 400 }}>
                 {label}
@@ -95,7 +99,7 @@ export function LiveSourceBar({ sources, active, onSelect, toolStatus = {} }: Pr
               maxWidth: 240, overflow: 'hidden',
               textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             }}>
-              {lastTask ?? derived.label}
+              {isCompacting ? derived.label : (lastTask ?? derived.label)}
             </div>
           </button>
         )

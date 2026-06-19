@@ -89,6 +89,17 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
 
   const selectedBlock = blocks.find(b => b.index === selectedIdx) ?? blocks[blocks.length - 1]
 
+  const selectedPrompt = useMemo(() => {
+    if (!selectedBlock || prompts.length === 0) return undefined
+    const blockStart = selectedBlock.tools[0]?.ts
+    if (!blockStart) return prompts.find(p => p.index === selectedBlock.index)
+    let best: SessionPromptItem | undefined
+    for (const p of prompts) {
+      if (p.ts <= blockStart && (!best || p.ts > best.ts)) best = p
+    }
+    return best
+  }, [selectedBlock, prompts])
+
   if (blocks.length === 0) {
     const emptyPane = (
       <div style={{ background: '#0d1117', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -224,7 +235,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
               startedAt={startedAt}
               blockCost={blockCosts[selectedBlock.index - 1]}
               sessionModel={cost?.model}
-              prompt={prompts.find(p => p.index === selectedBlock.index)?.text}
+              prompt={selectedPrompt?.text}
               defaultActorLabel={actorLabel}
             />
           ) : (

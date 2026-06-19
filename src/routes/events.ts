@@ -21,6 +21,7 @@ import {
   type CompactDetectedCallback,
 } from '../enricher'
 import { findJSONLForSession, extractSemanticData } from '../watchers/claude-code'
+import { getAlertState, persistAlertState } from '../alert-persist'
 
 // ─── Semantic extraction debounce: 3s after last new assistant turn ───────────
 const semanticDebounce = new Map<string, ReturnType<typeof setTimeout>>()
@@ -35,6 +36,12 @@ const CONTEXT_SAMPLES_MAX     = 20
 // ─── Context threshold tracking: qué thresholds ya se notificaron por sesión ──
 const contextThresholdsFired = new Map<string, Set<number>>()
 const CONTEXT_THRESHOLDS = [50, 75, 90] as const
+
+// Restore contextThresholdsFired from disk so restarts don't re-fire context alerts
+;(function restoreContextThresholds() {
+  const saved = getAlertState().contextThresholdsFired
+  for (const [sid, ths] of Object.entries(saved)) contextThresholdsFired.set(sid, new Set(ths))
+})()
 
 // ─── Session cost alert: sesiones que ya recibieron notificación ───────────────
 const sessionCostAlertFired = new Set<string>()
@@ -67,6 +74,12 @@ const alertCooldown = new Map<string, number>() // nivel → timestamp del últi
 const ALERT_COOLDOWN_MS = 60 * 60 * 1000    // 1 hora
 const SAMPLES_NEEDED    = 3                  // muestras para el moving average
 
+// Restore alertCooldown from disk so restarts don't reset the 1h cooldown
+;(function restoreAlertCooldown() {
+  const saved = getAlertState().quotaAlertCooldown
+  for (const [level, ts] of Object.entries(saved)) alertCooldown.set(level, ts)
+})()
+
 function shouldFireAlert(level: 'yellow' | 'orange' | 'red', pct: number): boolean {
   // Añadir muestra al buffer circular (máx SAMPLES_NEEDED)
   quotaSamples.push(pct)
@@ -80,6 +93,9 @@ function shouldFireAlert(level: 'yellow' | 'orange' | 'red', pct: number): boole
   if (Date.now() - lastFired < ALERT_COOLDOWN_MS) return false
 
   alertCooldown.set(level, Date.now())
+  const as = getAlertState()
+  as.quotaAlertCooldown = Object.fromEntries(alertCooldown)
+  persistAlertState()
   return true
 }
 
@@ -357,6 +373,9 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
         for (const th of CONTEXT_THRESHOLDS) {
           if (pct >= th && !fired.has(th)) {
             fired.add(th)
+            const asCTX = getAlertState()
+            asCTX.contextThresholdsFired[sessionId] = Array.from(fired)
+            persistAlertState()
             sendDesktopNotification(
               `claudestat — Context at ${th}%`,
               `${cost.context_used.toLocaleString()} / ${cost.context_window.toLocaleString()} tokens (${pct}%) — session ${sessionId.slice(0, 8)}`
@@ -421,6 +440,8 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
         totalUsd:     cost.lastEntry.totalUsd,
         inputTokens:  cost.lastEntry.inputTokens,
         outputTokens: cost.lastEntry.outputTokens,
+        cacheRead:    cost.lastEntry.cacheRead,
+        cacheCreate:  cost.lastEntry.cacheCreate,
       }
     })
 

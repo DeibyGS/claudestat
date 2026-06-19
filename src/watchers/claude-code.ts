@@ -76,10 +76,12 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
       lastModel:      prevTotals?.lastModel,
     }
 
-    let lastInputUsd    = 0
-    let lastOutputUsd   = 0
+    let lastInputUsd     = 0
+    let lastOutputUsd    = 0
     let lastInputTokens  = 0
     let lastOutputTokens = 0
+    let lastCacheRead    = 0
+    let lastCacheCreate  = 0
     let hasNewAssistant  = false
 
     for (const raw of newContent.split('\n')) {
@@ -123,6 +125,8 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
         lastOutputUsd    = out * price.output / M
         lastInputTokens  = inp + cacheRead + cacheCreate
         lastOutputTokens = out
+        lastCacheRead    = cacheRead
+        lastCacheCreate  = cacheCreate
         totals.lastModel = model
       } catch { /* skip malformed lines */ }
     }
@@ -134,6 +138,7 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
         inputUsd: lastInputUsd, outputUsd: lastOutputUsd,
         totalUsd,
         inputTokens: lastInputTokens, outputTokens: lastOutputTokens,
+        cacheRead: lastCacheRead, cacheCreate: lastCacheCreate,
       }
     }
 

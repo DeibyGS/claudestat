@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, Component, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, Component, type ReactNode } from 'react'
 import { AlertTriangle, WifiOff, Zap, TrendingUp } from 'lucide-react'
 import type {
   AppState, TraceEvent, CostInfo, BlockCost, DailyActivity,
@@ -21,7 +21,7 @@ const SystemView   = lazy(() => import('./components/SystemView').then(m => ({ d
 const OrchestrateView = lazy(() => import('./components/OrchestrateView').then(m => ({ default: m.OrchestrateView })))
 
 const HEAVY_BLOCK_THRESHOLD = 500_000
-const STALE_SOURCE_MS = 5 * 60 * 1000
+const STALE_SOURCE_MS = 30 * 60 * 1000
 const MAX_EVENTS = 10_000
 
 
@@ -58,7 +58,7 @@ export default function App() {
   const [projects,        setProjects]       = useState<ProjectSummary[]>([])
   const [activeProject,   setActiveProject]  = useState<string | null>(null)
   const [projectsLoading, setProjectsLoading] = useState(true)
-  const [compacting,      setCompacting]     = useState(false)
+  const [compactingSessionId, setCompactingSessionId] = useState<string | null>(null)
   const [killSwitchActive, setKillSwitchActive] = useState(false)
   const [quota,        setQuota]       = useState<QuotaData | undefined>()
   const [configOpen,   setConfigOpen]  = useState(false)
@@ -126,9 +126,18 @@ export default function App() {
   useEffect(() => {
     let es: EventSource
     let retryTimer: ReturnType<typeof setTimeout>
+    let initialBuildId: string | null = null
+    fetch('/api/build-id').then(r => r.json()).then(d => { initialBuildId = d.buildId }).catch(() => {})
     function connect() {
       es = new EventSource('/stream')
-      es.addEventListener('open', () => setConnStatus('connected'))
+      es.addEventListener('open', () => {
+        setConnStatus('connected')
+        if (initialBuildId !== null) {
+          fetch('/api/build-id').then(r => r.json()).then(d => {
+            if (d.buildId !== initialBuildId) window.location.reload()
+          }).catch(() => {})
+        }
+      })
       es.addEventListener('message', (e: MessageEvent) => {
         try {
           const msg = JSON.parse(e.data)
@@ -154,10 +163,9 @@ export default function App() {
           }
 
           if (msg.type === 'compact_detected') {
-            setCompacting(true)
-            setTimeout(() => setCompacting(false), 15_000)
-            // Limpiar contexto: tras compactación el dato anterior ya no es válido.
-            // El siguiente cost_update traerá el valor real post-compact.
+            const sid = msg.payload?.session_id ?? null
+            setCompactingSessionId(sid)
+            setTimeout(() => setCompactingSessionId(null), 30_000)
             setState(prev => prev.cost
               ? { ...prev, cost: { ...prev.cost, context_used: undefined, context_window: undefined } }
               : prev
@@ -182,9 +190,13 @@ export default function App() {
     return () => { es?.close(); clearTimeout(retryTimer) }
   }, [])
 
+  // ccSessionId — necesario antes de los effects para evitar TDZ en deps arrays
+  const ccSessionId = activeSources.find(s => s.sessionId === activeLiveSessionId && s.source === 'claude-code')?.sessionId
+
   // ── Todos los eventos históricos: cargar cuando cambia la sesión ─────────────
+  // Guard: si ccSessionId está seteado, el efecto de polling CC (10s) ya hace este fetch
   useEffect(() => {
-    if (!state.sessionId) return
+    if (!state.sessionId || ccSessionId) return
     fetch(`/api/session-events?session_id=${state.sessionId}`)
       .then(r => r.ok ? r.json() : null)
       .then(d => {
@@ -195,16 +207,16 @@ export default function App() {
         )
       })
       .catch(() => {})
-  }, [state.sessionId])
+  }, [state.sessionId, ccSessionId])
 
   // ── Prompts: cargar cuando cambia la sesión ────────────────────────────────
   useEffect(() => {
-    if (!state.sessionId) return
+    if (!state.sessionId || ccSessionId) return
     fetch(`/prompts?session_id=${state.sessionId}`)
       .then(r => r.json())
       .then(d => setPrompts(d.prompts ?? []))
       .catch(() => {})
-  }, [state.sessionId])
+  }, [state.sessionId, ccSessionId])
 
   // ── Consolidated slow polling (60s): hidden-cost, claude-stats, projects ────
   useEffect(() => {
@@ -268,13 +280,13 @@ export default function App() {
       fetch('/api/active-sessions')
         .then(r => r.ok ? r.json() : null)
         .then((d: ActiveSource[] | null) => {
-          const sources = d ?? []
-          setActiveSources(sources)
-          if (sources.length > 0) {
+          if (d === null) return  // server error — keep previous activeSources
+          setActiveSources(d)
+          if (d.length > 0) {
             setActiveLiveSessionId(prev => {
-              if (sources.find(s => s.sessionId === prev)) return prev
-              const cc = sources.find(s => s.source === 'claude-code')
-              return cc ? cc.sessionId : sources[0].sessionId
+              if (d.find(s => s.sessionId === prev)) return prev
+              const cc = d.find(s => s.source === 'claude-code')
+              return cc ? cc.sessionId : d[0].sessionId
             })
           }
         })
@@ -302,6 +314,14 @@ export default function App() {
   const orchProjectPath = orchData && (orchData.status === 'active' || orchData.status === 'paused') ? orchData.project_path : null
   const liveSources = activeSources.filter(s => !orchProjectPath || !s.project || s.project !== orchProjectPath)
   const freshSources = activeSources.filter(s => Date.now() - s.last_seen_ms < STALE_SOURCE_MS)
+  // Always keep selected, SSE-active, and compacting sessions visible even if >5min stale
+  const visibleSources = useMemo(() => {
+    const pinned = new Set([activeLiveSessionId, state.sessionId, compactingSessionId].filter(Boolean) as string[])
+    const base = freshSources
+    const extra = [...pinned].filter(id => !base.find(s => s.sessionId === id))
+      .map(id => activeSources.find(s => s.sessionId === id)).filter(Boolean) as typeof activeSources
+    return extra.length ? [...extra, ...base] : base
+  }, [activeSources, freshSources, activeLiveSessionId, state.sessionId, compactingSessionId])
   const selectedSession = activeSources.find(s => s.sessionId === activeLiveSessionId)
   const isOcActive = selectedSession && selectedSession.source !== 'claude-code'
   const ocSessionId = selectedSession?.sessionId
@@ -334,8 +354,6 @@ export default function App() {
   }, [ocSessionId, isOcActive])
 
   // ── Claude Code events polling (10s when active CC session) ─────────────────
-  const ccSessionId = activeSources.find(s => s.sessionId === activeLiveSessionId && s.source === 'claude-code')?.sessionId
-
   useEffect(() => {
     if (!ccSessionId) return
     let cancelled = false
@@ -399,6 +417,49 @@ export default function App() {
     flex: 1, overflow: 'hidden', display: 'flex',
   }
 
+  // ── Live tab derived state — memoized to avoid recompute on every SSE event ──
+  const isClaudeCode = selectedSession?.source === 'claude-code'
+
+  const ccEvents = useMemo(
+    () => claudeCodeEvents.length > 0 ? claudeCodeEvents : state.events,
+    [claudeCodeEvents, state.events]
+  )
+
+  const sourceCost = useMemo(() => {
+    if (!selectedSession) return undefined
+    return {
+      cost_usd:             selectedSession.cost_usd,
+      input_tokens:         selectedSession.input_tokens,
+      output_tokens:        selectedSession.output_tokens,
+      cache_read:           selectedSession.cache_read,
+      cache_creation:       selectedSession.cache_creation,
+      efficiency_score:     isClaudeCode ? (state.cost?.efficiency_score ?? 100) : -1,
+      model:                selectedSession.model,
+      loops:                isClaudeCode ? (state.cost?.loops ?? []) : [],
+      context_used:         isClaudeCode ? state.cost?.context_used : ocContextInfo?.context_used,
+      context_window:       isClaudeCode ? state.cost?.context_window : ocContextInfo?.context_window,
+      projected_hourly_usd: isClaudeCode ? state.cost?.projected_hourly_usd : undefined,
+    }
+  }, [selectedSession, isClaudeCode, state.cost, ocContextInfo])
+
+  const ocBurnRate = useMemo(() => {
+    if (isClaudeCode || !selectedSession || opencodeEvents.length < 2) return undefined
+    const mins = (opencodeEvents[opencodeEvents.length - 1].ts - opencodeEvents[0].ts) / 60_000
+    if (mins < 2) return undefined
+    const total = selectedSession.input_tokens + selectedSession.output_tokens
+    return total > 0 ? Math.round(total / mins) : undefined
+  }, [isClaudeCode, selectedSession, opencodeEvents])
+
+  const ccLast  = ccEvents[ccEvents.length - 1]
+  const ccState: SessionState = !ccLast || Date.now() - ccLast.ts > 120_000 ? 'idle'
+    : ccLast.type === 'PreToolUse' ? 'working' : 'waiting_for_input'
+
+  const ocState: SessionState = !selectedSession ? 'idle'
+    : toolStatus[selectedSession.source]?.status === 'working' ? 'working'
+    : (Date.now() - selectedSession.last_seen_ms) < 10_000 ? 'working'
+    : (Date.now() - selectedSession.last_seen_ms) < 30_000 ? 'waiting_for_input'
+    : 'idle'
+
   const lastBlock = state.blockCosts.at(-1)
   const ccHeavyTokens = lastBlock && lastBlock.inputTokens >= HEAVY_BLOCK_THRESHOLD ? lastBlock.inputTokens : null
   const ccHeavyCache = lastBlock && lastBlock.cacheRead != null && lastBlock.cacheRead >= HEAVY_BLOCK_THRESHOLD ? lastBlock.cacheRead : lastBlock && lastBlock.context_used != null && lastBlock.context_used >= HEAVY_BLOCK_THRESHOLD ? lastBlock.context_used : undefined
@@ -421,17 +482,18 @@ export default function App() {
       {/* Alertas globales — visibles en cualquier pestaña */}
       {connStatus === 'error'  && <DisconnectedBanner />}
       {killSwitchActive        && <KillSwitchBanner />}
-      {compacting && <CompactBanner />}
+      {compactingSessionId && <CompactBanner />}
       {ccHeavyTokens !== null && <HeavyContextBanner source="claude-code" tokens={ccHeavyTokens} cacheTokens={ccHeavyCache} />}
       {ocHeavyTokens !== null && <HeavyContextBanner source="opencode" tokens={ocHeavyTokens} cacheTokens={ocHeavyCache} />}
 
       {activeTab === 'live' && (
         <>
           <LiveSourceBar
-            sources={liveSources}
+            sources={visibleSources}
             active={activeLiveSessionId}
             onSelect={setActiveLiveSessionId}
             toolStatus={toolStatus}
+            compactingSessionId={compactingSessionId}
           />
           <div style={{
             padding: '3px 16px', borderBottom: '1px solid #21262d',
@@ -446,61 +508,22 @@ export default function App() {
             </span>
           </div>
           <div style={liveLayout}>
-            {(() => {
-              const isClaudeCode = selectedSession?.source === 'claude-code'
-              const sourceCost: CostInfo | undefined = selectedSession ? {
-                cost_usd:             selectedSession.cost_usd,
-                input_tokens:         selectedSession.input_tokens,
-                output_tokens:        selectedSession.output_tokens,
-                cache_read:           selectedSession.cache_read,
-                cache_creation:       selectedSession.cache_creation,
-                efficiency_score:     isClaudeCode ? (state.cost?.efficiency_score ?? 100) : -1,
-                model:                selectedSession.model,
-                loops:                isClaudeCode ? (state.cost?.loops ?? []) : [],
-                context_used:         isClaudeCode ? state.cost?.context_used : ocContextInfo?.context_used,
-                context_window:       isClaudeCode ? state.cost?.context_window : ocContextInfo?.context_window,
-                projected_hourly_usd: isClaudeCode ? state.cost?.projected_hourly_usd : undefined,
-              } : undefined
-              const ocBurnRate = !isClaudeCode && selectedSession && opencodeEvents.length >= 2
-                ? (() => {
-                    const startTs = opencodeEvents[0].ts
-                    const endTs   = opencodeEvents[opencodeEvents.length - 1].ts
-                    const mins    = (endTs - startTs) / 60_000
-                    if (mins < 2) return undefined
-                    const total = selectedSession.input_tokens + selectedSession.output_tokens
-                    return total > 0 ? Math.round(total / mins) : undefined
-                  })()
-                : undefined
-              const ccEvents = claudeCodeEvents.length > 0 ? claudeCodeEvents : state.events
-              const ccLast   = ccEvents[ccEvents.length - 1]
-              const ccState: SessionState = !ccLast ? 'idle'
-                : Date.now() - ccLast.ts > 120_000 ? 'idle'
-                : ccLast.type === 'PreToolUse' ? 'working' : 'waiting_for_input'
-              const ocToolStatus = selectedSession ? toolStatus[selectedSession.source] : undefined
-              const ocState: SessionState = !selectedSession ? 'idle'
-                : ocToolStatus?.status === 'working' ? 'working'
-                : (Date.now() - selectedSession.last_seen_ms) < 30_000 ? 'working'
-                : (Date.now() - selectedSession.last_seen_ms) < 60_000 ? 'waiting_for_input'
-                : 'idle'
-              return (
-                <TracePanel
-                  events={isClaudeCode || !selectedSession ? ccEvents : opencodeEvents}
-                  startedAt={isClaudeCode ? (ccEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now()) : (opencodeEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now())}
-                  cost={sourceCost}
-                  blockCosts={isClaudeCode ? state.blockCosts : []}
-                  meta={isClaudeCode ? metaStats : undefined}
-                  quota={isClaudeCode ? quota : undefined}
-                  sessionState={isClaudeCode ? ccState : ocState}
-                  weeklyData={isClaudeCode ? state.weeklyData : []}
-                  hiddenCost={isClaudeCode ? hiddenCost : undefined}
-                  prompts={isClaudeCode ? claudeCodePrompts : opencodePrompts}
-                  quotaStats={isClaudeCode ? quotaStats : undefined}
-                  subAgentSessions={isClaudeCode ? state.subAgentSessions : []}
-                  cliLabel={isClaudeCode ? 'Claude Code' : (selectedSession ? (SOURCE_LABELS[selectedSession.source] ?? selectedSession.source) : 'Claude Code')}
-                  burnRateTokensPerMin={isClaudeCode ? undefined : ocBurnRate}
-                />
-              )
-            })()}
+            <TracePanel
+              events={isClaudeCode || !selectedSession ? ccEvents : opencodeEvents}
+              startedAt={isClaudeCode ? (ccEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now()) : (opencodeEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now())}
+              cost={sourceCost}
+              blockCosts={isClaudeCode ? state.blockCosts : []}
+              meta={isClaudeCode ? metaStats : undefined}
+              quota={isClaudeCode ? quota : undefined}
+              sessionState={isClaudeCode ? ccState : ocState}
+              weeklyData={isClaudeCode ? state.weeklyData : []}
+              hiddenCost={isClaudeCode ? hiddenCost : undefined}
+              prompts={isClaudeCode ? claudeCodePrompts : opencodePrompts}
+              quotaStats={isClaudeCode ? quotaStats : undefined}
+              subAgentSessions={isClaudeCode ? state.subAgentSessions : []}
+              cliLabel={isClaudeCode ? 'Claude Code' : (selectedSession ? (SOURCE_LABELS[selectedSession.source] ?? selectedSession.source) : 'Claude Code')}
+              burnRateTokensPerMin={isClaudeCode ? undefined : ocBurnRate}
+            />
           </div>
         </>
       )}
@@ -628,7 +651,7 @@ function handleMessage(prev: AppState, msg: any): AppState {
   if (msg.type === 'block_cost') {
     const p = msg.payload
     if (p.session_id !== prev.sessionId) return prev
-    const entry: BlockCost = { inputUsd: p.inputUsd, outputUsd: p.outputUsd, totalUsd: p.totalUsd, inputTokens: p.inputTokens ?? 0, outputTokens: p.outputTokens ?? 0, context_used: p.context_used, context_window: p.context_window }
+    const entry: BlockCost = { inputUsd: p.inputUsd, outputUsd: p.outputUsd, totalUsd: p.totalUsd, inputTokens: p.inputTokens ?? 0, outputTokens: p.outputTokens ?? 0, cacheRead: p.cacheRead, cache_creation: p.cacheCreate, context_used: p.context_used, context_window: p.context_window }
     // Acumular sub-turnos del bloque en curso — se empuja a blockCosts al recibir Stop
     const pend = prev.pendingBlockCost
     const merged: BlockCost = pend ? {
@@ -637,7 +660,9 @@ function handleMessage(prev: AppState, msg: any): AppState {
       totalUsd:       pend.totalUsd     + entry.totalUsd,
       inputTokens:    pend.inputTokens  + entry.inputTokens,
       outputTokens:   pend.outputTokens + entry.outputTokens,
-      context_used:   entry.context_used,   // keep latest — context grows monotonically
+      cacheRead:      (pend.cacheRead    ?? 0) + (entry.cacheRead    ?? 0),
+      cache_creation: (pend.cache_creation ?? 0) + (entry.cache_creation ?? 0),
+      context_used:   entry.context_used,
       context_window: entry.context_window,
     } : entry
     return { ...prev, pendingBlockCost: merged }

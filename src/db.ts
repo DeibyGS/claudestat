@@ -232,11 +232,13 @@ export interface EventRow {
 }
 
 export interface BlockCostEntry {
-  inputUsd:    number   // costo de los tokens de entrada (prompt + contexto)
-  outputUsd:   number   // costo de los tokens de salida (respuesta de Claude)
-  totalUsd:    number
-  inputTokens: number   // tokens de entrada de este bloque
-  outputTokens: number  // tokens de salida de este bloque
+  inputUsd:     number
+  outputUsd:    number
+  totalUsd:     number
+  inputTokens:  number
+  outputTokens: number
+  cacheRead?:   number
+  cacheCreate?: number
 }
 
 export interface CostUpdate {

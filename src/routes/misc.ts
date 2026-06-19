@@ -164,7 +164,8 @@ miscRouter.get('/api/build-id', (_req: Request, res: Response) => {
 // ─── GET /api/active-sessions — fuentes activas en los últimos 5 min ──────────
 
 miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
-  const cutoff   = Date.now() - 30 * 60 * 1000
+  const CC_CUTOFF = Date.now() - 30 * 60 * 1000  // CC can wait 30 min for user input
+  const OC_CUTOFF = Date.now() - 15 * 60 * 1000  // OC: 15 min (may wait for user input too)
   const sessions = dbOps.getAllSessions()
   const KNOWN_SOURCES = new Set(['claude-code', 'opencode', 'codex', 'amp', 'droid', 'codebuff'])
 
@@ -174,13 +175,19 @@ miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
     project: string | null
   }> = []
 
-  const activeIds = new Set(sessions.filter(s => (s.last_event_at ?? s.started_at) >= cutoff).map(s => s.id))
+  const activeIds = new Set(sessions.filter(s => {
+    const cutoff = s.source === 'claude-code' ? CC_CUTOFF : OC_CUTOFF
+    return (s.last_event_at ?? s.started_at) >= cutoff
+  }).map(s => s.id))
+  // supersededIds: only for OC-style session chaining (newer session replaces older parent).
+  // CC sub-agent sessions are handled in-loop by the sameProject check — do not suppress CC parents.
   const supersededIds = new Set(
-    sessions.filter(s => s.parent_session_id && activeIds.has(s.parent_session_id)).map(s => s.parent_session_id!)
+    sessions.filter(s => s.source !== 'claude-code' && s.parent_session_id && activeIds.has(s.parent_session_id)).map(s => s.parent_session_id!)
   )
 
   for (const s of sessions) {
     const lastSeen = s.last_event_at ?? s.started_at
+    const cutoff   = s.source === 'claude-code' ? CC_CUTOFF : OC_CUTOFF
     if (lastSeen < cutoff) continue
     const src = s.source ?? 'unknown'
     if (!KNOWN_SOURCES.has(src)) continue

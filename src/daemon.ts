@@ -39,6 +39,7 @@ import { stopRateLimiter }                                            from './mi
 import { summarizeSession }                                         from './summarizer'
 import { getPidFile, getClaudestatDir, getDashboardDir, portCheckCmd, writePortFile, getPauseSignalFile, getOpencodeDir }            from './paths'
 import { logger } from './logger'
+import { getAlertState, persistAlertState } from './alert-persist'
 
 const PORT = readConfig().port
 const app  = express()
@@ -167,6 +168,7 @@ let _lastWeeklyAlertLevel: string | null = null
 let _resetReminderFired = false
 let _weeklyThresholdsFired = new Set<number>()
 let _lastWeeklyPctSeen = 0
+let _lastCycleResetAt  = 0
 let _contextThresholdsFired = new Map<string, Set<number>>()
 const CONTEXT_THRESHOLDS = [50, 75, 90]
 
@@ -189,12 +191,43 @@ function checkAlertLevel(
 }
 
 function startAlertPolling() {
+  const as = getAlertState()
+  _lastCycleAlertLevel  = as.cycleAlertLevel
+  _lastWeeklyAlertLevel = as.weeklyAlertLevel
+  _weeklyThresholdsFired = new Set(as.weeklyThresholdsFired)
+  _resetReminderFired   = as.resetReminderFired
+  _lastWeeklyPctSeen    = as.lastWeeklyPctSeen
+  _lastCycleResetAt     = as.lastCycleResetAt
+  for (const [sid, ths] of Object.entries(as.contextThresholdsFired)) {
+    _contextThresholdsFired.set(sid, new Set(ths))
+  }
+
+  function saveState() {
+    const s = getAlertState()
+    s.cycleAlertLevel        = _lastCycleAlertLevel
+    s.weeklyAlertLevel       = _lastWeeklyAlertLevel
+    s.weeklyThresholdsFired  = Array.from(_weeklyThresholdsFired)
+    s.resetReminderFired     = _resetReminderFired
+    s.lastCycleResetAt       = _lastCycleResetAt
+    s.lastWeeklyPctSeen      = _lastWeeklyPctSeen
+    s.contextThresholdsFired = Object.fromEntries(
+      Array.from(_contextThresholdsFired.entries()).map(([k, v]) => [k, Array.from(v)])
+    )
+    persistAlertState()
+  }
+
   alertInterval = setInterval(() => {
     try {
       const cfg  = readConfig()
       if (!cfg.alertsEnabled) return
       const data = computeQuota(cfg.plan ?? undefined)
       const resetMins = Math.ceil(data.cycleResetMs / 60_000)
+
+      // Detect cycle reset — clear level tracking so new cycle can fire fresh
+      if (data.cycleResetAt !== _lastCycleResetAt && _lastCycleResetAt !== 0) {
+        _lastCycleAlertLevel = null
+      }
+      _lastCycleResetAt = data.cycleResetAt
 
       // ── Cycle 5h alerts ──────────────────────────────────────────────────────
       const cycleLevel = getWarnLevel(data.cyclePct, cfg.warnThresholds)
@@ -211,6 +244,7 @@ function startAlertPolling() {
           })
         }
       }
+      const prevCycleLevel = _lastCycleAlertLevel
       _lastCycleAlertLevel = checkAlertLevel(
         cycleLevel,
         _lastCycleAlertLevel,
@@ -218,6 +252,7 @@ function startAlertPolling() {
         'claudestat — 5h cycle alert',
         `${data.cyclePct}% of cycle used · resets in ${resetMins}m`
       )
+      if (_lastCycleAlertLevel !== prevCycleLevel) saveState()
 
       // ── Weekly alerts ────────────────────────────────────────────────────────
       const weeklyLevel = getWarnLevel(data.weeklyPctAll, cfg.weeklyWarnThresholds)
@@ -234,6 +269,7 @@ function startAlertPolling() {
           })
         }
       }
+      const prevWeeklyLevel = _lastWeeklyAlertLevel
       _lastWeeklyAlertLevel = checkAlertLevel(
         weeklyLevel,
         _lastWeeklyAlertLevel,
@@ -241,11 +277,13 @@ function startAlertPolling() {
         'claudestat — Weekly usage alert',
         `${data.weeklyPctAll}% of weekly quota used`
       )
+      if (_lastWeeklyAlertLevel !== prevWeeklyLevel) saveState()
 
       // ── Weekly plan threshold alerts (25/50/75/90/100%) ────────────────────────
       const weeklyPct = data.weeklyPctAll
       if (weeklyPct < _lastWeeklyPctSeen) {
         _weeklyThresholdsFired.clear()
+        saveState()
       }
       _lastWeeklyPctSeen = weeklyPct
       const WEEKLY_THRESHOLDS = [25, 50, 75, 90, 100] as const
@@ -265,6 +303,7 @@ function startAlertPolling() {
             'claudestat — Weekly plan usage',
             `Plan ${planLabel} · ${weeklyPct}% weekly · ~${daysLeft} days left · burn: ${burnStr}/day`
           )
+          saveState()
         }
       }
 
@@ -282,6 +321,7 @@ function startAlertPolling() {
             `Your 5h cycle resets in ${mins} min — good time to start a new task`
           )
           _resetReminderFired = true
+          saveState()
         }
       }
 
@@ -298,6 +338,7 @@ function startAlertPolling() {
             for (const th of CONTEXT_THRESHOLDS) {
               if (pct >= th && !fired.has(th)) {
                 fired.add(th)
+                saveState()
                 logger.warn(`[claudestat] Context at ${pct}% (${session.context_used.toLocaleString()} / ${session.context_window.toLocaleString()} tokens) — threshold ${th}%`)
                 process.stderr.write(`\x1b[33m[claudestat] ⚠️  Context at ${pct}% — ${session.context_used.toLocaleString()} / ${session.context_window.toLocaleString()} tokens\x1b[0m\n`)
                 sendDesktopNotification(

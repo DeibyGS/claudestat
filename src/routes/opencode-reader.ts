@@ -15,6 +15,7 @@ export interface TraceEvent {
   type: string
   tool_name?: string
   tool_input?: string
+  tool_output?: string
   ts: number
   duration_ms?: number
   cwd?: string
@@ -152,6 +153,7 @@ export function getOpencodeEvents(sessionId: string): { events: TraceEvent[]; to
           type: isCompleted ? 'Done' : 'PreToolUse',
           tool_name: toolName,
           tool_input: toolInput,
+          ...(isCompleted && partData.state.output ? { tool_output: partData.state.output } : {}),
           ts: part.time_created,
           ...(isCompleted && { duration_ms: part.time_updated - part.time_created }),
           cwd,

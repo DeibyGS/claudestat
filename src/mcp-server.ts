@@ -553,26 +553,27 @@ function startContextPolling() {
       const contextUsed = session.context_used ?? 0
       if (contextWindow <= 0) return
 
-      // Reset thresholds on new session
+      // Reset thresholds only when context drops below 40% (real new conversation),
+      // not on every sub-agent session switch which keeps context high.
+      const pctCurrent = Math.round((contextUsed / contextWindow) * 100)
       if (session.id !== _mcpLastContextSessionId) {
-        _mcpContextThresholdsFired.clear()
+        if (pctCurrent < 40) _mcpContextThresholdsFired.clear()
         _mcpLastContextSessionId = session.id
       }
 
-      const pct = Math.round((contextUsed / contextWindow) * 100)
-      if (pct >= 50) {
+      if (pctCurrent >= 50) {
         for (const th of MCP_CONTEXT_THRESHOLDS) {
-          if (pct >= th && !_mcpContextThresholdsFired.has(th)) {
+          if (pctCurrent >= th && !_mcpContextThresholdsFired.has(th)) {
             _mcpContextThresholdsFired.add(th)
-            const msg = `claudestat — Context at ${th}% (${contextUsed.toLocaleString()} / ${contextWindow.toLocaleString()} tokens)`
+            const usedK  = Math.round(contextUsed / 1000)
+            const totalK = Math.round(contextWindow / 1000)
+            const msg = th >= 90
+              ? `⚠️ Contexto al ${pctCurrent}% (${usedK}K/${totalK}K tokens) — muy cerca del límite. Usa /compact o /checkpoint AHORA para no perder el hilo.`
+              : th >= 75
+              ? `Contexto al ${pctCurrent}% (${usedK}K/${totalK}K tokens) — considera usar /compact pronto para liberar espacio.`
+              : `Contexto al ${pctCurrent}% (${usedK}K/${totalK}K tokens) — aún cómodo, pero ve pensando en /compact si la tarea se alarga.`
             process.stderr.write(`\x1b[33m[MCP] ${msg}\x1b[0m\n`)
-            // Send JSON-RPC notification to MCP client (no 'id' field)
-            const notif = JSON.stringify({
-              jsonrpc: '2.0',
-              method: 'notifications/message',
-              params: { level: 'warning', message: msg }
-            })
-            process.stdout.write(notif + '\n')
+            process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/message', params: { level: th >= 90 ? 'error' : 'warning', message: msg } }) + '\n')
           }
         }
       }
@@ -590,19 +591,22 @@ function startContextPolling() {
           if (weeklyPct >= th && !_mcpWeeklyThresholdsFired.has(th)) {
             _mcpWeeklyThresholdsFired.add(th)
             const daysLeft = ((100 - weeklyPct) / weeklyPct * daysFromMonday).toFixed(1)
-            const msg = `Weekly plan at ${th}% — ~${daysLeft} days remaining at current burn rate`
+            const weekInsight = dbOps.getWeeklyInsight(7)
+            const dailyCost  = weekInsight ? `$${(weekInsight.total_cost / 7).toFixed(2)}/día` : ''
+            const msg = th >= 90
+              ? `Llevas el ${weeklyPct}% de tu cuota semanal — quedan ~${daysLeft} días de uso a este ritmo${dailyCost ? ` (${dailyCost})` : ''}. Prioriza tareas críticas.`
+              : th >= 75
+              ? `Llevas el ${weeklyPct}% de tu cuota semanal${dailyCost ? ` (${dailyCost})` : ''} — ~${daysLeft} días restantes. Considera reducir el uso.`
+              : th >= 50
+              ? `Mitad de la cuota semanal usada (${weeklyPct}%)${dailyCost ? ` — ${dailyCost}` : ''}. A este ritmo te quedan ~${daysLeft} días.`
+              : `Llevas el ${weeklyPct}% de tu cuota semanal${dailyCost ? ` (${dailyCost})` : ''}. Ritmo normal.`
             process.stderr.write(`\x1b[33m[MCP] ${msg}\x1b[0m\n`)
-            const notif = JSON.stringify({
-              jsonrpc: '2.0',
-              method: 'notifications/message',
-              params: { level: 'warning', message: msg }
-            })
-            process.stdout.write(notif + '\n')
+            process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/message', params: { level: th >= 90 ? 'error' : 'warning', message: msg } }) + '\n')
           }
         }
       }
-    // ── 5h cycle threshold alerts ──────────────────────────────────────
-      // Reset thresholds when cycle resets (cycleResetAt advances)
+
+      // ── 5h cycle threshold alerts ──────────────────────────────────────
       if (q.cycleResetAt !== _mcpLastCycleResetAt) {
         _mcpCycleThresholdsFired.clear()
         _mcpLastCycleResetAt = q.cycleResetAt
@@ -613,24 +617,16 @@ function startContextPolling() {
           if (cyclePct >= th && !_mcpCycleThresholdsFired.has(th)) {
             _mcpCycleThresholdsFired.add(th)
             const resetMins = Math.ceil(q.cycleResetMs / 60_000)
-            const msg = `claudestat — 5h cycle at ${th}% (${cyclePct}% used, resets in ${resetMins}m)`
-            process.stderr.write(`\x1b[33m[MCP] ${msg}\x1b[0m\n`)
-            const planLabel = q.detectedPlan === 'pro' ? 'Pro'
-              : q.detectedPlan === 'free' ? 'Free'
-              : q.detectedPlan === 'max5' ? 'Max5'
-              : q.detectedPlan === 'max20' ? 'Max20'
-              : q.detectedPlan
-            const extra = th === 100
-              ? ` — ${planLabel} cycle limit reached`
+            const resetLabel = resetMins >= 60 ? `${Math.floor(resetMins / 60)}h ${resetMins % 60}m` : `${resetMins}m`
+            const msg = th === 100
+              ? `Ciclo de 5h AGOTADO (${cyclePct}%). Puedes experimentar límites — resetea en ${resetLabel}.`
               : th >= 90
-                ? ` — ${planLabel} plan, ${resetMins}m until reset`
-                : ` — ${planLabel} plan`
-            const notif = JSON.stringify({
-              jsonrpc: '2.0',
-              method: 'notifications/message',
-              params: { level: th >= 90 ? 'error' : 'warning', message: msg + extra }
-            })
-            process.stdout.write(notif + '\n')
+              ? `Has usado el ${cyclePct}% del ciclo de 5h — quedan solo ${resetLabel} hasta el reset. Guarda tu progreso.`
+              : th >= 75
+              ? `${cyclePct}% del ciclo de 5h usado. Resetea en ${resetLabel} — termina las tareas críticas pronto.`
+              : `Has usado el ${cyclePct}% de tu ciclo de 5h (resetea en ${resetLabel}). Ritmo normal.`
+            process.stderr.write(`\x1b[33m[MCP] ${msg}\x1b[0m\n`)
+            process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/message', params: { level: th >= 90 ? 'error' : 'warning', message: msg } }) + '\n')
           }
         }
       }

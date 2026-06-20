@@ -36,6 +36,7 @@ let watcher: chokidar.FSWatcher | null = null
 const pendingFiles = new Map<string, ReturnType<typeof setTimeout>>()
 const fileLocks = new Map<string, Promise<void>>()
 const pollIntervals: ReturnType<typeof setInterval>[] = []
+const fileWatchedSessions = new Set<string>()
 
 // ─── Adapter lookup por filePath ───────────────────────────────────────────────
 
@@ -113,6 +114,7 @@ export function startEnricher(
       if (!result) return
 
       const { sessionId, cost, source } = result
+      fileWatchedSessions.add(sessionId)
       const prev = prevContextBySession.get(sessionId)
       if (onCompact && prev !== undefined && prev > 140_000 && cost.context_used < prev * 0.5) {
         onCompact(sessionId)
@@ -153,6 +155,7 @@ export function stopEnricher() {
   pendingFiles.clear()
   for (const interval of pollIntervals) clearInterval(interval)
   pollIntervals.length = 0
+  fileWatchedSessions.clear()
   prevContextBySession.clear()
   adapterByDir.clear()
   logger.info('[enricher] Stopped')
@@ -160,6 +163,7 @@ export function stopEnricher() {
 
 export function cleanupSession(sessionId: string) {
   prevContextBySession.delete(sessionId)
+  fileWatchedSessions.delete(sessionId)
 }
 
 // ─── Legacy: processLatestForSession (now adapter-agnostic) ─────────────────────

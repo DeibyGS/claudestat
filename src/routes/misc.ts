@@ -169,26 +169,31 @@ miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
   const sessions = dbOps.getAllSessions()
   const KNOWN_SOURCES = new Set(['claude-code', 'opencode', 'codex', 'amp', 'droid', 'codebuff'])
 
+  // Get real event times from events table (not last_event_at which heartbeat inflates)
+  const realEventTimes = dbOps.getLastRealEventTimes()
+
   const result: Array<{
     source: string; sessionId: string; model: string; cost_usd: number; last_seen_ms: number
     input_tokens: number; output_tokens: number; cache_read: number; cache_creation: number
     project: string | null
   }> = []
 
+  // Filter: use real event time from events table, not last_event_at
   const activeIds = new Set(sessions.filter(s => {
     const cutoff = s.source === 'claude-code' ? CC_CUTOFF : OC_CUTOFF
-    return (s.last_event_at ?? s.started_at) >= cutoff
+    const realTs = realEventTimes.get(s.id) ?? 0
+    return realTs >= cutoff
   }).map(s => s.id))
+
   // supersededIds: only for OC-style session chaining (newer session replaces older parent).
-  // CC sub-agent sessions are handled in-loop by the sameProject check — do not suppress CC parents.
   const supersededIds = new Set(
     sessions.filter(s => s.source !== 'claude-code' && s.parent_session_id && activeIds.has(s.parent_session_id)).map(s => s.parent_session_id!)
   )
 
   for (const s of sessions) {
-    const lastSeen = s.last_event_at ?? s.started_at
-    const cutoff   = s.source === 'claude-code' ? CC_CUTOFF : OC_CUTOFF
-    if (lastSeen < cutoff) continue
+    const realTs = realEventTimes.get(s.id) ?? 0
+    const cutoff = s.source === 'claude-code' ? CC_CUTOFF : OC_CUTOFF
+    if (realTs < cutoff) continue
     const src = s.source ?? 'unknown'
     if (!KNOWN_SOURCES.has(src)) continue
     if (s.id.startsWith('agent-')) continue
@@ -204,7 +209,7 @@ miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
       sessionId:      s.id,
       model:          s.dominant_model ?? 'unknown',
       cost_usd:       s.total_cost_usd ?? 0,
-      last_seen_ms:   lastSeen,
+      last_seen_ms:   realTs,
       input_tokens:   s.total_input_tokens ?? 0,
       output_tokens:  s.total_output_tokens ?? 0,
       cache_read:     s.total_cache_read ?? 0,
@@ -214,7 +219,20 @@ miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
   }
 
   result.sort((a, b) => b.last_seen_ms - a.last_seen_ms)
-  res.json(result.slice(0, 6))
+
+  // Filter out empty sessions (no cost, no tokens)
+  const withData = result.filter(s => s.cost_usd > 0 || s.input_tokens > 0 || s.output_tokens > 0)
+
+  // Group sessions by SOURCE ONLY: all CC sessions → 1 tab, all OC sessions → 1 tab, etc.
+  // This matches the user's expectation: one tab per tool, not per project.
+  const seenSources = new Set<string>()
+  const grouped = withData.filter(s => {
+    if (seenSources.has(s.source)) return false
+    seenSources.add(s.source)
+    return true
+  })
+
+  res.json(grouped.slice(0, 6))
 })
 
 // ─── GET /system-config — mapa completo del setup de Claude ──────────────────

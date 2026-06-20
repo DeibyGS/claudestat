@@ -380,6 +380,16 @@ const stmts = {
     UPDATE sessions SET project_path = ? WHERE id = ?
   `),
 
+  touchSession: db.prepare(`
+    UPDATE sessions SET last_event_at = ? WHERE id = ? AND last_event_at < ?
+  `),
+
+  lastRealEventTime: db.prepare(`
+    SELECT session_id, MAX(ts) as last_real_ts
+    FROM events
+    GROUP BY session_id
+  `),
+
   getRecentSessions: db.prepare(`
     SELECT s.*, s.ai_summary,
       (SELECT COUNT(*) FROM events e WHERE e.session_id = s.id AND e.type = 'Done') as done_count,
@@ -893,6 +903,13 @@ export const dbOps = {
     return stmts.getSessionEventsRecent.all(sessionId, limit) as EventRow[]
   },
 
+  getLastRealEventTimes(): Map<string, number> {
+    const rows = stmts.lastRealEventTime.all() as Array<{ session_id: string, last_real_ts: number }>
+    const map = new Map<string, number>()
+    for (const row of rows) map.set(row.session_id, row.last_real_ts)
+    return map
+  },
+
   updateSessionProject(sessionId: string, projectPath: string) {
     const existing = this.getSession(sessionId)
     if (existing?.project_path) {
@@ -901,6 +918,10 @@ export const dbOps = {
       if (!projectPath.startsWith(cur)) return
     }
     stmts.updateSessionProject.run(projectPath, sessionId)
+  },
+
+  touchSession(sessionId: string, now = Date.now()) {
+    stmts.touchSession.run(now, sessionId, now)
   },
 
   getRecentSessions(days: number): any[] {

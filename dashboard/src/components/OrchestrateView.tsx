@@ -322,7 +322,7 @@ function SidePanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void }
   return (
     <div style={{
       width: 420, flexShrink: 0, borderLeft: `1px solid ${BORDER}`, background: BG_DARK,
-      overflowY: 'auto', display: 'flex', flexDirection: 'column',
+      display: 'flex', flexDirection: 'column', overflow: 'hidden',
     }}>
       <div style={{ padding: '10px 14px', borderBottom: `1px solid ${BORDER}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -339,7 +339,7 @@ function SidePanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void }
         </button>
       </div>
 
-      <div style={{ padding: 12, flex: 1 }}>
+      <div style={{ padding: 12, flex: 1, overflowY: 'auto' }}>
 
         <CostDonut ccCost={ccCost} ocCost={ocCost} />
 

@@ -83,6 +83,8 @@ interface OrchCycle {
   oc_model:         string | null
   cc_tool_counts:   Record<string, number> | null
   oc_tool_counts:   Record<string, number> | null
+  cc_session_id:    string | null
+  oc_session_id:    string | null
 }
 
 interface CommandLogEntry {
@@ -714,6 +716,7 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
         oc_input_tokens: null, oc_output_tokens: null, oc_cache_tokens: null,
         cc_model: null, oc_model: null,
         cc_tool_counts: null, oc_tool_counts: null,
+        cc_session_id: null, oc_session_id: null,
       })
       i += 2
     } else if (ccGroup && !ocGroup) {
@@ -742,6 +745,7 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
         oc_input_tokens: null, oc_output_tokens: null, oc_cache_tokens: null,
         cc_model: null, oc_model: null,
         cc_tool_counts: null, oc_tool_counts: null,
+        cc_session_id: null, oc_session_id: null,
       })
       i += 1
     } else {
@@ -811,6 +815,7 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
           cycle.cc_cache_tokens = s.total_cache_read ?? null
           cycle.cc_model = s.dominant_model ?? null
           cycle.cc_tool_counts = dbOps.getToolCountsForSession(s.id)
+          cycle.cc_session_id = s.id
         }
         if (cycle.oc_events.length > 0 && oi < ocSess.length) {
           const s = ocSess[oi++]
@@ -820,6 +825,7 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
           cycle.oc_cache_tokens = s.total_cache_read ?? null
           cycle.oc_model = s.dominant_model ?? null
           cycle.oc_tool_counts = dbOps.getToolCountsForSession(s.id)
+          cycle.oc_session_id = s.id
         }
       }
     }

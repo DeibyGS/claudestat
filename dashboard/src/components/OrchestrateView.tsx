@@ -849,14 +849,13 @@ function PromptExchange({ cycle, tool, color }: { cycle: OrchCycle; tool: 'cc' |
   useEffect(() => {
     if (!expanded || prompts.length > 0 || loading) return
     setLoading(true)
-    const sessionId = tool === 'cc'
-      ? `session_${cycle.index}_cc`
-      : `session_${cycle.index}_oc`
+    const sessionId = tool === 'cc' ? cycle.cc_session_id : cycle.oc_session_id
+    if (!sessionId) { setLoading(false); return }
     fetch(`/prompts?session_id=${sessionId}`)
       .then(r => r.ok ? r.json() : { prompts: [] })
       .then(d => { setPrompts(d.prompts ?? []); setLoading(false) })
       .catch(() => setLoading(false))
-  }, [expanded, cycle.index, tool, prompts.length, loading])
+  }, [expanded, cycle.cc_session_id, cycle.oc_session_id, tool, prompts.length, loading])
 
   if (!cycle.cc_cost && !cycle.oc_cost) return null
 

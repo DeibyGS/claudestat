@@ -363,6 +363,8 @@ export interface OrchCycle {
   oc_model:         string | null
   cc_tool_counts:   Record<string, number> | null
   oc_tool_counts:   Record<string, number> | null
+  cc_session_id:    string | null
+  oc_session_id:    string | null
 }
 
 export interface CommandLogEntry {

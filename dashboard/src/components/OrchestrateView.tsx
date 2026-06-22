@@ -134,12 +134,15 @@ function CostDonut({ ccCost, ocCost }: { ccCost: number; ocCost: number }) {
   )
 }
 
-function TokenRow({ label, inToks, outToks, cacheToks, color }: { label: string; inToks: number | null; outToks: number | null; cacheToks: number | null; color: string }) {
+function TokenRow({ label, inToks, outToks, cacheToks, color, estimated }: { label: string; inToks: number | null; outToks: number | null; cacheToks: number | null; color: string; estimated?: boolean }) {
   const total = (inToks ?? 0) + (outToks ?? 0) + (cacheToks ?? 0)
   const max = Math.max(inToks ?? 0, outToks ?? 0, cacheToks ?? 0, 1)
   return (
     <div style={{ marginBottom: 6 }}>
-      <div style={{ fontSize: 9, fontWeight: 700, color, marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 9, fontWeight: 700, color, marginBottom: 3, display: 'flex', alignItems: 'center', gap: 4 }}>
+        {label}
+        {estimated && <span style={{ fontSize: 7, color: '#d29922', fontWeight: 400, fontFamily: 'monospace' }}>~estimated</span>}
+      </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {inToks !== null && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 8 }}>
@@ -302,7 +305,7 @@ function PhaseSummaryCard({ cycle }: { cycle: OrchCycle }) {
         <div style={{ fontSize: 8, color: OC_COLOR, fontWeight: 700 }}>OpenCode</div>
         <div style={{ fontSize: 8, color: '#8b949e', marginTop: 2 }}>
           {ocCost > 0 || ocTotalToks > 0 || ocTools > 0
-            ? `$${ocCost.toFixed(2)} (${ocPct}%) · ${fmtTokens(ocTotalToks)} tok · ${ocTools} calls`
+            ? `$${ocCost.toFixed(2)} (${ocPct}%) · ${cycle.oc_tokens_estimated ? '~' : ''}${fmtTokens(ocTotalToks)} tok · ${ocTools} calls`
             : '—'}
         </div>
         <div style={{ fontSize: 7, color: DIM_COLOR }}>{fmtModel(cycle.oc_model)}</div>
@@ -382,7 +385,7 @@ function SidePanel({ cycle, onClose }: { cycle: OrchCycle; onClose: () => void }
               {cycle.oc_model && <span style={{ fontSize: 8, color: DIM_COLOR, fontFamily: 'monospace' }}>{fmtModel(cycle.oc_model)}</span>}
             </div>
             {cycle.oc_input_tokens != null && cycle.oc_output_tokens != null && (
-              <TokenRow label="Tokens" inToks={cycle.oc_input_tokens} outToks={cycle.oc_output_tokens} cacheToks={cycle.oc_cache_tokens} color={OC_COLOR} />
+              <TokenRow label="Tokens" inToks={cycle.oc_input_tokens} outToks={cycle.oc_output_tokens} cacheToks={cycle.oc_cache_tokens} color={OC_COLOR} estimated={cycle.oc_tokens_estimated} />
             )}
             {cycle.oc_tool_counts != null && Object.keys(cycle.oc_tool_counts).length > 0 && (
               <div style={{ borderTop: `1px solid ${OC_COLOR}20`, paddingTop: 6, marginTop: 4 }}>
@@ -686,7 +689,7 @@ function ToolTrendChart({ cycles }: { cycles: OrchCycle[] }) {
   }), [cycles])
 
   return (
-    <div style={{ padding: '6px 16px', borderBottom: `1px solid ${BORDER}`, background: BG_DARK }}>
+    <div style={{ padding: '6px 16px', borderBottom: `1px solid ${BORDER}`, background: BG_DARK, flexShrink: 0 }}>
       <div style={{ fontSize: 9, color: DIM_COLOR, fontWeight: 600, marginBottom: 4 }}>Tool calls per cycle</div>
       <ResponsiveContainer width="100%" height={140}>
         <RechartLine data={data} margin={{ top: 4, right: 8, bottom: 4, left: -16 }}>
@@ -899,7 +902,7 @@ export function OrchestrateView() {
   const [aggregates, setAggregates] = useState<OrchAggregates | null>(null)
   const [resolveText, setResolveText] = useState('')
   const [showResolveInput, setShowResolveInput] = useState(false)
-  const [showTrend, setShowTrend] = useState(false)
+  const [showTrend, setShowTrend] = useState(true)
   const [showSessions, setShowSessions] = useState(false)
   const [showSpecs, setShowSpecs] = useState(false)
   const [diffData, setDiffData] = useState<DiffResult | null>(null)
@@ -1351,8 +1354,14 @@ function LiveProgress({ events, commandLog, fileChanges }: { events: OrchEvent[]
 }
 
 function SpecViewer({ files, onClose }: { files: Record<string, string>; onClose: () => void }) {
-  const names = ['SPEC.md', 'OC-TASK.md', 'OC-REPORT.md'].filter(n => files[n])
+  const ORDER = ['SPEC.md', 'OC-TASK.md', 'OC-REPORT.md', 'PLAN.md']
+  const names = [
+    ...ORDER.filter(n => files[n]),
+    ...Object.keys(files).filter(n => !ORDER.includes(n) && files[n]).sort(),
+  ]
   const [active, setActive] = useState(names[0] ?? '')
+  const content = files[active] ?? ''
+  const isCompleted = active === 'OC-TASK.md' && content.trim() === 'ORCHESTRATION_COMPLETE'
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 999, background: 'rgba(0,0,0,0.6)',
@@ -1362,10 +1371,10 @@ function SpecViewer({ files, onClose }: { files: Record<string, string>; onClose
         width: '90vw', height: '85vh', background: BG_DARK, borderRadius: 12,
         border: `1px solid ${BORDER}`, display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderBottom: `1px solid ${BORDER}`, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 12px', borderBottom: `1px solid ${BORDER}`, flexShrink: 0, flexWrap: 'wrap' }}>
           <FileCode2 size={14} color={CC_COLOR} />
           <span style={{ fontSize: 12, fontWeight: 700, color: '#c9d1d9' }}>Spec files</span>
-          <div style={{ display: 'flex', gap: 2, marginLeft: 8 }}>
+          <div style={{ display: 'flex', gap: 2, marginLeft: 8, flexWrap: 'wrap' }}>
             {names.map(n => (
               <button key={n} onClick={() => setActive(n)}
                 style={{
@@ -1384,7 +1393,13 @@ function SpecViewer({ files, onClose }: { files: Record<string, string>; onClose
           </button>
         </div>
         <div style={{ flex: 1, overflow: 'auto', padding: 16, fontFamily: 'monospace', fontSize: 11, color: '#c9d1d9', lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-          {files[active] ?? <span style={{ color: DIM_COLOR }}>File not found</span>}
+          {isCompleted
+            ? <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: OC_COLOR, fontFamily: 'inherit', fontSize: 12 }}>
+                <span style={{ fontSize: 16 }}>✅</span>
+                <span style={{ fontWeight: 600 }}>Run completado</span>
+                <span style={{ color: DIM_COLOR, fontWeight: 400 }}>— esta fase ha finalizado</span>
+              </div>
+            : content || <span style={{ color: DIM_COLOR }}>File not found</span>}
         </div>
       </div>
     </div>

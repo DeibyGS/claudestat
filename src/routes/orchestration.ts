@@ -3,9 +3,11 @@ import fs   from 'fs'
 import os   from 'os'
 import zlib from 'zlib'
 import { execSync } from 'child_process'
+import { DatabaseSync } from 'node:sqlite'
 import { dbOps } from '../db'
 import { Router, type Request, type Response } from 'express'
 import { getOpencodeDir } from '../paths'
+import { estimateTokensFromToolCounts, estimateCost, findPricing } from '../model-pricing'
 
 export const orchestrationRouter = Router()
 
@@ -81,10 +83,11 @@ interface OrchCycle {
   oc_cache_tokens:  number | null
   cc_model:         string | null
   oc_model:         string | null
-  cc_tool_counts:   Record<string, number> | null
-  oc_tool_counts:   Record<string, number> | null
-  cc_session_id:    string | null
-  oc_session_id:    string | null
+  cc_tool_counts:      Record<string, number> | null
+  oc_tool_counts:      Record<string, number> | null
+  cc_session_id:       string | null
+  oc_session_id:       string | null
+  oc_tokens_estimated: boolean
 }
 
 interface CommandLogEntry {
@@ -426,7 +429,7 @@ function extractLiveData(sinceTs?: number): { command_log: CommandLogEntry[]; fi
   for (const line of raw) {
     const tsMatch = line.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/)
     if (tsMatch) {
-      currentTs = new Date(tsMatch[1].replace(' ', 'T') + 'Z').getTime()
+      currentTs = new Date(tsMatch[1].replace(' ', 'T')).getTime()
     }
     if (sinceTs !== undefined && currentTs < sinceTs) continue
 
@@ -481,7 +484,7 @@ function extractTraceForRange(startTs: number, endTs: number, tool: 'cc' | 'oc',
   for (let i = 0; i < allLines.length; i++) {
     const tsMatch = allLines[i].match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/)
     if (!tsMatch) continue
-    const lTs = new Date(tsMatch[1].replace(' ', 'T') + 'Z').getTime()
+    const lTs = new Date(tsMatch[1].replace(' ', 'T')).getTime()
     if (startIdx === -1 && allLines[i].includes(startMarker) && Math.abs(lTs - startTs) <= 2000) {
       startIdx = i
     } else if (startIdx !== -1 && endMarkers.some(m => allLines[i].includes(m)) && Math.abs(lTs - endTs) <= 2000) {
@@ -717,6 +720,7 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
         cc_model: null, oc_model: null,
         cc_tool_counts: null, oc_tool_counts: null,
         cc_session_id: null, oc_session_id: null,
+        oc_tokens_estimated: false,
       })
       i += 2
     } else if (ccGroup && !ocGroup) {
@@ -746,6 +750,7 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
         cc_model: null, oc_model: null,
         cc_tool_counts: null, oc_tool_counts: null,
         cc_session_id: null, oc_session_id: null,
+        oc_tokens_estimated: false,
       })
       i += 1
     } else {
@@ -756,11 +761,51 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
   return cycles
 }
 
+const OC_DB_PATH = path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db')
+
+function readOcTokensFromDb(sessionId: string): { input: number; output: number } | null {
+  try {
+    const db = new DatabaseSync(OC_DB_PATH, { readOnly: true })
+    const row = db.prepare('SELECT tokens_input, tokens_output FROM session WHERE id = ?').get(sessionId) as { tokens_input: number; tokens_output: number } | undefined
+    db.close()
+    if (!row || (row.tokens_input === 0 && row.tokens_output === 0)) return null
+    return { input: row.tokens_input ?? 0, output: row.tokens_output ?? 0 }
+  } catch { return null }
+}
+
+function enrichOcEstimate(cycle: OrchCycle): void {
+  if ((cycle.oc_input_tokens ?? 0) > 0 || !cycle.oc_tool_counts) return
+  // Try re-reading real tokens from opencode.db first
+  if (cycle.oc_session_id) {
+    const real = readOcTokensFromDb(cycle.oc_session_id)
+    if (real) {
+      cycle.oc_input_tokens  = real.input
+      cycle.oc_output_tokens = real.output
+      const model = cycle.oc_model ?? ''
+      if ((cycle.oc_cost ?? 0) === 0) cycle.oc_cost = estimateCost(real.input, real.output, model)
+      return
+    }
+  }
+  // Fallback: estimate tokens from tool counts
+  const model = cycle.oc_model ?? ''
+  if (!findPricing(model)) return // unknown model — skip estimation
+  const estimated = estimateTokensFromToolCounts(cycle.oc_tool_counts)
+  if (estimated === 0) return
+  const outputEst = Math.round(estimated * 0.15) // output ~15% of input in typical agentic use
+  cycle.oc_input_tokens   = estimated
+  cycle.oc_output_tokens  = outputEst
+  cycle.oc_cost           = estimateCost(estimated, outputEst, model)
+  cycle.oc_tokens_estimated = true
+}
+
 function readSpecFiles(projectPath: string): Record<string, string> {
   const files: Record<string, string> = {}
-  const names = ['SPEC.md', 'OC-TASK.md', 'OC-REPORT.md']
-  for (const name of names) {
-    const fp = path.join(projectPath, 'specs', name)
+  const specsDir = path.join(projectPath, 'specs')
+  const fixed = ['SPEC.md', 'OC-TASK.md', 'OC-REPORT.md', 'PLAN.md']
+  let dynamic: string[] = []
+  try { dynamic = fs.readdirSync(specsDir).filter(f => /^PHASE-.*-CONTEXT\.md$/i.test(f)).sort() } catch {}
+  for (const name of [...fixed, ...dynamic]) {
+    const fp = path.join(specsDir, name)
     try { files[name] = fs.readFileSync(fp, 'utf-8') } catch { /* file not found */ }
   }
   return files
@@ -800,34 +845,55 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
     // Prefer the log-detected start (CICLO 1 timestamp) over wf.created_at — more reliable.
     const runStartMs = detectedStartTs ?? toTimestampMs(wf.created_at)
 
-    // Enrich cycles with DB session cost/token data
+    // Enrich cycles with DB session cost/token data — temporal match avoids sequential drift
     if (runStartMs > 0) {
       const sessions = dbOps.getSessionsInRange(runStartMs, Date.now() + 60_000)
       const ccSess = sessions.filter(s => !s.id.startsWith('ses_') && !s.id.startsWith('agent-')).sort((a, b) => a.started_at - b.started_at)
       const ocSess = sessions.filter(s => s.id.startsWith('ses_')).sort((a, b) => a.started_at - b.started_at)
-      let ci = 0, oi = 0
+      const usedCc = new Set<string>()
+      const usedOc = new Set<string>()
+      const SLACK = 90_000 // ms window around each cycle boundary
       for (const cycle of cycles) {
-        if (cycle.cc_events.length > 0 && ci < ccSess.length) {
-          const s = ccSess[ci++]
-          cycle.cc_cost = s.total_cost_usd ?? null
-          cycle.cc_input_tokens = s.total_input_tokens ?? null
-          cycle.cc_output_tokens = s.total_output_tokens ?? null
-          cycle.cc_cache_tokens = s.total_cache_read ?? null
-          cycle.cc_model = s.dominant_model ?? null
-          cycle.cc_tool_counts = dbOps.getToolCountsForSession(s.id)
-          cycle.cc_session_id = s.id
+        const ccFirst = cycle.cc_events[0]?.full_ts
+        const ccLast = cycle.cc_events.at(-1)
+        const ccEnd = ccLast ? ccLast.full_ts + (ccLast.duration_secs ?? 0) * 1000 : ccFirst
+        if (ccFirst !== undefined) {
+          const s = ccSess.find(x => !usedCc.has(x.id) && x.started_at >= ccFirst - SLACK && x.started_at <= (ccEnd ?? ccFirst) + SLACK)
+          if (s) {
+            usedCc.add(s.id)
+            cycle.cc_cost = s.total_cost_usd ?? null
+            cycle.cc_input_tokens = s.total_input_tokens ?? null
+            cycle.cc_output_tokens = s.total_output_tokens ?? null
+            cycle.cc_cache_tokens = s.total_cache_read ?? null
+            cycle.cc_model = s.dominant_model ?? null
+            cycle.cc_tool_counts = dbOps.getToolCountsForSession(s.id)
+            cycle.cc_session_id = s.id
+          }
         }
-        if (cycle.oc_events.length > 0 && oi < ocSess.length) {
-          const s = ocSess[oi++]
-          cycle.oc_cost = s.total_cost_usd ?? null
-          cycle.oc_input_tokens = s.total_input_tokens ?? null
-          cycle.oc_output_tokens = s.total_output_tokens ?? null
-          cycle.oc_cache_tokens = s.total_cache_read ?? null
-          cycle.oc_model = s.dominant_model ?? null
-          cycle.oc_tool_counts = dbOps.getToolCountsForSession(s.id)
-          cycle.oc_session_id = s.id
+        const ocFirst = cycle.oc_events[0]?.full_ts
+        const ocLast = cycle.oc_events.at(-1)
+        const ocEnd = ocLast ? ocLast.full_ts + (ocLast.duration_secs ?? 0) * 1000 : ocFirst
+        if (ocFirst !== undefined) {
+          const matched = ocSess.filter(x => !usedOc.has(x.id) && x.started_at >= ocFirst - SLACK && x.started_at <= (ocEnd ?? ocFirst) + SLACK)
+          if (matched.length > 0) {
+            matched.forEach(x => usedOc.add(x.id))
+            cycle.oc_cost = matched.reduce((sum, x) => sum + (x.total_cost_usd ?? 0), 0)
+            cycle.oc_input_tokens = matched.reduce((sum, x) => sum + (x.total_input_tokens ?? 0), 0)
+            cycle.oc_output_tokens = matched.reduce((sum, x) => sum + (x.total_output_tokens ?? 0), 0)
+            cycle.oc_cache_tokens = matched.reduce((sum, x) => sum + (x.total_cache_read ?? 0), 0)
+            cycle.oc_model = matched[0].dominant_model ?? null
+            const mergedCounts: Record<string, number> = {}
+            for (const x of matched) {
+              const counts = dbOps.getToolCountsForSession(x.id)
+              if (counts) for (const [k, v] of Object.entries(counts)) mergedCounts[k] = (mergedCounts[k] ?? 0) + v
+            }
+            cycle.oc_tool_counts = Object.keys(mergedCounts).length > 0 ? mergedCounts : null
+            cycle.oc_session_id = matched[0].id
+          }
         }
       }
+      // If OC still has no tokens, try re-read from opencode.db or estimate
+      for (const cycle of cycles) enrichOcEstimate(cycle)
     }
 
     let status: OrchDetail['status'] = 'active'

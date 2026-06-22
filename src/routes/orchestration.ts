@@ -1,6 +1,7 @@
 import path from 'path'
 import fs   from 'fs'
 import os   from 'os'
+import zlib from 'zlib'
 import { execSync } from 'child_process'
 import { dbOps } from '../db'
 import { Router, type Request, type Response } from 'express'
@@ -80,6 +81,19 @@ interface OrchCycle {
   oc_cache_tokens:  number | null
   cc_model:         string | null
   oc_model:         string | null
+  cc_tool_counts:   Record<string, number> | null
+  oc_tool_counts:   Record<string, number> | null
+}
+
+interface CommandLogEntry {
+  ts:        number
+  command:   string
+}
+
+interface FileChangeEntry {
+  ts:     number
+  path:   string
+  action: 'create' | 'modify' | 'delete'
 }
 
 interface OrchDetail {
@@ -102,10 +116,27 @@ interface OrchDetail {
   cycles:         OrchCycle[]
   cc_total_cost:  number
   oc_total_cost:  number
+  spec_files:     Record<string, string>
+  command_log:    CommandLogEntry[]
+  file_changes:   FileChangeEntry[]
 }
 
 let _cache: { data: OrchDetail | null; ts: number; projectPath: string } = { data: null, ts: 0, projectPath: '' }
 const CACHE_TTL_MS = 2_000
+
+function toTimestampMs(val: unknown): number {
+  return typeof val === 'string' ? new Date(val).getTime() : 0
+}
+
+function getWorkflowWithFreshTs(projectPath: string): WorkflowJson | null {
+  try {
+    const wfPath = path.join(projectPath, 'workflow.json')
+    const wf: WorkflowJson = JSON.parse(fs.readFileSync(wfPath, 'utf-8'))
+    return wf
+  } catch {
+    return null
+  }
+}
 
 function findActiveOrchestration(): { projectPath: string; projectName: string; wf: WorkflowJson } | null {
   try {
@@ -115,18 +146,14 @@ function findActiveOrchestration(): { projectPath: string; projectName: string; 
     const candidates: Array<{ projectPath: string; projectName: string; wf: WorkflowJson; recentTs: number }> = []
     for (const [name, p] of Object.entries(projects)) {
       if (!p?.path) continue
-      const wfPath = path.join(p.path, 'workflow.json')
-      try {
-        const wfRaw = fs.readFileSync(wfPath, 'utf-8')
-        const wf: WorkflowJson = JSON.parse(wfRaw)
-        if (wf?.version && wf.version >= 2 && wf?.phase_status) {
-          const recentTs = Math.max(
-            typeof wf.last_verified_ts === 'number' ? wf.last_verified_ts : 0,
-            typeof wf.created_at === 'string' ? new Date(wf.created_at).getTime() : 0,
-          )
-          candidates.push({ projectPath: p.path, projectName: name, wf, recentTs })
-        }
-      } catch {}
+      const wf = getWorkflowWithFreshTs(p.path)
+      if (!wf || !wf?.version || wf.version < 2 || !wf?.phase_status) continue
+
+      const recentTs = Math.max(
+        typeof wf.last_verified_ts === 'number' ? wf.last_verified_ts : 0,
+        toTimestampMs(wf.created_at),
+      )
+      candidates.push({ projectPath: p.path, projectName: name, wf, recentTs })
     }
     if (candidates.length === 0) return null
     candidates.sort((a, b) => b.recentTs - a.recentTs)
@@ -135,11 +162,24 @@ function findActiveOrchestration(): { projectPath: string; projectName: string; 
   return null
 }
 
-function parseLog(sinceTs?: number): { cc: OrchEvent[]; oc: OrchEvent[] } {
+function parseLog(sinceTs?: number): { cc: OrchEvent[]; oc: OrchEvent[]; detectedStartTs: number | undefined; command_log: CommandLogEntry[]; file_changes: FileChangeEntry[] } {
   const ccEvents: OrchEvent[] = []
   const ocEvents: OrchEvent[] = []
   const lines = readLogLines(5000)
-  if (lines.length === 0) return { cc: ccEvents, oc: ocEvents }
+  if (lines.length === 0) return { cc: ccEvents, oc: ocEvents, detectedStartTs: undefined, command_log: [], file_changes: [] }
+
+  // Find the most recent "CICLO 1 /" line — it always marks the start of a new run
+  // and is more reliable than workflow.json.created_at (which CC often writes with wrong timestamps).
+  let cycle1Ts: number | undefined
+  for (const line of lines) {
+    if (/CICLO 1 \/ /.test(line)) {
+      const m = line.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/)
+      if (m) cycle1Ts = new Date(m[1].replace(' ', 'T') + 'Z').getTime()
+    }
+  }
+  // Use cycle1Ts as sinceTs — it anchors the window to the current run only.
+  // Fall back to sinceTs (wfStartTs) only when no CICLO 1 marker exists.
+  if (cycle1Ts !== undefined) sinceTs = cycle1Ts
 
   let currentCC: Partial<OrchEvent> | null = null
   let currentOC: Partial<OrchEvent> | null = null
@@ -321,21 +361,39 @@ function parseLog(sinceTs?: number): { cc: OrchEvent[]; oc: OrchEvent[] } {
     }
   }
 
-  return { cc: ccEvents, oc: ocEvents }
+  const live = extractLiveData(sinceTs)
+  return { cc: ccEvents, oc: ocEvents, detectedStartTs: cycle1Ts, command_log: live.command_log, file_changes: live.file_changes }
 }
 
 function readLogLines(maxLines: number): string[] {
   try {
-    if (!fs.existsSync(ORCH_LOG_FILE)) return []
-    const content = fs.readFileSync(ORCH_LOG_FILE, 'utf-8')
-    const allLines = content.split('\n')
-    const timestamped: string[] = []
-    for (let i = allLines.length - 1; i >= 0 && timestamped.length < maxLines; i--) {
-      if (/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]/.test(allLines[i])) {
-        timestamped.unshift(allLines[i])
+    // Read current log
+    const lines: string[] = []
+    if (fs.existsSync(ORCH_LOG_FILE)) {
+      const content = fs.readFileSync(ORCH_LOG_FILE, 'utf-8')
+      for (const l of content.split('\n')) {
+        if (/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]/.test(l)) lines.push(l)
       }
     }
-    return timestamped
+
+    // Prepend rotated log (.gz) if we need more lines
+    if (lines.length < maxLines) {
+      const gzPath = ORCH_LOG_FILE + '.1.gz'
+      if (fs.existsSync(gzPath)) {
+        try {
+          const gz = fs.readFileSync(gzPath)
+          const decompressed = zlib.gunzipSync(gz).toString('utf-8')
+          const older: string[] = []
+          for (const l of decompressed.split('\n')) {
+            if (/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]/.test(l)) older.push(l)
+          }
+          lines.unshift(...older)
+        } catch { /* ignore corrupt/missing gz */ }
+      }
+    }
+
+    // Return last maxLines timestamped lines
+    return lines.length > maxLines ? lines.slice(-maxLines) : lines
   } catch {
     return []
   }
@@ -354,6 +412,60 @@ function readAllLogLines(maxLines: number): string[] {
 
 function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, '').replace(/\[0m|\[90m/g, '')
+}
+
+function extractLiveData(sinceTs?: number): { command_log: CommandLogEntry[]; file_changes: FileChangeEntry[] } {
+  const cmds: CommandLogEntry[] = []
+  const files: FileChangeEntry[] = []
+  const raw = readAllLogLines(200000)
+  if (raw.length === 0) return { command_log: cmds, file_changes: files }
+
+  let currentTs = 0
+  for (const line of raw) {
+    const tsMatch = line.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/)
+    if (tsMatch) {
+      currentTs = new Date(tsMatch[1].replace(' ', 'T') + 'Z').getTime()
+    }
+    if (sinceTs !== undefined && currentTs < sinceTs) continue
+
+    const clean = stripAnsi(line).trim()
+
+    // Commands: lines starting with $ or > after strip (OC shell commands)
+    const cmdMatch = clean.match(/^[\$>]\s+(.+)/)
+    if (cmdMatch) {
+      cmds.push({ ts: currentTs, command: cmdMatch[1].trim() })
+      continue
+    }
+
+    // File changes from tool calls
+    const editMatch = clean.match(/^←\s*Edit\s+(.+)/)
+    if (editMatch) {
+      files.push({ ts: currentTs, path: editMatch[1].trim(), action: 'modify' })
+      continue
+    }
+    const writeMatch = clean.match(/^←\s*Write\s+(.+)/)
+    if (writeMatch) {
+      files.push({ ts: currentTs, path: writeMatch[1].trim(), action: 'modify' })
+      continue
+    }
+
+    // Diff new-file markers
+    const diffNewMatch = clean.match(/^\+\+\+\s+(?:\S+\/)?(.+)/)
+    if (diffNewMatch) {
+      const fp = diffNewMatch[1].trim()
+      if (!fp.startsWith('/dev/null')) files.push({ ts: currentTs, path: fp, action: 'modify' })
+      continue
+    }
+  }
+
+  // Deduplicate file changes (keep last per path)
+  const seen = new Set<string>()
+  const deduped: FileChangeEntry[] = []
+  for (let i = files.length - 1; i >= 0; i--) {
+    if (!seen.has(files[i].path)) { seen.add(files[i].path); deduped.unshift(files[i]) }
+  }
+
+  return { command_log: cmds.slice(-80), file_changes: deduped.slice(-80) }
 }
 
 function extractTraceForRange(startTs: number, endTs: number, tool: 'cc' | 'oc', projectPath: string): OrchCycleTrace {
@@ -423,9 +535,11 @@ function extractTraceForRange(startTs: number, endTs: number, tool: 'cc' | 'oc',
     const skillMatch = line.match(/→\s+Skill\s+"([^"]+)"/)
     if (skillMatch) trace.skills_used.push(skillMatch[1])
 
-    // Engram saves → fallback skill context when no explicit skill invocations
-    const engMatch = line.match(/engram_mem_(?:save|session_summary).*?"title"\s*:\s*"([^"]+)"/)
-    if (engMatch) trace.skills_used.push(engMatch[1])
+    // Engram saves — only add if title looks like a skill name (not a phase label)
+    const engMatch = line.match(/engram_mem_save[^}]*?"title"\s*:\s*"([^"]+)"/)
+    if (engMatch && !/Fase\s+\d|completado|Ciclo|Completed|Compacted|Goal|Instructions/i.test(engMatch[1])) {
+      trace.skills_used.push(engMatch[1])
+    }
 
     // Git commit from commit output line: [branch hash] orchestrate: ...
     const gitMatch = line.match(/\[\S+\s+([0-9a-f]{7,40})\]\s+orchestrate:/)
@@ -476,17 +590,16 @@ function extractTraceForRange(startTs: number, endTs: number, tool: 'cc' | 'oc',
     trace.verification = { tsc_passed: tscResult, tests_passed: testsResult, grep_checks: grepChecks, tsc_errors: tscErrors, tests_errors: testsErrors }
   }
 
-  // If git_commit found, use git show --stat as authoritative source for files_changed
+  // Merge git show --stat entries into files_changed (don't replace)
   if (trace.git_commit && projectPath) {
     try {
       const out = execSync(`git show --stat --format="" ${trace.git_commit}`, { cwd: projectPath, timeout: 5000 }).toString()
       const fileMatches = out.match(/^[ \t]+(.+)/gm)
       if (fileMatches) {
-        trace.files_changed = fileMatches.map(f => f.trim().split('|')[0].trim()).filter(f => f && !f.includes('=>'))
-        const insMatch = out.match(/(\d+) insertion/)
-        const delMatch = out.match(/(\d+) deletion/)
-        if (insMatch) trace.files_changed.push(`+${insMatch[1]}`)
-        if (delMatch) trace.files_changed.push(`-${delMatch[1]}`)
+        const gitFiles = fileMatches.map(f => f.trim().split('|')[0].trim()).filter(f => f && !f.includes('=>') && !/\d+ files? changed/.test(f))
+        for (const gf of gitFiles) {
+          if (!trace.files_changed.includes(gf)) trace.files_changed.push(gf)
+        }
       }
     } catch {}
   }
@@ -523,11 +636,19 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
   }
 
   const cycles: OrchCycle[] = []
+  let orphanOcEvents: OrchEvent[] = []
   let i = 0
   let cycleIdx = 1
   while (i < groups.length) {
     const ccGroup = groups[i]?.tool === 'cc' ? groups[i] : null
     const ocGroup = groups[i + 1]?.tool === 'oc' ? groups[i + 1] : null
+
+    // Orphan OC group (no preceding CC paired with it)
+    if (groups[i].tool === 'oc') {
+      orphanOcEvents = groups[i].events
+      i += 1
+      continue
+    }
 
     const phaseFromEvents = (evts: OrchEvent[]): string | null => {
       for (const e of evts) { if (e.phase) return e.phase }
@@ -554,11 +675,15 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
       const isVerifyFailed = ocVerified === false
       const phase = phaseFromEvents(ccGroup.events) ?? phaseFromEvents(ocGroup.events)
 
+      // Include orphan OC events in this cycle's trace range
+      const allOcEvents = [...orphanOcEvents, ...ocGroup.events]
+      orphanOcEvents = []
+
       const ccStart = ccGroup.events[0].full_ts
       const ccEnd = ccGroup.events[ccGroup.events.length - 1].full_ts
       const ccTrace = extractTraceForRange(ccStart, ccEnd, 'cc', projectPath)
-      const ocStart = ocGroup.events[0].full_ts
-      const ocEnd = ocGroup.events[ocGroup.events.length - 1].full_ts
+      const ocStart = allOcEvents[0].full_ts
+      const ocEnd = allOcEvents[allOcEvents.length - 1].full_ts
       const ocTrace = extractTraceForRange(ocStart, ocEnd, 'oc', projectPath)
 
       const mergedTrace: OrchCycleTrace = {
@@ -588,6 +713,7 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
         cc_input_tokens: null, cc_output_tokens: null, cc_cache_tokens: null,
         oc_input_tokens: null, oc_output_tokens: null, oc_cache_tokens: null,
         cc_model: null, oc_model: null,
+        cc_tool_counts: null, oc_tool_counts: null,
       })
       i += 2
     } else if (ccGroup && !ocGroup) {
@@ -615,33 +741,7 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
         cc_input_tokens: null, cc_output_tokens: null, cc_cache_tokens: null,
         oc_input_tokens: null, oc_output_tokens: null, oc_cache_tokens: null,
         cc_model: null, oc_model: null,
-      })
-      i += 1
-    } else if (!ccGroup && ocGroup) {
-      const ocActions = [...new Set(ocGroup.events.map(e => e.action))]
-      const ocDur = ocGroup.events.reduce((s, e) => s + (e.duration_secs ?? 0), 0)
-      const isVerifyFailed = ocGroup.events[ocGroup.events.length - 1]?.verified === false
-      const phase = phaseFromEvents(ocGroup.events)
-
-      const ocStart = ocGroup.events[0].full_ts
-      const ocEnd = ocGroup.events[ocGroup.events.length - 1].full_ts
-      const ocTrace = extractTraceForRange(ocStart, ocEnd, 'oc', projectPath)
-
-      cycles.push({
-        index: cycleIdx++,
-        cc_events: [],
-        oc_events: ocGroup.events,
-        status: isVerifyFailed ? 'verify_failed' : 'active',
-        duration_secs: ocDur > 0 ? ocDur : null,
-        verified: ocGroup.events[ocGroup.events.length - 1]?.verified ?? null,
-        label: resolveLabel(phase, cycleIdx - 1),
-        cc_action: null,
-        oc_action: ocActions.join('+'),
-        trace: ocTrace,
-        cc_cost: null, oc_cost: null,
-        cc_input_tokens: null, cc_output_tokens: null, cc_cache_tokens: null,
-        oc_input_tokens: null, oc_output_tokens: null, oc_cache_tokens: null,
-        cc_model: null, oc_model: null,
+        cc_tool_counts: null, oc_tool_counts: null,
       })
       i += 1
     } else {
@@ -650,6 +750,16 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
   }
 
   return cycles
+}
+
+function readSpecFiles(projectPath: string): Record<string, string> {
+  const files: Record<string, string> = {}
+  const names = ['SPEC.md', 'OC-TASK.md', 'OC-REPORT.md']
+  for (const name of names) {
+    const fp = path.join(projectPath, 'specs', name)
+    try { files[name] = fs.readFileSync(fp, 'utf-8') } catch { /* file not found */ }
+  }
+  return files
 }
 
 function parseSpecPhases(projectPath: string): string[] {
@@ -666,7 +776,7 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
   try {
     const active = findActiveOrchestration()
     if (!active) {
-      res.json({ status: 'none', project_path: null, project_name: null, goal: '', current_phase: null, total_phases: 0, completed: 0, phase_retry: 0, waiting_for_user: false, tsc_passed: null, tests_passed: null, tsc_errors: [], tests_errors: [], started_at: null, cc_events: [], oc_events: [], cycles: [], cc_total_cost: 0, oc_total_cost: 0 })
+      res.json({ status: 'none', project_path: null, project_name: null, goal: '', current_phase: null, total_phases: 0, completed: 0, phase_retry: 0, waiting_for_user: false, tsc_passed: null, tests_passed: null, tsc_errors: [], tests_errors: [], started_at: null, cc_events: [], oc_events: [], cycles: [], cc_total_cost: 0, oc_total_cost: 0, spec_files: {}, command_log: [], file_changes: [] })
       return
     }
 
@@ -680,12 +790,14 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
     const totalPhases = specPhases.length
     const completed = wf?.total_cycles ?? 0
     const wfStartTs = wf.created_at ? new Date(wf.created_at).getTime() : undefined
-    const { cc, oc } = parseLog(wfStartTs)
+    const { cc, oc, detectedStartTs, command_log, file_changes } = parseLog(wfStartTs)
     const cycles = buildCycles(cc, oc, active.projectPath, specPhases)
 
+    // Prefer the log-detected start (CICLO 1 timestamp) over wf.created_at — more reliable.
+    const runStartMs = detectedStartTs ?? toTimestampMs(wf.created_at)
+
     // Enrich cycles with DB session cost/token data
-    if (wf.created_at) {
-      const runStartMs = new Date(wf.created_at).getTime()
+    if (runStartMs > 0) {
       const sessions = dbOps.getSessionsInRange(runStartMs, Date.now() + 60_000)
       const ccSess = sessions.filter(s => !s.id.startsWith('ses_') && !s.id.startsWith('agent-')).sort((a, b) => a.started_at - b.started_at)
       const ocSess = sessions.filter(s => s.id.startsWith('ses_')).sort((a, b) => a.started_at - b.started_at)
@@ -707,6 +819,16 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
           cycle.oc_cache_tokens = s.total_cache_read ?? null
           cycle.oc_model = s.dominant_model ?? null
         }
+        // Tool counts via timestamp range — works regardless of session start time
+        const enrichToolCounts = (events: OrchEvent[], source: 'claude-code' | 'opencode') => {
+          if (events.length === 0) return null
+          const first = events[0].full_ts
+          const last = events[events.length - 1]
+          const end = last.full_ts + (last.duration_secs ?? 0) * 1000 + 5_000
+          return dbOps.getToolCountsByRange(first - 5_000, end, source)
+        }
+        cycle.cc_tool_counts = enrichToolCounts(cycle.cc_events, 'claude-code')
+        cycle.oc_tool_counts = enrichToolCounts(cycle.oc_events, 'opencode')
       }
     }
 
@@ -736,20 +858,24 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
       tests_passed:   typeof wf.tests_passed === 'string' ? wf.tests_passed === 'true' : (wf.tests_passed ?? null),
       tsc_errors:     Array.isArray(wf.tsc_errors) ? wf.tsc_errors : [],
       tests_errors:   Array.isArray(wf.tests_errors) ? wf.tests_errors : [],
-      started_at:     wf?.created_at ?? null,
+      started_at:     detectedStartTs ? new Date(detectedStartTs).toISOString() : (wf?.created_at ?? null),
       cc_events:      cc,
       oc_events:      oc,
       cycles,
       cc_total_cost:  cycles.reduce((s, c) => s + (c.cc_cost ?? 0), 0),
       oc_total_cost:  cycles.reduce((s, c) => s + (c.oc_cost ?? 0), 0),
+      spec_files:     readSpecFiles(active.projectPath),
+      command_log,
+      file_changes,
     }
 
+    const cleanToolMarker = (events: OrchEvent[]) => events.forEach(e => delete (e as any)._tool)
     for (const c of detail.cycles) {
-      for (const e of c.cc_events) { delete (e as any)._tool }
-      for (const e of c.oc_events) { delete (e as any)._tool }
+      cleanToolMarker(c.cc_events)
+      cleanToolMarker(c.oc_events)
     }
-    for (const e of detail.cc_events) { delete (e as any)._tool }
-    for (const e of detail.oc_events) { delete (e as any)._tool }
+    cleanToolMarker(detail.cc_events)
+    cleanToolMarker(detail.oc_events)
 
     _cache = { data: detail, ts: Date.now(), projectPath: active.projectPath }
 
@@ -771,7 +897,7 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
 
     res.json(detail)
   } catch (err) {
-    res.json({ status: 'none', project_path: null, project_name: null, goal: '', current_phase: null, total_phases: 0, completed: 0, phase_retry: 0, waiting_for_user: false, tsc_passed: null, tests_passed: null, tsc_errors: [], tests_errors: [], started_at: null, cc_events: [], oc_events: [], cycles: [], cc_total_cost: 0, oc_total_cost: 0 })
+    res.json({ status: 'none', project_path: null, project_name: null, goal: '', current_phase: null, total_phases: 0, completed: 0, phase_retry: 0, waiting_for_user: false, tsc_passed: null, tests_passed: null, tsc_errors: [], tests_errors: [], started_at: null, cc_events: [], oc_events: [], cycles: [], cc_total_cost: 0, oc_total_cost: 0, spec_files: {}, command_log: [], file_changes: [] })
   }
 })
 
@@ -791,7 +917,110 @@ orchestrationRouter.get('/api/orchestration/runs/:runKey', (req: Request, res: R
     const runKey = decodeURIComponent(req.params.runKey)
     const run = dbOps.getOrchRun(runKey)
     if (!run) { res.status(404).json({ error: 'Run not found' }); return }
-    res.json(run)
+
+    if (run.snapshot_json) {
+      res.json(JSON.parse(run.snapshot_json))
+      return
+    }
+
+    // Build partial detail from DB fields when no snapshot exists
+    const partialDetail: OrchDetail = {
+      project_path:   run.project_path ?? '',
+      project_name:   run.project_name ?? '',
+      goal:           run.goal ?? '',
+      status:         run.status === 'complete' ? 'complete' : run.status === 'active' ? 'active' : 'none',
+      current_phase:  null,
+      total_phases:   run.total_cycles ?? 0,
+      completed:      run.total_cycles ?? 0,
+      phase_retry:    0,
+      waiting_for_user: false,
+      tsc_passed:     null,
+      tests_passed:   null,
+      tsc_errors:     [],
+      tests_errors:   [],
+      started_at:     run.started_at ?? null,
+      cc_events:      [],
+      oc_events:      [],
+      cycles:         [],
+      cc_total_cost:  0,
+      oc_total_cost:  0,
+      spec_files:     readSpecFiles(run.project_path ?? ''),
+      command_log:    [],
+      file_changes:   [],
+    }
+    res.json(partialDetail)
+  } catch {
+    res.status(500).json({ error: 'Internal error' })
+  }
+})
+
+orchestrationRouter.get('/api/orchestration/stats', (_req: Request, res: Response) => {
+  try {
+    const active = findActiveOrchestration()
+    if (!active) { res.json({ avg_cost_per_cycle: 0, avg_duration_secs: 0, avg_error_rate: 0, avg_verify_pass_rate: 0, total_runs: 0 }); return }
+    const agg = dbOps.getOrchAggregates(active.projectPath)
+    res.json(agg)
+  } catch {
+    res.json({ avg_cost_per_cycle: 0, avg_duration_secs: 0, avg_error_rate: 0, avg_verify_pass_rate: 0, total_runs: 0 })
+  }
+})
+
+orchestrationRouter.get('/api/orchestration/sessions', (_req: Request, res: Response) => {
+  try {
+    const active = findActiveOrchestration()
+    if (!active) { res.json([]); return }
+    const wf = active.wf
+    const runStartMs = wf?.created_at ? new Date(wf.created_at).getTime() : (Date.now() - 86_400_000)
+    const sessions = dbOps.getSessionsInRange(runStartMs, Date.now() + 60_000)
+    res.json(sessions.map(s => ({
+      id: s.id,
+      cost: s.total_cost_usd ?? 0,
+      input_tokens: s.total_input_tokens ?? 0,
+      output_tokens: s.total_output_tokens ?? 0,
+      model: s.dominant_model ?? null,
+      source: s.id.startsWith('ses_') ? 'opencode' : 'claude-code',
+      started_at: s.started_at,
+    })))
+  } catch {
+    res.json([])
+  }
+})
+
+orchestrationRouter.get('/api/orchestration/diff', (req: Request, res: Response) => {
+  try {
+    const runAKey = req.query.runA as string
+    const runBKey = req.query.runB as string
+    if (!runAKey || !runBKey) { res.status(400).json({ error: 'runA and runB required' }); return }
+    const runA = dbOps.getOrchRun(runAKey)
+    const runB = dbOps.getOrchRun(runBKey)
+    if (!runA || !runB) { res.status(404).json({ error: 'Run not found' }); return }
+    let snapA: any, snapB: any
+    try { snapA = JSON.parse(runA.snapshot_json ?? '{}') } catch { snapA = { cycles: [] } }
+    try { snapB = JSON.parse(runB.snapshot_json ?? '{}') } catch { snapB = { cycles: [] } }
+    const cyclesA = (snapA.cycles ?? []) as OrchCycle[]
+    const cyclesB = (snapB.cycles ?? []) as OrchCycle[]
+    const maxLen = Math.max(cyclesA.length, cyclesB.length)
+    const diffs = []
+    for (let i = 0; i < maxLen; i++) {
+      const ca = cyclesA[i]
+      const cb = cyclesB[i]
+      if (!ca && !cb) continue
+      diffs.push({
+        index: i + 1,
+        label: cb?.label ?? ca?.label ?? `Cycle ${i + 1}`,
+        costDiff: (cb?.cc_cost ?? 0) + (cb?.oc_cost ?? 0) - ((ca?.cc_cost ?? 0) + (ca?.oc_cost ?? 0)),
+        durDiff: (cb?.duration_secs ?? 0) - (ca?.duration_secs ?? 0),
+        toolsDiff: (cb ? Object.values(cb.cc_tool_counts ?? {}).reduce((s: number, c: number) => s + c, 0) + Object.values(cb.oc_tool_counts ?? {}).reduce((s: number, c: number) => s + c, 0) : 0)
+          - (ca ? Object.values(ca.cc_tool_counts ?? {}).reduce((s: number, c: number) => s + c, 0) + Object.values(ca.oc_tool_counts ?? {}).reduce((s: number, c: number) => s + c, 0) : 0),
+        statusA: ca?.status ?? null,
+        statusB: cb?.status ?? null,
+      })
+    }
+    res.json({
+      runA: { run_key: runAKey, project: runA.project_name, cycles: cyclesA.length },
+      runB: { run_key: runBKey, project: runB.project_name, cycles: cyclesB.length },
+      diffs,
+    })
   } catch {
     res.status(500).json({ error: 'Internal error' })
   }

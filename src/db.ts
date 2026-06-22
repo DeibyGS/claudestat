@@ -687,6 +687,25 @@ const stmts = {
     LIMIT ?
   `),
 
+  getToolCountsBySession: db.prepare(`
+    SELECT tool_name, COUNT(*) AS count
+    FROM events
+    WHERE session_id = ? AND type = 'Done' AND tool_name IS NOT NULL
+    GROUP BY tool_name
+    ORDER BY count DESC
+  `),
+
+  getToolCountsByRange: db.prepare(`
+    SELECT e.tool_name, COUNT(*) AS count
+    FROM events e
+    JOIN sessions s ON e.session_id = s.id
+    WHERE e.type = 'Done' AND e.tool_name IS NOT NULL
+      AND e.ts BETWEEN ? AND ?
+      AND (? = 'all' OR COALESCE(s.source, 'claude-code') = ?)
+    GROUP BY e.tool_name
+    ORDER BY count DESC
+  `),
+
   getWeeklyInsight: db.prepare(`
     SELECT
       COUNT(*)                                                      AS total_sessions,
@@ -800,6 +819,58 @@ const stmts = {
 
   getOrchRun: db.prepare(`
     SELECT * FROM orchestration_runs WHERE run_key = ?
+  `),
+
+  getOrchAggregates: db.prepare(`
+    SELECT
+      COALESCE(AVG(j.avg_cost), 0) AS avg_cost_per_cycle,
+      COALESCE(AVG(j.avg_dur), 0)  AS avg_duration_secs,
+      COALESCE(AVG(j.err_rate), 0) AS avg_error_rate,
+      COALESCE(AVG(j.pass_rate), 0) AS avg_verify_pass_rate,
+      COUNT(*) AS total_runs
+    FROM (
+      SELECT
+        run_key,
+        json_array_length(json_extract(snapshot_json, '$.cycles')) AS cycle_count,
+        CASE WHEN json_array_length(json_extract(snapshot_json, '$.cycles')) > 0
+          THEN (COALESCE(json_extract(snapshot_json, '$.cc_total_cost'), 0) +
+                COALESCE(json_extract(snapshot_json, '$.oc_total_cost'), 0)) /
+               json_array_length(json_extract(snapshot_json, '$.cycles'))
+          ELSE 0 END AS avg_cost,
+        CASE WHEN json_array_length(json_extract(snapshot_json, '$.cycles')) > 0
+          THEN (
+            SELECT COALESCE(AVG(cy_dur), 0) FROM (
+              SELECT json_extract(cy.value, '$.duration_secs') AS cy_dur
+              FROM json_each(json_extract(snapshot_json, '$.cycles')) AS cy
+            )
+          )
+          ELSE 0 END AS avg_dur,
+        CASE WHEN json_array_length(json_extract(snapshot_json, '$.cycles')) > 0
+          THEN (
+            SELECT CAST(SUM(CASE WHEN cy_st = 'error' OR cy_st = 'verify_failed' THEN 1 ELSE 0 END) AS REAL) /
+                   MAX(1, (SELECT COUNT(*) FROM json_each(json_extract(snapshot_json, '$.cycles'))))
+            FROM (
+              SELECT json_extract(cy.value, '$.status') AS cy_st
+              FROM json_each(json_extract(snapshot_json, '$.cycles')) AS cy
+            )
+          )
+          ELSE 0 END AS err_rate,
+        CASE WHEN json_array_length(json_extract(snapshot_json, '$.cycles')) > 0
+          THEN (
+            SELECT CAST(SUM(CASE WHEN cy_st = 'success' OR cy_vr = 'true' THEN 1 ELSE 0 END) AS REAL) /
+                   MAX(1, (SELECT COUNT(*) FROM json_each(json_extract(snapshot_json, '$.cycles'))))
+            FROM (
+              SELECT json_extract(cy.value, '$.status') AS cy_st,
+                     json_extract(cy.value, '$.verified') AS cy_vr
+              FROM json_each(json_extract(snapshot_json, '$.cycles')) AS cy
+            )
+          )
+          ELSE 0 END AS pass_rate
+      FROM orchestration_runs
+      WHERE project_path = ? AND status = 'complete' AND snapshot_json IS NOT NULL
+      ORDER BY started_at DESC
+      LIMIT 10
+    ) j
   `),
 }
 
@@ -1039,6 +1110,18 @@ export const dbOps = {
       }
     }
     return tools
+  },
+
+  getToolCountsForSession(sessionId: string): Record<string, number> | null {
+    const rows = stmts.getToolCountsBySession.all(sessionId) as Array<{ tool_name: string; count: number }>
+    if (rows.length === 0) return null
+    return Object.fromEntries(rows.map(r => [r.tool_name, r.count]))
+  },
+
+  getToolCountsByRange(startMs: number, endMs: number, source: 'claude-code' | 'opencode' | 'all' = 'all'): Record<string, number> | null {
+    const rows = stmts.getToolCountsByRange.all(startMs, endMs, source, source) as Array<{ tool_name: string; count: number }>
+    if (rows.length === 0) return null
+    return Object.fromEntries(rows.map(r => [r.tool_name, r.count]))
   },
 
   getWeeklyInsight(days = 7) {
@@ -1406,5 +1489,14 @@ export const dbOps = {
 
   getOrchRun(runKey: string): OrchRunRow | undefined {
     return stmts.getOrchRun.get(runKey) as OrchRunRow | undefined
+  },
+
+  getOrchAggregates(projectPath: string): { avg_cost_per_cycle: number; avg_duration_secs: number; avg_error_rate: number; avg_verify_pass_rate: number; total_runs: number } {
+    try {
+      const row = stmts.getOrchAggregates.get(projectPath) as any
+      return row ?? { avg_cost_per_cycle: 0, avg_duration_secs: 0, avg_error_rate: 0, avg_verify_pass_rate: 0, total_runs: 0 }
+    } catch {
+      return { avg_cost_per_cycle: 0, avg_duration_secs: 0, avg_error_rate: 0, avg_verify_pass_rate: 0, total_runs: 0 }
+    }
   },
 }

@@ -174,7 +174,7 @@ function parseLog(sinceTs?: number): { cc: OrchEvent[]; oc: OrchEvent[]; detecte
   for (const line of lines) {
     if (/CICLO 1 \/ /.test(line)) {
       const m = line.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/)
-      if (m) cycle1Ts = new Date(m[1].replace(' ', 'T') + 'Z').getTime()
+      if (m) cycle1Ts = new Date(m[1].replace(' ', 'T')).getTime()
     }
   }
   // Use cycle1Ts as sinceTs — it anchors the window to the current run only.
@@ -189,7 +189,7 @@ function parseLog(sinceTs?: number): { cc: OrchEvent[]; oc: OrchEvent[]; detecte
     if (!tsMatch) continue
     const tsStr = tsMatch[1]
     const timeLabel = tsStr.slice(11, 19)
-    const fullTs = new Date(tsStr.replace(' ', 'T') + 'Z').getTime()
+    const fullTs = new Date(tsStr.replace(' ', 'T')).getTime()
     if (sinceTs !== undefined && fullTs < sinceTs) continue
 
     const phaseName = (() => {
@@ -810,6 +810,7 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
           cycle.cc_output_tokens = s.total_output_tokens ?? null
           cycle.cc_cache_tokens = s.total_cache_read ?? null
           cycle.cc_model = s.dominant_model ?? null
+          cycle.cc_tool_counts = dbOps.getToolCountsForSession(s.id)
         }
         if (cycle.oc_events.length > 0 && oi < ocSess.length) {
           const s = ocSess[oi++]
@@ -818,17 +819,8 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
           cycle.oc_output_tokens = s.total_output_tokens ?? null
           cycle.oc_cache_tokens = s.total_cache_read ?? null
           cycle.oc_model = s.dominant_model ?? null
+          cycle.oc_tool_counts = dbOps.getToolCountsForSession(s.id)
         }
-        // Tool counts via timestamp range — works regardless of session start time
-        const enrichToolCounts = (events: OrchEvent[], source: 'claude-code' | 'opencode') => {
-          if (events.length === 0) return null
-          const first = events[0].full_ts
-          const last = events[events.length - 1]
-          const end = last.full_ts + (last.duration_secs ?? 0) * 1000 + 5_000
-          return dbOps.getToolCountsByRange(first - 5_000, end, source)
-        }
-        cycle.cc_tool_counts = enrichToolCounts(cycle.cc_events, 'claude-code')
-        cycle.oc_tool_counts = enrichToolCounts(cycle.oc_events, 'opencode')
       }
     }
 

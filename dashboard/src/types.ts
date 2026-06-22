@@ -361,6 +361,19 @@ export interface OrchCycle {
   oc_cache_tokens:  number | null
   cc_model:         string | null
   oc_model:         string | null
+  cc_tool_counts:   Record<string, number> | null
+  oc_tool_counts:   Record<string, number> | null
+}
+
+export interface CommandLogEntry {
+  ts:      number
+  command: string
+}
+
+export interface FileChangeEntry {
+  ts:     number
+  path:   string
+  action: 'create' | 'modify' | 'delete'
 }
 
 export interface OrchTimeline {
@@ -383,6 +396,9 @@ export interface OrchTimeline {
   cycles:           OrchCycle[]
   cc_total_cost:    number
   oc_total_cost:    number
+  spec_files:       Record<string, string>
+  command_log:      CommandLogEntry[]
+  file_changes:     FileChangeEntry[]
 }
 
 export interface OrchRunSummary {
@@ -401,4 +417,59 @@ export interface OrchFrameworkHealth {
   prompts:        { name: string; lines: number }[]
   skill_lines:    number | null
   status_json_valid: boolean
+}
+
+export interface OrchAggregates {
+  avg_cost_per_cycle:   number
+  avg_duration_secs:    number
+  avg_error_rate:       number
+  avg_verify_pass_rate: number
+  total_runs:           number
+}
+
+export interface GanttBar {
+  cycleIdx:    number
+  label:       string
+  status:      OrchCycle['status']
+  verified:    boolean | null
+  leftPct:     number
+  widthPct:    number
+  cost:        number | null
+  duration:    number | null
+  tool:        'cc' | 'oc'
+}
+
+export interface SessionTableRow {
+  id:          string
+  cost:        number
+  input_tokens: number
+  output_tokens: number
+  model:       string | null
+  source:      'claude-code' | 'opencode'
+  started_at:  number
+}
+
+export interface CycleToolTrend {
+  cycleIdx:     number
+  label:        string
+  Read:         number
+  Edit:         number
+  Bash:         number
+  Other:        number
+}
+
+export interface CycleDiff {
+  index:     number
+  label:     string
+  costDiff:  number
+  durDiff:   number
+  toolsDiff: number
+  statusA:   string | null
+  statusB:   string | null
+}
+
+export interface DiffResult {
+  runA:  { run_key: string; project: string | null; cycles: number }
+  runB:  { run_key: string; project: string | null; cycles: number }
+  diffs: CycleDiff[]
 }

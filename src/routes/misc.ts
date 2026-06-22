@@ -178,11 +178,16 @@ miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
     project: string | null
   }> = []
 
-  // Filter: use real event time from events table, not last_event_at
+  // Filter: use real event time from events table, not last_event_at.
+  // For poll-based adapters (opencode headless) that don't generate hook events,
+  // fall back to last_event_at from the sessions table.
+  const effectiveTs = (s: { id: string; source?: string | null; last_event_at?: number }) => {
+    const real = realEventTimes.get(s.id) ?? 0
+    return real !== 0 ? real : (s.last_event_at ?? 0)
+  }
   const activeIds = new Set(sessions.filter(s => {
     const cutoff = s.source === 'claude-code' ? CC_CUTOFF : OC_CUTOFF
-    const realTs = realEventTimes.get(s.id) ?? 0
-    return realTs >= cutoff
+    return effectiveTs(s) >= cutoff
   }).map(s => s.id))
 
   // supersededIds: only for OC-style session chaining (newer session replaces older parent).
@@ -193,7 +198,7 @@ miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
   for (const s of sessions) {
     const realTs = realEventTimes.get(s.id) ?? 0
     const cutoff = s.source === 'claude-code' ? CC_CUTOFF : OC_CUTOFF
-    if (realTs < cutoff) continue
+    if (effectiveTs(s) < cutoff) continue
     const src = s.source ?? 'unknown'
     if (!KNOWN_SOURCES.has(src)) continue
     if (s.id.startsWith('agent-')) continue

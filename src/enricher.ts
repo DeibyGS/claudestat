@@ -130,7 +130,7 @@ export function startEnricher(
   watcher.on('add', handleFile)
 
   // ─── Poll-based adapters (e.g. OpenCode SQLite) ─────────────────────────────
-  const POLL_INTERVAL_MS = 10_000
+  const POLL_INTERVAL_MS = 3_000
   const POLL_LOOKBACK_MS = 7 * 24 * 60 * 60_000  // backfill 7 days on first start
   for (const adapter of adapters) {
     if (!isPollable(adapter)) continue

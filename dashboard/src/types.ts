@@ -361,10 +361,11 @@ export interface OrchCycle {
   oc_cache_tokens:  number | null
   cc_model:         string | null
   oc_model:         string | null
-  cc_tool_counts:   Record<string, number> | null
-  oc_tool_counts:   Record<string, number> | null
-  cc_session_id:    string | null
-  oc_session_id:    string | null
+  cc_tool_counts:      Record<string, number> | null
+  oc_tool_counts:      Record<string, number> | null
+  cc_session_id:       string | null
+  oc_session_id:       string | null
+  oc_tokens_estimated: boolean
 }
 
 export interface CommandLogEntry {

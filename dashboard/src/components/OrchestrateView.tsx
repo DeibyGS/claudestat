@@ -1173,7 +1173,7 @@ function LiveProgress({ events, commandLog, fileChanges }: { events: OrchEvent[]
   const projectedThreshold = aggregates && projectedCost ? aggregates.avg_cost_per_cycle * totalPhases * 1.2 : null
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <div style={{ padding: '6px 16px', borderBottom: `1px solid ${BORDER}`, background: BG_DARK, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <Workflow size={14} color={CC_COLOR} />

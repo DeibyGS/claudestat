@@ -116,7 +116,8 @@ Then just ask:
 - **52-week activity heatmap** — visualize your coding activity across the full year in Analytics
 - **Period-over-period deltas** — Analytics KPIs show ↑↓% trend vs. the previous period
 - **Projects search & filter** — find projects instantly; filter by activity, cost, or efficiency threshold
-- **Web dashboard** — 6 tabs: Live, History, Projects, Analytics, Top, System
+- **Orchestration Command Center** — live swim-lane view of CC+OC multi-agent runs: per-cycle cost, tokens (with cache), files changed, git commits, and model breakdown; cycle traces survive log rotation
+- **Web dashboard** — 7 tabs: Live, History, Projects, Analytics, Top, System, Orchestrate
 - **MCP server** — 7 tools so Claude can answer questions about its own usage
 - **Weekly insights** — pattern analysis with actionable tips
 - **Multi-source** — switch between Claude Code and OpenCode sessions in one click

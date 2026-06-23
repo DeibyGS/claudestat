@@ -616,16 +616,26 @@ function extractTraceForRange(startTs: number, endTs: number, tool: 'cc' | 'oc',
     }
   }
 
-  // Merge git show --stat entries into files_changed (don't replace)
+  // Merge git show --name-only into files_changed (precise list without stats noise)
   if (trace.git_commit && projectPath) {
     try {
-      const out = execSync(`git show --stat --format="" ${trace.git_commit}`, { cwd: projectPath, timeout: 5000 }).toString()
-      const fileMatches = out.match(/^[ \t]+(.+)/gm)
-      if (fileMatches) {
-        const gitFiles = fileMatches.map(f => f.trim().split('|')[0].trim()).filter(f => f && !f.includes('=>') && !/\d+ files? changed/.test(f))
-        for (const gf of gitFiles) {
-          if (!trace.files_changed.includes(gf)) trace.files_changed.push(gf)
-        }
+      const out = execSync(`git show --name-only --format="" ${trace.git_commit}`, { cwd: projectPath, timeout: 5000 }).toString()
+      for (const line of out.split('\n')) {
+        const f = line.trim()
+        if (f && !f.includes(' ') && !trace.files_changed.includes(f)) trace.files_changed.push(f)
+      }
+    } catch {}
+  }
+
+  // Fallback for OC-only cycles: read OC-REPORT.md (OC always generates it with file list)
+  if (trace.files_changed.length === 0 && tool === 'oc' && projectPath) {
+    try {
+      const reportPath = path.join(projectPath, 'specs', 'OC-REPORT.md')
+      const report = fs.readFileSync(reportPath, 'utf-8')
+      const matches = [...report.matchAll(/[-*]\s+[`"]?([\w./\-]+\.\w+)[`"]?/gm)]
+      for (const m of matches) {
+        const f = m[1].trim()
+        if (f && !trace.files_changed.includes(f)) trace.files_changed.push(f)
       }
     } catch {}
   }
@@ -917,7 +927,8 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
           if (s) {
             usedCc.add(s.id)
             cycle.cc_cost = s.total_cost_usd ?? null
-            cycle.cc_input_tokens = s.total_input_tokens ?? null
+            // cc_input_tokens = new tokens + cache_read + cache_creation for accurate display vs cost
+            cycle.cc_input_tokens = (s.total_input_tokens ?? 0) + (s.total_cache_read ?? 0) + (s.total_cache_creation ?? 0) || null
             cycle.cc_output_tokens = s.total_output_tokens ?? null
             cycle.cc_cache_tokens = s.total_cache_read ?? null
             cycle.cc_model = s.dominant_model ?? null
@@ -1000,6 +1011,25 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
 
     try {
       const runKey = `${active.projectPath}::${wf.created_at ?? 'unknown'}`
+
+      // Persist completed cycle traces — never overwrite a good trace with an empty one
+      for (const cycle of detail.cycles) {
+        if (cycle.status === 'active') continue
+        const hasData = cycle.trace.files_changed.length > 0 || cycle.trace.git_commit !== null
+        if (!hasData) continue
+        dbOps.upsertOrchCycleTrace(runKey, cycle.index, JSON.stringify(cycle.trace))
+      }
+
+      // Restore traces from DB for cycles where extractTraceForRange returned empty (e.g. after log rotation)
+      for (const cycle of detail.cycles) {
+        if (cycle.status === 'active') continue
+        if (cycle.trace.files_changed.length > 0 || cycle.trace.git_commit !== null) continue
+        const saved = dbOps.getOrchCycleTrace(runKey, cycle.index)
+        if (saved) {
+          try { cycle.trace = JSON.parse(saved) } catch {}
+        }
+      }
+
       dbOps.upsertOrchRun({
         run_key:      runKey,
         project_path: active.projectPath,

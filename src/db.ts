@@ -161,6 +161,16 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
     );
     CREATE INDEX IF NOT EXISTS idx_orch_runs_project ON orchestration_runs(project_path);
   ` },
+  { version: 25, sql: `
+    CREATE TABLE IF NOT EXISTS orch_cycle_traces (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_key     TEXT    NOT NULL,
+      cycle_index INTEGER NOT NULL,
+      trace_json  TEXT    NOT NULL DEFAULT '{}',
+      frozen_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(run_key, cycle_index) ON CONFLICT REPLACE
+    );
+  ` },
 ]
 
 function runMigrations() {
@@ -799,6 +809,14 @@ const stmts = {
     FROM period_cost pc, attributed_cost ac
   `),
 
+  upsertOrchCycleTrace: db.prepare(`
+    INSERT INTO orch_cycle_traces (run_key, cycle_index, trace_json, frozen_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(run_key, cycle_index) DO UPDATE SET
+      trace_json = excluded.trace_json,
+      frozen_at  = excluded.frozen_at
+  `),
+  getOrchCycleTrace: db.prepare(`SELECT trace_json FROM orch_cycle_traces WHERE run_key = ? AND cycle_index = ?`),
   upsertOrchRun: db.prepare(`
     INSERT INTO orchestration_runs (run_key, project_path, project_name, goal, status, total_cycles, started_at, ended_at, metrics_json, snapshot_json)
     VALUES (@run_key, @project_path, @project_name, @goal, @status, @total_cycles, @started_at, @ended_at, @metrics_json, @snapshot_json)
@@ -1489,6 +1507,13 @@ export const dbOps = {
 
   getOrchRun(runKey: string): OrchRunRow | undefined {
     return stmts.getOrchRun.get(runKey) as OrchRunRow | undefined
+  },
+  upsertOrchCycleTrace(runKey: string, cycleIndex: number, traceJson: string): void {
+    stmts.upsertOrchCycleTrace.run(runKey, cycleIndex, traceJson)
+  },
+  getOrchCycleTrace(runKey: string, cycleIndex: number): string | null {
+    const row = stmts.getOrchCycleTrace.get(runKey, cycleIndex) as { trace_json: string } | undefined
+    return row?.trace_json ?? null
   },
 
   getOrchAggregates(projectPath: string): { avg_cost_per_cycle: number; avg_duration_secs: number; avg_error_rate: number; avg_verify_pass_rate: number; total_runs: number } {

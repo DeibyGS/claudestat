@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.2] - 2026-06-23
+
+### Added
+
+- **Cycle trace persistence** — completed orchestration cycle traces (files changed, git commit) are now stored in `orch_cycle_traces` DB table (migration 25), surviving log rotation across multi-day runs
+
+### Fixed
+
+- **CC token count includes cache** — `cc_input_tokens` now sums `total_input + cache_read + cache_creation` tokens for accurate display matching the actual session cost
+- **OC-REPORT.md file fallback** — OC-only cycles with no git-tracked files now extract `files_changed` from `specs/OC-REPORT.md` bullet lists as a fallback
+- **OC model fallback** — cycles with unknown OC model (`deepseek-v4-flash-free` free tier) fall back to `deepseek-chat` pricing for cost estimation; free-tier cost is always read from `opencode.db`
+
 ## [1.12.0] - 2026-06-20
 
 ### Added

@@ -6,6 +6,7 @@ export interface ModelPrice {
 
 export const MODEL_PRICING: Record<string, ModelPrice> = {
   // DeepSeek
+  'deepseek-v4-flash-free':      { input: 0.00,  output: 0.00  }, // free tier — cost comes from opencode.db directly
   'deepseek-chat':              { input: 0.27,  output: 1.10  },
   'deepseek-v3':                { input: 0.27,  output: 1.10  },
   'deepseek-reasoner':          { input: 0.55,  output: 2.19  },

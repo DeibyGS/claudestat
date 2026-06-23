@@ -595,6 +595,27 @@ function extractTraceForRange(startTs: number, endTs: number, tool: 'cc' | 'oc',
     trace.verification = { tsc_passed: tscResult, tests_passed: testsResult, grep_checks: grepChecks, tsc_errors: tscErrors, tests_errors: testsErrors }
   }
 
+  // If git commit not found in range, scan wider: pre-start (commit logged before CC ▶) and post-end (logged after OC ✓)
+  if (!trace.git_commit) {
+    const nextCycleMarkers = ['OC ▶', 'CC ▶', 'CICLO ', 'ORCHESTRATION']
+    // Pre-start: git commit often appears just before CC ▶ (after OC finishes, before CC reviews)
+    const preStart = Math.max(0, startIdx - 200)
+    for (let j = startIdx - 1; j >= preStart; j--) {
+      const gm = allLines[j].match(/\[\S+\s+([0-9a-f]{7,40})\]\s+orchestrate:/)
+      if (gm) { trace.git_commit = gm[1]; break }
+    }
+    // Post-end: scan forward until next cycle marker
+    if (!trace.git_commit) {
+      const postEnd = Math.min(endIdx + 2000, allLines.length - 1)
+      for (let j = endIdx + 1; j <= postEnd; j++) {
+        const l = allLines[j]
+        if (nextCycleMarkers.some(m => l.includes(m))) break
+        const gm = l.match(/\[\S+\s+([0-9a-f]{7,40})\]\s+orchestrate:/)
+        if (gm) { trace.git_commit = gm[1]; break }
+      }
+    }
+  }
+
   // Merge git show --stat entries into files_changed (don't replace)
   if (trace.git_commit && projectPath) {
     try {
@@ -640,6 +661,21 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
     groups.push({ tool: currentTool, events: currentGroup })
   }
 
+  const phaseFromEvents = (evts: OrchEvent[]): string | null => {
+    for (const e of evts) { if (e.phase) return e.phase }
+    return null
+  }
+  const resolveLabel = (phase: string | null, idx: number): string => {
+    if (phase) return phase
+    const phaseMatch = phase?.match(/Fase\s+(\d+)/)
+    if (phaseMatch) {
+      const pn = parseInt(phaseMatch[1], 10)
+      if (specPhases[pn - 1]) return specPhases[pn - 1]
+    }
+    if (specPhases[idx - 1]) return specPhases[idx - 1]
+    return `Cycle ${idx}`
+  }
+
   const cycles: OrchCycle[] = []
   let orphanOcEvents: OrchEvent[] = []
   let i = 0
@@ -648,26 +684,40 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
     const ccGroup = groups[i]?.tool === 'cc' ? groups[i] : null
     const ocGroup = groups[i + 1]?.tool === 'oc' ? groups[i + 1] : null
 
-    // Orphan OC group (no preceding CC paired with it)
+    // OC-only cycle: CC was skipped (e.g. SKIP INITIAL) — build cycle with null CC fields
     if (groups[i].tool === 'oc') {
-      orphanOcEvents = groups[i].events
+      const ocGroup = groups[i]
+      const allOcEvents = [...orphanOcEvents, ...ocGroup.events]
+      orphanOcEvents = []
+      const hasError = ocGroup.events.some(e => e.action === 'error' || e.action === 'timeout')
+      const ocVerified = ocGroup.events[ocGroup.events.length - 1]?.verified ?? null
+      const ocActions = [...new Set(ocGroup.events.map(e => e.action))]
+      const ocDur = ocGroup.events.reduce((s, e) => s + (e.duration_secs ?? 0), 0)
+      const phase = phaseFromEvents(allOcEvents)
+      const ocStart = allOcEvents[0].full_ts
+      const ocEnd = allOcEvents[allOcEvents.length - 1].full_ts
+      const ocTrace = extractTraceForRange(ocStart, ocEnd, 'oc', projectPath)
+      cycles.push({
+        index: cycleIdx++,
+        cc_events: [],
+        oc_events: ocGroup.events,
+        status: hasError ? 'error' : ocVerified === false ? 'verify_failed' : 'success',
+        duration_secs: ocDur > 0 ? ocDur : null,
+        verified: ocVerified,
+        label: resolveLabel(phase, cycleIdx - 1),
+        cc_action: null,
+        oc_action: ocActions.join('+'),
+        trace: ocTrace,
+        cc_cost: null, oc_cost: null,
+        cc_input_tokens: null, cc_output_tokens: null, cc_cache_tokens: null,
+        oc_input_tokens: null, oc_output_tokens: null, oc_cache_tokens: null,
+        cc_model: null, oc_model: null,
+        cc_tool_counts: null, oc_tool_counts: null,
+        cc_session_id: null, oc_session_id: null,
+        oc_tokens_estimated: false,
+      })
       i += 1
       continue
-    }
-
-    const phaseFromEvents = (evts: OrchEvent[]): string | null => {
-      for (const e of evts) { if (e.phase) return e.phase }
-      return null
-    }
-    const resolveLabel = (phase: string | null, idx: number): string => {
-      if (phase) return phase
-      const phaseMatch = phase?.match(/Fase\s+(\d+)/)
-      if (phaseMatch) {
-        const pn = parseInt(phaseMatch[1], 10)
-        if (specPhases[pn - 1]) return specPhases[pn - 1]
-      }
-      if (specPhases[idx - 1]) return specPhases[idx - 1]
-      return `Cycle ${idx}`
     }
 
     if (ccGroup && ocGroup) {
@@ -727,7 +777,7 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
       const hasError = ccGroup.events.some(e => e.action === 'error')
       const ccActions = [...new Set(ccGroup.events.map(e => e.action))]
       const ccDur = ccGroup.events.reduce((s, e) => s + (e.duration_secs ?? 0), 0)
-      const phase = phaseFromEvents(ccGroup.events)
+      const phase = phaseFromEvents(ccGroup.events) ?? (specPhases.length > 0 ? specPhases[Math.min(cycleIdx - 1, specPhases.length) - 1] : null)
 
       const ccStart = ccGroup.events[0].full_ts
       const ccEnd = ccGroup.events[ccGroup.events.length - 1].full_ts
@@ -737,7 +787,7 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
         index: cycleIdx++,
         cc_events: ccGroup.events,
         oc_events: [],
-        status: hasError ? 'error' : 'active',
+        status: hasError ? 'error' : ccGroup.events.some(e => e.action === 'done') ? 'success' : 'active',
         duration_secs: ccDur > 0 ? ccDur : null,
         verified: null,
         label: resolveLabel(phase, cycleIdx - 1),
@@ -773,6 +823,12 @@ function readOcTokensFromDb(sessionId: string): { input: number; output: number 
   } catch { return null }
 }
 
+const OC_FALLBACK_MODEL = 'deepseek-chat' // used when OC doesn't register model in opencode.db
+
+function resolveOcModel(raw: string | null): string {
+  return raw && findPricing(raw) ? raw : OC_FALLBACK_MODEL
+}
+
 function enrichOcEstimate(cycle: OrchCycle): void {
   if ((cycle.oc_input_tokens ?? 0) > 0 || !cycle.oc_tool_counts) return
   // Try re-reading real tokens from opencode.db first
@@ -781,14 +837,13 @@ function enrichOcEstimate(cycle: OrchCycle): void {
     if (real) {
       cycle.oc_input_tokens  = real.input
       cycle.oc_output_tokens = real.output
-      const model = cycle.oc_model ?? ''
+      const model = resolveOcModel(cycle.oc_model)
       if ((cycle.oc_cost ?? 0) === 0) cycle.oc_cost = estimateCost(real.input, real.output, model)
       return
     }
   }
-  // Fallback: estimate tokens from tool counts
-  const model = cycle.oc_model ?? ''
-  if (!findPricing(model)) return // unknown model — skip estimation
+  // Fallback: estimate tokens from tool counts (deepseek if model unknown)
+  const model = resolveOcModel(cycle.oc_model)
   const estimated = estimateTokensFromToolCounts(cycle.oc_tool_counts)
   if (estimated === 0) return
   const outputEst = Math.round(estimated * 0.15) // output ~15% of input in typical agentic use
@@ -815,7 +870,7 @@ function parseSpecPhases(projectPath: string): string[] {
   const specPath = path.join(projectPath, 'specs', 'SPEC.md')
   try {
     const content = fs.readFileSync(specPath, 'utf-8')
-    const matches = [...content.matchAll(/^###\s+(Fase\s+\d+\s*[—–-]\s*.+)$/gm)]
+    const matches = [...content.matchAll(/^#{2,3}\s+((?:Phase|Fase)\s+\d+\s*[—–-].+)$/gm)]
     return matches.map(m => m[1].trim())
   } catch {}
   return []

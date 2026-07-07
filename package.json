@@ -1,6 +1,6 @@
 {
   "name": "@statforge/claudestat",
-  "version": "1.12.2",
+  "version": "1.13.0",
   "private": false,
   "publishConfig": {
     "access": "public"
@@ -39,7 +39,9 @@
     "context-window",
     "burn-rate",
     "ai-tools",
-    "llm-observability"
+    "llm-observability",
+    "library",
+    "typescript-sdk"
   ],
   "homepage": "https://github.com/DeibyGS/claudestat#readme",
   "repository": {
@@ -57,10 +59,34 @@
   "files": [
     "dist/",
     "hooks/",
-    "dashboard/dist/"
+    "dashboard/dist/",
+    "docs/LIBRARY.md"
   ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/lib.d.ts",
+      "require": "./dist/lib.js",
+      "import": "./dist/lib.js"
+    },
+    "./advanced": {
+      "types": "./dist/lib.d.ts",
+      "require": "./dist/lib.js",
+      "import": "./dist/lib.js"
+    },
+    "./cli": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp-server.d.ts",
+      "require": "./dist/mcp-server.js",
+      "import": "./dist/mcp-server.js"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "claudestat": "dist/index.js",
     "claudestat-mcp": "dist/mcp-server.js"

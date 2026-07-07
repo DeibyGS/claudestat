@@ -24,6 +24,7 @@ Works with **Claude Code** and **OpenCode**. Zero cloud dependencies. Pure Node.
 [Quick Start](#quick-start) •
 [Commands](#commands) •
 [Dashboard](#dashboard) •
+[Library API](#library-api) •
 [FAQ](#faq) •
 [Discussions](https://github.com/DeibyGS/claudestat/discussions) •
 [Contributing](#contributing)
@@ -50,6 +51,7 @@ Works with **Claude Code** and **OpenCode**. Zero cloud dependencies. Pure Node.
 - [Installation](#installation)
 - [Commands](#commands)
 - [Dashboard](#dashboard)
+- [Library API](#library-api)
 - [OpenCode Support](#opencode-support)
 - [MCP Server](#mcp-server)
 - [Configuration](#configuration)
@@ -123,6 +125,7 @@ Then just ask:
 - **Multi-source** — switch between Claude Code and OpenCode sessions in one click
 - **Source filter** — filter KPIs, charts, and tool rankings by Claude Code / OpenCode across all tabs
 - **Multi-tool coordination** — live intent panel with real collision detection (same file edited by CC and OC)
+- **Programmatic Library API** — import `dbOps`, pricing, and intelligence functions directly from your own tools (`v1.13.0+`, `@experimental`)
 
 ---
 
@@ -253,6 +256,37 @@ Then ask Claude: *"What's my quota status?"*, *"Show me my latest session"*, *"T
 ![claudestat MCP demo](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428703/claudeStat/MCP_claudestat_zgf7el.gif)
 
 [MCP tools reference →](docs/MCP.md)
+
+---
+
+## Library API
+
+> **`@experimental` (v1.13.0+)** — the programmatic surface may change in any minor/patch release until v2.0.0. Pin to exact versions when integrating.
+
+claudestat ships a TypeScript library entry alongside the CLI. Build exporters, alerters, and integrations that read session data directly — no `spawn`, no output parsing.
+
+```ts
+import { dbOps, analyzeSession, computeProjection, configure } from '@statforge/claudestat'
+
+// Opt out of the daemon-required guard (CI / batch jobs):
+configure({ throwOnNoDaemon: false })
+
+const sessions = dbOps.getAllSessions(20)
+const report   = analyzeSession(events, costUsd)
+const forecast = computeProjection(30)
+```
+
+By default the first `dbOps.*` call probes `http://127.0.0.1:7337/health` and throws `DaemonNotRunningError` if the daemon is down. Pure functions (`findPricing`, `analyzeSession`, `computeProjection`, …) never probe.
+
+| What | Stability |
+|---|---|
+| `dbOps` (15 read-only query functions) | `@experimental` — lazy daemon-guarded |
+| Pricing tables (`MODEL_PRICING`, `KNOWN_CONTEXT_WINDOWS`, `PRICING`) | `@experimental` |
+| Intelligence (`analyzeSession`, `detectLoops`, `predictSaturation`, …) | `@experimental` |
+| Forecasting + quota (`computeProjection`, `computeQuota`, …) | `@experimental` |
+| `configure({throwOnNoDaemon})` | `@experimental` |
+
+[Full library reference + 3 worked examples →](docs/LIBRARY.md)
 
 ---
 

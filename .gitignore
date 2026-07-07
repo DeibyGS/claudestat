@@ -1,26 +1,61 @@
+# ─── Build artifacts ──────────────────────────────────────────────────────────
 node_modules/
 dist/
 *.js.map
-.DS_Store
-HANDOFF.md
-CLAUDE.md
-AGENTS.md
 *.tsbuildinfo
 *.bak
 *.tgz
-.engram/
-implementar.md
+
+# ─── OS / editor noise ────────────────────────────────────────────────────────
+.DS_Store
+
+# ─── Local databases (NEVER ship) ────────────────────────────────────────────
+*.db
+*.db-shm
+*.db-wal
+
+# ─── Internal handoff / agent instructions (project-private) ─────────────────
+HANDOFF.md
+CLAUDE.md
+AGENTS.md
+
+# ─── Marketing / draft content (NEVER ship) ─────────────────────────────────
+# Dev.to drafts, Show HN copy, social posts, slide decks — author-only artifacts
 GROWTH.md
-docs/
+implementar.md
+
+# ─── OC + CC coordination (inter-tool orchestration artifacts) ────────────────
+workflow.json
+.orchestrate-metrics.json
+.ai-collab/
+.opencode/
+.engram/
+.claude/
+
+# ─── SDD specs (local-only design records) ──────────────────────────────────
 specs/
+
+# ─── Doc storage — whitelist approach ────────────────────────────────────────
+# Marketing / OC-CC artifacts in docs/ — never ship (explicit re-ignore)
+docs/devto-*.md
+docs/*-article-*.md
+docs/SPEC-*.md
+docs/roast-*.md
+docs/share-*.md
+docs/TROUBLESHOOTING.md
+docs/cloudinary-*.md
+
+# Everything else in docs/ ignored — versioned docs are whitelisted below.
+# NOTE: use `docs/*` (NOT `docs/`) so individual files can be re-included.
+docs/*
 *.md
 !README.md
 !CONTRIBUTING.md
 !CODE_OF_CONDUCT.md
 !CHANGELOG.md
 !ROADMAP.md
-workflow.json
-.orchestrate-metrics.json
-*.db
-*.db-shm
-*.db-wal
+!docs/LIBRARY.md
+!docs/COMMANDS.md
+!docs/CONFIG.md
+!docs/DASHBOARD.md
+!docs/MCP.md

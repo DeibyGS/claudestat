@@ -54,6 +54,7 @@ Works with **Claude Code** and **OpenCode**. Zero cloud dependencies. Pure Node.
 - [Library API](#library-api)
 - [OpenCode Support](#opencode-support)
 - [MCP Server](#mcp-server)
+- [MCP Bundle (standalone)](#mcp-bundle-standalone)
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
@@ -77,6 +78,7 @@ It taps into Claude Code's hook system to capture every event the moment it fire
 | Quota alerts + kill switch | ✅ | ❌ |
 | Loop detector | ✅ | ❌ |
 | MCP server (ask Claude about itself) | ✅ | ❌ |
+| MCP bundle (standalone, zero-config) | ✅ | ❌ |
 | Historical usage analysis | ✅ | ✅ |
 | Multi-CLI support (Codex, OpenCode, Amp, etc.) | ✅ | ✅ |
 
@@ -120,7 +122,7 @@ Then just ask:
 - **Projects search & filter** — find projects instantly; filter by activity, cost, or efficiency threshold
 - **Orchestration Command Center** — live swim-lane view of CC+OC multi-agent runs: per-cycle cost, tokens (with cache), files changed, git commits, and model breakdown; cycle traces survive log rotation
 - **Web dashboard** — 7 tabs: Live, History, Projects, Analytics, Top, System, Orchestrate
-- **MCP server** — 7 tools so Claude can answer questions about its own usage
+- **MCP server** — 9 tools so Claude can answer questions about its own usage; standalone bundle available as `@statforge/claudestat-mcp-bundle`
 - **Weekly insights** — pattern analysis with actionable tips
 - **Multi-source** — switch between Claude Code and OpenCode sessions in one click
 - **Source filter** — filter KPIs, charts, and tool rankings by Claude Code / OpenCode across all tabs
@@ -153,7 +155,7 @@ Start a Claude Code session and watch the events flow in. That's it.
 npm install -g @statforge/claudestat && claudestat setup
 ```
 
-`claudestat setup` installs the Claude Code hooks and registers the daemon as a system service (launchd on macOS, systemd on Linux) — no sudo required. The daemon starts automatically whenever you log in.
+`claudestat setup` installs the Claude Code hooks and registers the daemon as a system service — no sudo required. The daemon starts automatically whenever you log in (launchd on macOS, systemd on Linux, Scheduled Task on Windows).
 
 > **Using NVM?** Make sure you're on your default Node version:
 > ```bash
@@ -200,7 +202,7 @@ claudestat start     # start the daemon manually
 
 ## Dashboard
 
-The dashboard lives at `http://localhost:7337` and has six tabs: **Live** (real-time trace with source badge, expandable Bash commands, and last-task subtitle per source), **History** (sessions by date with day selector 7/14/30/90d, merged-session badge, search, cost filter, and compare panel), **Projects** (grid with weekly heatmap, search input, and filters for active, high-cost, or low-efficiency projects), **Analytics** (spend + tokens + hours + efficiency KPIs with period-over-period ↑↓% deltas, stacked token chart by input/output/cache, 52-week activity heatmap, source filter, weekly AI reports), **Top** (tool rankings by cost/count/duration with cost projection and expandable "Other" row for tools beyond top 10), and **System** (hooks, agents, skills, workflows, context file limits, work mode distribution, OpenCode config, memory files with truncation warning, claudestat config).
+The dashboard lives at `http://localhost:7337` and has seven tabs: **Live** (real-time trace with source badge, expandable Bash commands, and last-task subtitle per source), **History** (sessions by date with day selector 7/14/30/90d, merged-session badge, search, cost filter, and compare panel), **Projects** (grid with weekly heatmap, search input, and filters for active, high-cost, or low-efficiency projects), **Analytics** (spend + tokens + hours + efficiency KPIs with period-over-period ↑↓% deltas, stacked token chart by input/output/cache, 52-week activity heatmap, source filter, weekly AI reports), **Top** (tool rankings by cost/count/duration with cost projection and expandable "Other" row for tools beyond top 10), **System** (hooks, agents, skills, workflows, context file limits, work mode distribution, OpenCode config, memory files with truncation warning, claudestat config), and **Orchestrate** (multi-agent swim-lane view with per-cycle cost, tokens, files changed, git commits, and model breakdown).
 
 ![Live tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428670/claudeStat/live_bc2z7j.png)
 
@@ -245,17 +247,44 @@ OpenCode data is read directly from its local SQLite database — no configurati
 
 ## MCP Server
 
-claudestat includes an MCP server with 7 tools for querying usage stats. Register once:
+claudestat includes an MCP server with 9 tools for querying usage stats. Register once:
 
 ```bash
 claude mcp add claudestat -s user -- claudestat-mcp
 ```
 
-Then ask Claude: *"What's my quota status?"*, *"Show me my latest session"*, *"Top 5 tools by cost"*.
+Then ask Claude: *"What's my quota status?"*, *"Show me my latest session"*, *"Top 5 tools by cost"*, *"How's my context window doing?"*, *"What's my daily summary?"*.
+
+The server also sends **push notifications** for context saturation (50/75/90%), weekly quota thresholds, and 5h billing cycle limits — Claude will proactively warn you without you asking.
 
 ![claudestat MCP demo](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428703/claudeStat/MCP_claudestat_zgf7el.gif)
 
+| Tool | Description |
+|------|-------------|
+| `get_quota_status` | 5h cycle %, weekly hours per model, burn rate, plan detection |
+| `get_current_session` | Latest session cost, tokens, efficiency, loops |
+| `get_session_stats` | Aggregated stats for the last N days |
+| `get_top_tools` | Top 10 tools by cost, count, or duration |
+| `get_usage_insights` | Cost per project, cache savings, output/input ratio, peak hours |
+| `get_model_breakdown` | Cost and sessions broken down by Claude model |
+| `get_weekly_insight` | Weekly summary with actionable tip |
+| `get_context_status` | Current context window usage with saturation bar |
+| `get_daily_summary` | Today vs yesterday vs 7d average |
+
 [MCP tools reference →](docs/MCP.md)
+
+## MCP Bundle (standalone)
+
+Prefer a lighter dependency? Install the MCP server as a standalone package — no CLI, no daemon, just the stdio MCP server and its SQLite reader:
+
+```bash
+npm install -g @statforge/claudestat-mcp-bundle
+claude mcp add claudestat -s user -- npx @statforge/claudestat-mcp-bundle
+```
+
+Same 9 tools, same context notifications, zero extra footprint.
+
+[Bundle repo →](https://github.com/DeibyGS/claudestat-mcp-bundle)
 
 ---
 
@@ -307,20 +336,26 @@ claudestat config --alerts false
 ## How it works
 
 ```
-Claude Code event
+Claude Code / OpenCode event
       │
       ▼
   Hook script  (~/.claudestat/hooks/event.js)
-       │  POST JSON to daemon
+       │  POST JSON → daemon
        ▼
   Daemon  (localhost:7337)
        │  stores events in SQLite
        │  enriches with JSONL token data
        │  runs pattern analyzer
+       │  context/quota push notifications
        ▼
-  Dashboard  (React + Vite, auto-refreshes)
-       │
-       ▼
+  ┌──────────────────────────────────┐
+  │  Dashboard (React + Vite)        │
+  │  Terminal (claudestat watch)     │
+  │  MCP Server (9 tools)            │
+  │  Library API (dbOps, pricing)    │
+  └──────────────────────────────────┘
+              │
+              ▼
   You see everything — live
 ```
 
@@ -357,7 +392,7 @@ The daemon must be started with `nohup` to persist beyond the shell session:
 ```bash
 nohup claudestat start &
 ```
-Or use `claudestat setup` which installs a system service (launchd on macOS, systemd on Linux).
+Or use `claudestat setup` which installs a system service (launchd on macOS, systemd on Linux, Scheduled Task on Windows).
 
 **`claudestat export` produces empty output**
 If no sessions appear, the daemon may not have been running during your Claude Code sessions. Check `claudestat status` and restart with `claudestat start`. For historical data only (without a running daemon), export still reads from the local SQLite database — so past sessions captured while the daemon was running are always available.
@@ -397,7 +432,13 @@ Yes. claudestat auto-detects your plan. You can also force it with `claudestat c
 No. All data is stored locally in SQLite at `~/.claudestat/`. Zero cloud dependencies.
 
 **Does claudestat work on Windows?**
-Yes — macOS, Linux, and Windows are all supported.
+Yes — macOS, Linux, and Windows are all supported. On Windows, `claudestat setup` registers a Scheduled Task for auto-start, clipboard uses `clip`, and the daemon health check uses Node's built-in HTTP client.
+
+**What is the MCP bundle?**
+`@statforge/claudestat-mcp-bundle` is a standalone npm package containing only the MCP server — no CLI, no dashboard, no daemon. Install it if you want Claude to query its own stats via MCP without running the full claudestat daemon.
+
+**Can I use claudestat programmatically?**
+Yes. Import `dbOps`, `computeProjection`, `analyzeSession`, `createMcpServer` and other functions directly from `@statforge/claudestat`. See the [Library API](#library-api) section.
 
 ---
 
@@ -410,6 +451,7 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\.claudestat"  # Windows (PowerShel
 ```
 
 > If you installed manually, use `claudestat uninstall` to remove only the hooks.
+> On Windows, `claudestat setup --uninstall` also removes the Scheduled Task.
 
 ---
 

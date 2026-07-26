@@ -96,3 +96,7 @@ export type {
 // ─── quota-tracker.ts (Synchronous quota computation) ───────────────────────
 export { computeQuota } from './quota-tracker'
 export type { QuotaData } from './quota-tracker'
+
+// ─── mcp-factory.ts (MCP server factory) ───────────────────────────────
+export { createMcpServer } from './mcp-factory'
+export type { ToolDefinition, McpServer, McpServerOptions } from './mcp-factory'

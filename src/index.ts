@@ -91,6 +91,7 @@ function spawnDaemon() {
   if (opts.verbose) args.push('--verbose')
   const child = spawn(process.execPath, args, {
     detached: true,
+    windowsHide: true,
     stdio: 'ignore',
     env: { ...process.env, CLAUDESTAT_DAEMON: '1' },
   })
@@ -107,6 +108,7 @@ function spawnWatchdog() {
   const out = fs.openSync(logFile, 'a')
   const child = spawn(process.execPath, args, {
     detached: true,
+    windowsHide: true,
     stdio: ['ignore', out, out],
     env: { ...process.env, CLAUDESTAT_WATCHDOG: '1' },
   })

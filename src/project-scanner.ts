@@ -8,7 +8,7 @@
 import fs   from 'fs'
 import path from 'path'
 import os   from 'os'
-import { getClaudeDir, encodeClaudePath } from './paths'
+import { getClaudeDir, encodeClaudePath, isWindows } from './paths'
 import { calcCost } from './pricing'
 
 export interface HandoffProgress {
@@ -488,6 +488,7 @@ export function discoverProjects(): ProjectScanResult[] {
 
     // Clave única por directorio: inode resuelve case en macOS y symlinks en Linux
     const inodeKey = (p: string): string => {
+      if (isWindows) return path.resolve(p)
       try { const s = fs.statSync(p); return `${s.dev}:${s.ino}` } catch { return p }
     }
 
@@ -570,7 +571,8 @@ export function discoverProjects(): ProjectScanResult[] {
   }
 
   // Deduplicar por inode: identifica el mismo directorio independientemente del case o symlinks
-  const inodeKey = (p: string) => {
+  const inodeKey = (p: string): string => {
+    if (isWindows) return path.resolve(p)
     try { const s = fs.statSync(p); return `${s.dev}:${s.ino}` } catch { return p }
   }
   const dedup = new Map<string, ProjectScanResult>()

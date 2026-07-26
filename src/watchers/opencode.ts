@@ -6,8 +6,9 @@
  * Uses PollableAdapter — no JSONL files, no chokidar.
  */
 
-import fs from 'fs'
-import os from 'os'
+import fs   from 'fs'
+import os   from 'os'
+import path from 'path'
 import { type PollableAdapter, type PollSession, type ParsedEvent, registerAdapter } from './adapter'
 import { getOpencodeDb } from '../paths'
 import { getContextWindow, calcCost } from '../pricing'
@@ -50,7 +51,7 @@ function inferProjectFromParts(db: ReturnType<typeof openDb> | null, sessionId: 
       const input = JSON.parse(data).state?.input
       if (!input) continue
       const filePath = input.filePath || input.path || input.file_path
-      if (!filePath || typeof filePath !== 'string' || !filePath.startsWith('/')) continue
+      if (!filePath || typeof filePath !== 'string' || !path.isAbsolute(filePath)) continue
       const root = findProjectCwdForFile(filePath)
       if (root) roots.set(root, (roots.get(root) ?? 0) + 1)
     } catch {}
@@ -219,7 +220,7 @@ export const opencodeAdapter: PollableAdapter = {
       return grouped.map(row => {
         const modelId = parseModel(row.model)
         const dir = row.directory
-        const shouldInfer = !dir || dir === HOME || dir.split('/').filter(Boolean).length <= 3
+        const shouldInfer = !dir || dir === HOME || dir.split(/[/\\]/).filter(Boolean).length <= 3
         const inferred = shouldInfer ? inferProjectFromParts(db, row.id) : undefined
         const projectCwd = inferred ?? dir ?? undefined
 

@@ -1,5 +1,6 @@
 import * as readline from 'readline'
-import fs from 'fs'
+import fs   from 'fs'
+import path from 'path'
 import { dbOps } from './db'
 import { computeQuota, refreshFromApi } from './quota-tracker'
 import { getWeeklyInsightData, generateTip, getUsageInsights } from './insights'
@@ -290,7 +291,7 @@ function toolGetContextStatus(): string {
     `  ${level}  ${pct}%  ${bar(pct)}`,
     `  Used:  ${contextUsed.toLocaleString()} / ${contextWindow.toLocaleString()} tokens`,
     `  Model: ${dominantModel || 'unknown'}`,
-    `  Project: ${session.project_path?.split('/').pop() ?? '-'}`,
+    `  Project: ${path.basename(session.project_path ?? '') || '-'}`,
     ...(pct >= 90 ? ['', 'Context near saturation — consider starting a new session'] : []),
     ...(pct >= 75 ? ['', 'Context at warning level — wrap up soon'] : []),
   ].join('\n')

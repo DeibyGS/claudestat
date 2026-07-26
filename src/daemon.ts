@@ -37,7 +37,7 @@ import { orchestrationRouter }                                        from './ro
 import { getProjectsCached, invalidateProjectsCache }               from './cache/projects-cache'
 import { stopRateLimiter }                                            from './middleware/rate-limiter'
 import { summarizeSession }                                         from './summarizer'
-import { getPidFile, getClaudestatDir, getDashboardDir, portCheckCmd, writePortFile, getPauseSignalFile, getOpencodeDir }            from './paths'
+import { getPidFile, getClaudestatDir, getDashboardDir, portCheckCmd, writePortFile, getPauseSignalFile, getOpencodeDir, isWindows }            from './paths'
 import { logger } from './logger'
 import { getAlertState, persistAlertState } from './alert-persist'
 
@@ -433,8 +433,9 @@ export function startDaemon() {
     writePid()
     writePortFile(PORT)
     process.on('exit', cleanPid)
-    process.on('SIGTERM', () => { if (_server) shutdown(_server); process.exit(0) })
+    if (!isWindows) process.on('SIGTERM', () => { if (_server) shutdown(_server); process.exit(0) })
     process.on('SIGINT',  () => { if (_server) shutdown(_server); process.exit(0) })
+    if (isWindows) process.on('SIGBREAK', () => { if (_server) shutdown(_server); process.exit(0) })
 
     console.log(`\n● claudestat daemon  →  http://localhost:${PORT}`)
     console.log(`  Watching for events...\n`)

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process'
+import { isWindows } from './paths'
 
 const BACKOFF_BASE_MS = 1_000
 const BACKOFF_MAX_MS = 30_000
@@ -25,7 +26,7 @@ export function startWatchdog(): void {
   let child = spawnDaemon()
 
   child.on('exit', (code, signal) => {
-    if (signal === 'SIGTERM' || signal === 'SIGINT') {
+    if ((!isWindows && signal === 'SIGTERM') || signal === 'SIGINT') {
       process.exit(0)
     }
     const delay = getBackoff()
@@ -33,6 +34,6 @@ export function startWatchdog(): void {
     setTimeout(() => { child = spawnDaemon() }, delay)
   })
 
-  process.on('SIGTERM', () => { child.kill('SIGTERM') })
+  if (!isWindows) process.on('SIGTERM', () => { child.kill('SIGTERM') })
   process.on('SIGINT',  () => { child.kill('SIGINT')  })
 }

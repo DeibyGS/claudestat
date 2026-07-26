@@ -39,7 +39,7 @@ function parseSince(since: string): number {
 function toMarkdownRow(r: Record<string, unknown>): string {
   return [
     String(r.started_at).slice(0, 10),
-    r.project_path ? String(r.project_path).split('/').pop() ?? '—' : '—',
+    r.project_path ? path.basename(String(r.project_path)) || '—' : '—',
     `$${Number(r.total_cost_usd).toFixed(4)}`,
     String(r.total_input_tokens),
     String(r.total_output_tokens),

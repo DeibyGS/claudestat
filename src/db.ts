@@ -1002,7 +1002,7 @@ export const dbOps = {
   updateSessionProject(sessionId: string, projectPath: string) {
     const existing = this.getSession(sessionId)
     if (existing?.project_path) {
-      const cur = existing.project_path.endsWith('/')
+      const cur = existing.project_path.endsWith(path.sep)
         ? existing.project_path : existing.project_path + '/'
       if (!projectPath.startsWith(cur)) return
     }

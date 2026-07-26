@@ -10,5 +10,7 @@ import { createMcpServer } from './mcp-factory'
 const server = createMcpServer({ contextPolling: true })
 server.start()
 
-process.on('SIGTERM', () => process.exit(0))
+import { isWindows } from './paths'
+
+if (!isWindows) process.on('SIGTERM', () => process.exit(0))
 process.on('SIGINT', () => process.exit(0))

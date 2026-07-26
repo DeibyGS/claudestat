@@ -1,6 +1,7 @@
 import { dbOps, type SessionRow, type EventRow } from './db.js'
 import { spawn as spawnCb } from 'child_process'
 import path from 'path'
+import { isWindows } from './paths'
 
 interface SessionData {
   id: string
@@ -133,12 +134,13 @@ export async function runShare(args: {
 
   if (args.copy) {
     try {
-      const p = spawnCb('pbcopy', [], { stdio: ['pipe', process.stderr, process.stderr] })
+      const clipboardCmd = isWindows ? 'clip' : 'pbcopy'
+      const p = spawnCb(clipboardCmd, [], { stdio: ['pipe', process.stderr, process.stderr] })
       ;(p.stdin as any).write(output)
       ;(p.stdin as any).end()
       p.on('close', () => console.log('\n✓ Copied to clipboard'))
     } catch {
-      console.warn('⚠ Clipboard not available (macOS only)')
+      console.warn('⚠ Clipboard not available')
     }
   }
 }

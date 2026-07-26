@@ -1,22 +1,26 @@
-import fs   from 'fs'
-import path from 'path'
 import { execSync } from 'child_process'
+import fs   from 'fs'
+import os   from 'os'
+import path from 'path'
+
+const _PATH_SEP = path.delimiter
+const TASK_NAME = 'ClaudeStatDaemon'
 
 function buildEnvPath(): string {
-  const current = process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'
+  const current = process.env.PATH ?? ''
   const nvmDir  = process.env.NVM_DIR
   if (!nvmDir) return current
   const nvmBin = path.join(nvmDir, 'versions', 'node', `v${process.versions.node}`, 'bin')
-  return current.includes(nvmBin) ? current : `${nvmBin}:${current}`
+  return current.includes(nvmBin) ? current : `${nvmBin}${_PATH_SEP}${current}`
 }
 
 const PLIST_LABEL = 'com.statforge.claudestat'
 const PLIST_PATH  = path.join(
-  process.env.HOME ?? '~',
+  os.homedir(),
   'Library', 'LaunchAgents',
   `${PLIST_LABEL}.plist`
 )
-const SYSTEMD_DIR  = path.join(process.env.HOME ?? '~', '.config', 'systemd', 'user')
+const SYSTEMD_DIR  = path.join(os.homedir(), '.config', 'systemd', 'user')
 const SYSTEMD_PATH = path.join(SYSTEMD_DIR, 'claudestat.service')
 
 function isBinary(): boolean {
@@ -25,8 +29,12 @@ function isBinary(): boolean {
 }
 
 function serviceCommand(): string {
-  if (isBinary()) return process.argv[1]
-  return `${process.execPath} ${process.argv[1]}`
+  if (isBinary()) return `"${process.argv[1]}"`
+  return `"${process.execPath}" "${process.argv[1]}"`
+}
+
+function escapeSchtasksCmd(cmd: string): string {
+  return cmd.replace(/"/g, '\\"')
 }
 
 function makePlist(): string {
@@ -95,8 +103,17 @@ export function installService(): void {
     execSync('systemctl --user enable --now claudestat')
     console.log(`   service  → ${SYSTEMD_PATH}`)
     console.log(`   node     → ${process.execPath}`)
-  } else {
-    console.log('   Auto-start on Windows coming soon. Run `claudestat start` manually.')
+  } else if (process.platform === 'win32') {
+    const cmd = `${serviceCommand()} start`
+    try {
+      execSync(`schtasks /create /tn "${TASK_NAME}" /tr "${escapeSchtasksCmd(cmd)}" /sc onlogon /delayed:0002:00 /f`, { stdio: 'pipe' })
+    } catch (e: any) {
+      console.error('   Failed to create scheduled task. Try running as Administrator.')
+      console.error(`   ${e.stderr?.toString().trim() ?? e.message}`)
+      return
+    }
+    console.log(`   service  → Scheduled Task "${TASK_NAME}" (starts at logon)`)
+    console.log(`   node     → ${process.execPath}`)
   }
 }
 
@@ -121,6 +138,13 @@ export function uninstallService(): void {
       console.log(`   removed  → ${SYSTEMD_PATH}`)
     } catch {
       console.log('   service file not found (already removed)')
+    }
+  } else if (process.platform === 'win32') {
+    try {
+      execSync(`schtasks /delete /tn "${TASK_NAME}" /f`, { stdio: 'pipe' })
+      console.log(`   removed  → Scheduled Task "${TASK_NAME}"`)
+    } catch {
+      console.log('   service not found (already removed)')
     }
   }
 }

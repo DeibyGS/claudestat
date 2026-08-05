@@ -257,6 +257,8 @@ Then ask Claude: *"What's my quota status?"*, *"Show me my latest session"*, *"T
 
 The server also sends **push notifications** for context saturation (50/75/90%), weekly quota thresholds, and 5h billing cycle limits — Claude will proactively warn you without you asking.
 
+Since **v1.16.0**, the MCP server runs on the **official `@modelcontextprotocol/sdk`** (v1.30.0) instead of a hand-rolled JSON-RPC engine. That means standards-compliant handshakes, protocol-version negotiation with modern MCP clients, reliable startup/shutdown on stdin EOF, and proper input validation for tool arguments. The public API is unchanged, so existing registrations keep working as-is.
+
 ![claudestat MCP demo](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428703/claudeStat/MCP_claudestat_zgf7el.gif)
 
 | Tool | Description |

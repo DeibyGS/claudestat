@@ -23,7 +23,8 @@ import { startEnricher, stopEnricher }                                        fr
 import { readConfig, getWarnLevel }                                 from './config'
 import { computeQuota }                                              from './quota-tracker'
 import { sendDesktopNotification, sendWebhookAlert } from './notifier'
-import { eventsRouter, onCostUpdate, onCompactDetected, setSessionStopCallback }            from './routes/events'
+import { eventsRouter, onCostUpdate, onCompactDetected, setSessionTracker }            from './routes/events'
+import { createSessionTracker }                                                          from './session-tracker'
 import { streamRouter, getSseClientsSize, broadcast }               from './routes/stream'
 import { projectsRouter, inferProjectCwd }                          from './routes/projects'
 import { historyRouter }                                            from './routes/history'
@@ -143,7 +144,32 @@ let alertInterval:        ReturnType<typeof setInterval> | null = null
 let intentCleanupInterval: ReturnType<typeof setInterval> | null = null
 let intentWatchInterval: ReturnType<typeof setInterval> | null = null
 
+// Detección de cierre de sesión por reemplazo (1 notificación por sesión).
+// Se crea al arrancar: inyecta la notificación y queda accesible para shutdown.
+function notifySessionClosed(sessionId: string): void {
+  try {
+    const cfg = readConfig()
+    if (!cfg.alertsEnabled) return
+    const s = dbOps.getSession(sessionId)
+    if (!s) return
+    const cost = s.total_cost_usd ?? 0
+    const totalTok = (s.total_input_tokens ?? 0) + (s.total_output_tokens ?? 0)
+    const eff = s.efficiency_score ?? 100
+    const loops = s.loops_detected ?? 0
+    const costStr = cost < 0.005 ? '< $0.01' : `$${cost.toFixed(2)}`
+    const tokStr = totalTok >= 1_000_000
+      ? `${(totalTok / 1_000_000).toFixed(1)}M`
+      : totalTok >= 1_000 ? `${Math.round(totalTok / 1_000)}K` : `${totalTok}`
+    let body = `Session closed · ${costStr} · ${tokStr} tokens · efficiency ${eff}%`
+    if (loops >= 5) body += ` · ${loops} loops — add context to CLAUDE.md`
+    sendDesktopNotification('claudestat — Session closed', body)
+  } catch {}
+}
+
+const sessionTracker = createSessionTracker({ onSessionClosed: notifySessionClosed })
+
 function shutdown(server: import('http').Server) {
+  sessionTracker.flushPending()
   stopEnricher()
   stopRateLimiter()
   if (projectCacheInterval)   { clearInterval(projectCacheInterval);   projectCacheInterval   = null }
@@ -473,25 +499,8 @@ export function startDaemon() {
     // Iniciar el watcher de JSONL para enriquecimiento de coste
     startEnricher(onCostUpdate, onCompactDetected)
 
-    setSessionStopCallback((sessionId: string) => {
-      try {
-        const cfg = readConfig()
-        if (!cfg.alertsEnabled) return
-        const s = dbOps.getSession(sessionId)
-        if (!s) return
-        const cost = s.total_cost_usd ?? 0
-        const totalTok = (s.total_input_tokens ?? 0) + (s.total_output_tokens ?? 0)
-        const eff = s.efficiency_score ?? 100
-        const loops = s.loops_detected ?? 0
-        const costStr = cost < 0.005 ? '< $0.01' : `$${cost.toFixed(2)}`
-        const tokStr = totalTok >= 1_000_000
-          ? `${(totalTok / 1_000_000).toFixed(1)}M`
-          : totalTok >= 1_000 ? `${Math.round(totalTok / 1_000)}K` : `${totalTok}`
-        let body = `Session closed · ${costStr} · ${tokStr} tokens · efficiency ${eff}%`
-        if (loops >= 5) body += ` · ${loops} loops — add context to CLAUDE.md`
-        sendDesktopNotification('claudestat — Session closed', body)
-      } catch {}
-    })
+    // Encender la detección de cierre de sesión por reemplazo
+    setSessionTracker(sessionTracker)
 
     // Scheduler de informes automáticos — corre cada minuto
     reportInterval = setInterval(() => {

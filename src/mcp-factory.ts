@@ -1,6 +1,8 @@
-import * as readline from 'readline'
-import fs   from 'fs'
-import path from 'path'
+import { McpServer as SdkMcpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+import { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
+import { z } from 'zod'
 import { dbOps } from './db'
 import { computeQuota, refreshFromApi } from './quota-tracker'
 import { getWeeklyInsightData, generateTip, getUsageInsights } from './insights'
@@ -24,7 +26,7 @@ export interface McpServerOptions {
 
 export interface McpServer {
   start(): void
-  stop(): void
+  stop(): Promise<void>
   addTool(def: ToolDefinition): void
   removeTool(name: string): void
   readonly tools: ToolDefinition[]
@@ -36,10 +38,31 @@ Start it with: claudestat start
 Data shown below is from the last recorded session.
 ---`
 
-const PROTOCOL_VERSION = '2025-03-26'
+// ─── JSON-schema → Zod conversion ─────────────────────────────────────────────
+// The SDK's registerTool requires a Zod schema/raw shape, but the public
+// ToolDefinition.inputSchema is a plain JSON-schema object. Only a small subset
+// of types is used today (number/string/boolean), so the converter is minimal.
 
-type JsonRpcRequest = { jsonrpc: '2.0'; id?: number | string; method: string; params?: Record<string, unknown> }
-type JsonRpcResponse = { jsonrpc: '2.0'; id?: number | string; result?: unknown; error?: { code: number; message: string } }
+function jsonSchemaToZodShape(schema: Record<string, unknown> | undefined): z.ZodRawShape | undefined {
+  if (!schema || (schema as any).type !== 'object') return undefined
+  const props = ((schema as any).properties ?? {}) as Record<string, any>
+  const required = Array.isArray(schema.required) ? (schema.required as string[]) : []
+  const shape: z.ZodRawShape = {}
+  for (const [key, prop] of Object.entries(props)) {
+    let zz: z.ZodTypeAny
+    switch (prop?.type) {
+      case 'number':   zz = z.number(); break
+      case 'integer':  zz = z.number().int(); break
+      case 'string':   zz = z.string(); break
+      case 'boolean':  zz = z.boolean(); break
+      default:         zz = z.unknown()
+    }
+    shape[key] = required.includes(key) ? zz : zz.optional()
+  }
+  return Object.keys(shape).length ? shape : undefined
+}
+
+// ─── Helpers de presentación ──────────────────────────────────────────────────
 
 function fmtDollar(n: number): string {
   if (n === 0) return '$0.00'
@@ -53,15 +76,33 @@ function fmtTok(n: number): string {
   return n.toString()
 }
 
-function isDaemonRunning(): boolean {
+// Small indirection so tests can inject a PID file path via env override.
+// Exported only for tests — not part of the public lib.ts API.
+export function isDaemonRunning(): boolean {
   try {
-    const pid = parseInt(fs.readFileSync(getPidFile(), 'utf8').trim(), 10)
+    const pid = parseInt(fs_readPidFile(), 10)
+    if (!Number.isInteger(pid) || pid <= 0) return false
+    if (pid === process.pid) return false
     process.kill(pid, 0)
     return true
-  } catch {
-    return false
+  } catch (err: any) {
+    // ESRCH = process doesn't exist → false. EPERM = exists but owned by another
+    // user → treat as running (the daemon runs under the same user, so this is a
+    // false-negative avoidance).
+    return err?.code === 'EPERM'
   }
 }
+
+// Small indirection so tests can inject a PID file path via env override.
+function fs_readPidFile(): string {
+  try {
+    return require('fs').readFileSync(getPidFile(), 'utf8').trim()
+  } catch {
+    return ''
+  }
+}
+
+// ─── Tool handlers de negocio (sin cambios de contenido) ──────────────────────
 
 function toolGetQuotaStatus(): string {
   const q = computeQuota()
@@ -194,14 +235,20 @@ function toolGetTopTools(days: number, sortBy: string): string {
   return lines.join('\n')
 }
 
+// Exported only for tests — not part of the public lib.ts API.
+export function progressBar(pct: number, width = 20): string {
+  const p = Math.max(0, Math.min(100, pct))
+  const filled = Math.round(p / 100 * width)
+  return '\u2588'.repeat(filled) + '\u2591'.repeat(width - filled)
+}
+
 function toolGetUsageInsights(days: number): string {
   const d = Math.max(1, Math.min(90, Math.floor(days || 7)))
   const i = getUsageInsights(d)
 
   if (i.total_sessions === 0) return `No data for the last ${d} days.`
 
-  const bar = (pct: number, width = 20): string =>
-    '\u2588'.repeat(Math.round(pct / 100 * width)) + '\u2591'.repeat(width - Math.round(pct / 100 * width))
+  const bar = (pct: number, width = 20): string => progressBar(pct, width)
 
   const lines: string[] = []
   lines.push(`Usage insights — last ${d} days`)
@@ -280,8 +327,7 @@ function toolGetContextStatus(): string {
   const contextWindow = session.context_window ?? getContextWindow(dominantModel)
   const pct = contextWindow > 0 ? Math.round((contextUsed / contextWindow) * 100) : 0
 
-  const bar = (p: number, width = 20): string =>
-    '\u2588'.repeat(Math.round(p / 100 * width)) + '\u2591'.repeat(width - Math.round(p / 100 * width))
+  const bar = (p: number, width = 20): string => progressBar(p, width)
 
   const level = pct >= 90 ? 'RED' : pct >= 75 ? 'ORA' : pct >= 50 ? 'YEL' : 'GRN'
 
@@ -291,7 +337,7 @@ function toolGetContextStatus(): string {
     `  ${level}  ${pct}%  ${bar(pct)}`,
     `  Used:  ${contextUsed.toLocaleString()} / ${contextWindow.toLocaleString()} tokens`,
     `  Model: ${dominantModel || 'unknown'}`,
-    `  Project: ${path.basename(session.project_path ?? '') || '-'}`,
+    `  Project: ${require('path').basename(session.project_path ?? '') || '-'}`,
     ...(pct >= 90 ? ['', 'Context near saturation — consider starting a new session'] : []),
     ...(pct >= 75 ? ['', 'Context at warning level — wrap up soon'] : []),
   ].join('\n')
@@ -344,12 +390,9 @@ function toolGetWeeklyInsight(days: number): string {
   ].join('\n')
 }
 
-const DEFAULT_TOOL_DEFINITIONS: Array<{
-  name: string
-  description: string
-  inputSchema: object
-  handler: (args: Record<string, unknown>) => Promise<string> | string
-}> = [
+// ─── Default tools (mismo conjunto y comportamiento que v1.15) ────────────────
+
+const DEFAULT_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'get_quota_status',
     description: 'Get current Claude Code quota status: 5h cycle usage %, plan type, weekly hours per model, and burn rate (tokens/min)',
@@ -448,18 +491,23 @@ const DEFAULT_TOOL_DEFINITIONS: Array<{
   },
 ]
 
-function startContextPolling(): NodeJS.Timeout {
+// ─── Context polling (push notifications) ─────────────────────────────────────
+
+const MCP_CONTEXT_THRESHOLDS = [50, 75, 90] as const
+const MCP_WEEKLY_THRESHOLDS = [25, 50, 75, 90, 100] as const
+const MCP_CYCLE_THRESHOLDS = [50, 75, 90, 100] as const
+
+function startContextPolling(sdk: SdkMcpServer): NodeJS.Timeout {
   let mcpContextThresholdsFired = new Set<number>()
   let mcpLastContextSessionId = ''
-  const MCP_CONTEXT_THRESHOLDS = [50, 75, 90] as const
-
   let mcpWeeklyThresholdsFired = new Set<number>()
   let mcpLastWeeklyPct = 0
-  const MCP_WEEKLY_THRESHOLDS = [25, 50, 75, 90, 100] as const
-
   let mcpCycleThresholdsFired = new Set<number>()
   let mcpLastCycleResetAt = 0
-  const MCP_CYCLE_THRESHOLDS = [50, 75, 90, 100] as const
+
+  const notify = (message: string, level: 'error' | 'warning'): void => {
+    void sdk.server.notification({ method: 'notifications/message', params: { level, message } })
+  }
 
   return setInterval(() => {
     try {
@@ -488,7 +536,7 @@ function startContextPolling(): NodeJS.Timeout {
               : th >= 75
               ? `Context at ${pctCurrent}% (${usedK}K/${totalK}K tokens) — consider /compact soon.`
               : `Context at ${pctCurrent}% (${usedK}K/${totalK}K tokens) — comfortable but plan ahead.`
-            notifyClient(msg, th >= 90 ? 'error' : 'warning')
+            notify(msg, th >= 90 ? 'error' : 'warning')
           }
         }
       }
@@ -515,7 +563,7 @@ function startContextPolling(): NodeJS.Timeout {
               : th >= 50
               ? `Half of weekly quota used (${weeklyPct}%)${dailyCost ? ` - ${dailyCost}` : ''}. ~${daysLeft} days at this pace.`
               : `Weekly quota at ${weeklyPct}%${dailyCost ? ` (${dailyCost})` : ''}. Normal pace.`
-            notifyClient(msg, th >= 90 ? 'error' : 'warning')
+            notify(msg, th >= 90 ? 'error' : 'warning')
           }
         }
       }
@@ -538,7 +586,7 @@ function startContextPolling(): NodeJS.Timeout {
               : th >= 75
               ? `${cyclePct}% of 5h cycle used. Resets in ${resetLabel}.`
               : `${cyclePct}% of 5h cycle used (resets in ${resetLabel}). Normal pace.`
-            notifyClient(msg, th >= 90 ? 'error' : 'warning')
+            notify(msg, th >= 90 ? 'error' : 'warning')
           }
         }
       }
@@ -546,54 +594,7 @@ function startContextPolling(): NodeJS.Timeout {
   }, 30_000)
 }
 
-function notifyClient(message: string, level: 'error' | 'warning'): void {
-  const json = JSON.stringify({
-    jsonrpc: '2.0',
-    method: 'notifications/message',
-    params: { level, message },
-  })
-  process.stdout.write(json + '\n')
-}
-
-function makeHandleRequest(tools: () => ToolDefinition[], serverName: string, serverVersion: string): (msg: JsonRpcRequest) => Promise<JsonRpcResponse | null> {
-  return async function handleRequest(msg: JsonRpcRequest): Promise<JsonRpcResponse | null> {
-    const { id, method, params } = msg
-    if (id === undefined) return null
-
-    try {
-      switch (method) {
-        case 'initialize':
-          return {
-            jsonrpc: '2.0', id,
-            result: {
-              protocolVersion: PROTOCOL_VERSION,
-              capabilities: { tools: {} },
-              serverInfo: { name: serverName, version: serverVersion },
-            },
-          }
-
-        case 'tools/list':
-          return { jsonrpc: '2.0', id, result: { tools: tools().map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })) } }
-
-        case 'tools/call': {
-          const toolName = (params as any)?.name as string
-          const toolArgs = ((params as any)?.arguments ?? {}) as Record<string, unknown>
-          const def = tools().find(t => t.name === toolName)
-          if (!def) {
-            return { jsonrpc: '2.0', id, error: { code: -32602, message: `Unknown tool: ${toolName}` } }
-          }
-          const text = await def.handler(toolArgs)
-          return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text }], isError: false } }
-        }
-
-        default:
-          return { jsonrpc: '2.0', id, error: { code: -32601, message: `Method not found: ${method}` } }
-      }
-    } catch (e: any) {
-      return { jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true } }
-    }
-  }
-}
+// ─── Factory ──────────────────────────────────────────────────────────────────
 
 export function createMcpServer(options?: McpServerOptions): McpServer {
   const name = options?.name ?? 'claudestat'
@@ -609,29 +610,36 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
     }
   }
 
-  let _rl: readline.Interface | null = null
+  const sdk = new SdkMcpServer({ name, version }, { capabilities: { tools: {} } })
+  const _sdkToolHandles = new Map<string, { remove(): void }>()
+  let _transport: Transport | null = null
   let _pollTimer: NodeJS.Timeout | null = null
   let _started = false
 
-  function getTools(): ToolDefinition[] {
-    return _tools
+  function registerTool(def: ToolDefinition): void {
+    const zodShape = jsonSchemaToZodShape(def.inputSchema as Record<string, unknown>)
+    // registerTool is heavily generic over the input schema; the dynamic shape
+    // makes TS infer an unbounded type. Register through a typed helper so the
+    // SDK never infers the argument shape from our dynamic schema.
+    const register = (sdk.registerTool as (
+      name: string,
+      config: { title?: string; description?: string; inputSchema?: z.ZodRawShape },
+      cb: (args: Record<string, unknown>) => Promise<CallToolResult> | CallToolResult,
+    ) => { remove(): void }).bind(sdk)
+    const handle = register(
+      def.name,
+      { title: def.name, description: def.description, inputSchema: zodShape },
+      async (args) => {
+        const text = await def.handler(args)
+        const result: CallToolResult = { content: [{ type: 'text', text }] }
+        return result
+      },
+    )
+    _sdkToolHandles.set(def.name, handle)
   }
 
-  const _handleRequest = makeHandleRequest(getTools, name, version)
-
-  function handleLine(line: string): void {
-    const trimmed = line.trim()
-    if (!trimmed) return
-    try {
-      const msg = JSON.parse(trimmed) as JsonRpcRequest
-      _handleRequest(msg).then(response => {
-        if (response) process.stdout.write(JSON.stringify(response) + '\n')
-      }).catch((e: any) => {
-        process.stderr.write(`[claudestat-mcp] Handler error: ${e.message}\n`)
-      })
-    } catch (e: any) {
-      process.stderr.write(`[claudestat-mcp] Parse error: ${e.message}\n`)
-    }
+  function syncToolRegistry(): void {
+    for (const def of _tools) registerTool(def)
   }
 
   const server: McpServer = {
@@ -643,37 +651,78 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
         return
       }
       _started = true
-      _rl = readline.createInterface({ input: process.stdin, terminal: false })
-      _rl.on('line', handleLine)
-      if (contextPolling) {
-        _pollTimer = startContextPolling()
+      syncToolRegistry()
+
+      // Exit on stdin close so the process never lingers after the MCP client
+      // disconnects (AC-11). Registered synchronously because the transport's own
+      // onclose is wired asynchronously inside sdk.connect() and can miss an EOF
+      // that arrives before the handshake completes.
+      const onStdinClose = (): void => {
+        if (!_started) return
+        _started = false
+        if (_pollTimer) {
+          clearInterval(_pollTimer)
+          _pollTimer = null
+        }
+        process.exit(0)
       }
-      process.stderr.write(`[claudestat-mcp] Server ready (stdio, protocol ${PROTOCOL_VERSION})\n`)
+      process.stdin.on('close', onStdinClose)
+
+      void (async () => {
+        const transport = new StdioServerTransport()
+        _transport = transport
+        try {
+          await sdk.connect(transport)
+        } catch (err: any) {
+          process.stderr.write(`[claudestat-mcp] Connect error: ${err.message}\n`)
+          process.exit(1)
+        }
+      })()
+      if (contextPolling) {
+        _pollTimer = startContextPolling(sdk)
+      }
+      process.stderr.write(`[claudestat-mcp] Server ready (stdio)\n`)
     },
 
-    stop() {
-      if (!_started) return
+    async stop() {
+      if (!_started && !_transport) return
       _started = false
       if (_pollTimer) {
         clearInterval(_pollTimer)
         _pollTimer = null
       }
-      if (_rl) {
-        _rl.close()
-        _rl = null
-      }
+      try {
+        await sdk.close()
+      } catch { /* already closed */ }
     },
 
     addTool(def: ToolDefinition) {
       const idx = _tools.findIndex(t => t.name === def.name)
       if (idx >= 0) _tools[idx] = def
       else _tools.push(def)
+      if (_started) {
+        // SDK registerTool is idempotent per name — re-registering overwrites.
+        registerTool(def)
+      }
     },
 
     removeTool(name: string) {
       const idx = _tools.findIndex(t => t.name === name)
       if (idx >= 0) _tools.splice(idx, 1)
+      const handle = _sdkToolHandles.get(name)
+      if (handle) {
+        handle.remove()
+        _sdkToolHandles.delete(name)
+      }
     },
+  }
+
+  // Internal test hook: connect over an arbitrary in-memory transport instead of
+  // stdio. Not part of the public McpServer interface.
+  ;(server as any).connectForTest = async (transport: Transport) => {
+    _started = true
+    syncToolRegistry()
+    await sdk.connect(transport)
   }
 
   return server

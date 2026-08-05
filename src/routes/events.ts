@@ -12,6 +12,7 @@ import { readConfig, getWarnLevel }            from '../config'
 import { isRateLimited }                       from '../middleware/rate-limiter'
 import { broadcast, sessionLastEvent }         from './stream'
 import { sendDesktopNotification }             from '../notifier'
+import type { SessionTracker }                 from '../session-tracker'
 import { findProjectCwdForFile }               from './helpers'
 import { logger }                              from '../logger'
 import {
@@ -46,7 +47,7 @@ const CONTEXT_THRESHOLDS = [50, 75, 90] as const
 // ─── Session cost alert: sesiones que ya recibieron notificación ───────────────
 const sessionCostAlertFired = new Set<string>()
 
-let _sessionStopCallback: ((sessionId: string) => void) | null = null
+let _sessionTracker: SessionTracker | null = null
 
 // ─── Memory leak bounds ────────────────────────────────────────────────────────
 const AGENT_CWD_TTL_MS   = 30 * 60_000  // entries older than 30min can't be valid parents
@@ -151,6 +152,10 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
 
   dbOps.upsertSession({ id: session_id, cwd: resolvedCwd, started_at: ts, last_event_at: ts, source })
 
+  // Detección de cierre por reemplazo: cada evento alimenta el tracker,
+  // que notifica la sesión anterior cuando llega una nueva del mismo source.
+  _sessionTracker?.observe(source, session_id)
+
   // Skill grouping: get current parent BEFORE processing this event
   // (the Skill Done event itself is NOT tagged — only its subsequent sub-calls are)
   const skillParent = (tool_name !== 'Skill' && type !== 'Stop')
@@ -200,7 +205,6 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
     if (type === 'Stop') {
       activeSkillBySession.delete(session_id)
       cleanupSession(session_id)
-      if (_sessionStopCallback) _sessionStopCallback(session_id)
     }
 
     // Registrar Agent PreToolUse para detección de sub-sesiones
@@ -473,8 +477,8 @@ export const onCompactDetected: CompactDetectedCallback = (sessionId) => {
   logger.info(`[daemon] Auto-compact detected for session ${sessionId.slice(0, 8)}`)
 }
 
-export function setSessionStopCallback(fn: (sessionId: string) => void): void {
-  _sessionStopCallback = fn
+export function setSessionTracker(tracker: SessionTracker): void {
+  _sessionTracker = tracker
 }
 
 // Exponer callback para que stream.ts pueda inyectarlo en processLatestForSession

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import http from 'http'
 import express from 'express'
 import { dbOps } from '../src/db'
-import { eventsRouter } from '../src/routes/events'
+import { eventsRouter, setSessionTracker } from '../src/routes/events'
+import { createSessionTracker } from '../src/session-tracker'
 import { stopRateLimiter } from '../src/middleware/rate-limiter'
 
 process.env.CLAUDESTAT_DB_PATH ??= ':memory:'
@@ -99,5 +100,26 @@ describe('POST /event — API integration tests', () => {
     assert.ok(done, 'Done event should exist')
     assert.ok(done.tool_response.length >= 5000,
       `DB should store full response (${done.tool_response.length} chars)`)
+  })
+
+  test('nueva sesión del mismo source encadena la notificación de cierre, exactamente 1 vez', async () => {
+    const closed: string[] = []
+    const tracker = createSessionTracker({ onSessionClosed: (id) => closed.push(id) })
+    setSessionTracker(tracker)
+    try {
+      const sidA = newSid()
+      const sidB = newSid()
+      // Múltiples eventos de la misma sesión (Varios Stops) → no notificar
+      await postEvent({ type: 'PreToolUse', session_id: sidA, tool_name: 'Read', ts: Date.now(), cwd: '/test' })
+      await postEvent({ type: 'Stop', session_id: sidA, ts: Date.now() + 100 })
+      await postEvent({ type: 'Stop', session_id: sidA, ts: Date.now() + 200 })
+      assert.deepEqual(closed, [], 'múltiples Stops de la misma sesión no deben notificar')
+
+      // Evento de una sesión nueva del mismo source → notificar A exactamente 1 vez
+      await postEvent({ type: 'PreToolUse', session_id: sidB, tool_name: 'Read', ts: Date.now() + 300, cwd: '/test' })
+      assert.deepEqual(closed, [sidA], 'sesión nueva debe notificar la anterior exactamente 1 vez')
+    } finally {
+      setSessionTracker(null as any)
+    }
   })
 })

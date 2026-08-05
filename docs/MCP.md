@@ -27,6 +27,6 @@ Once registered, ask Claude things like:
 | `get_model_breakdown` | Cost and session count broken down by Claude model (Sonnet, Haiku, Opus) |
 | `get_weekly_insight` | Weekly summary with actionable tip |
 
-Zero extra dependencies — stdio JSON-RPC. Works without the daemon running (reads SQLite directly), but will warn you to start it if it's not active.
+Since v1.16.0 the server runs on the official `@modelcontextprotocol/sdk` over stdio (previously a hand-rolled JSON-RPC engine), giving standards-compliant handshakes and protocol-version negotiation. Works without the daemon running (reads SQLite directly), but will warn you to start it if it's not active.
 
 ![claudestat MCP demo](https://raw.githubusercontent.com/DeibyGS/claudestat/main/assets/mcp-demo.gif)

@@ -6,11 +6,10 @@ process.on('warning', (w) => {
 })
 
 import { createMcpServer } from './mcp-factory'
+import { isWindows } from './paths'
 
 const server = createMcpServer({ contextPolling: true })
 server.start()
-
-import { isWindows } from './paths'
 
 if (!isWindows) process.on('SIGTERM', () => process.exit(0))
 process.on('SIGINT', () => process.exit(0))

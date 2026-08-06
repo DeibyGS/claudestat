@@ -83,11 +83,14 @@ The daemon port resolves from (in priority order):
 
 ## Available surface (v1.13.0)
 
-**`dbOps` (read-only)** — `getSession`, `getLatestSession`, `getAllSessions(limit?)`,
+**`dbOps` (read-only)** — 50+ query functions. A representative subset:
+`getSession`, `getLatestSession`, `getAllSessions(limit?)`,
 `getSessionsInRange(startMs, endMs)`, `getSessionEvents(id)`, `getSessionEventsRecent(id, limit?)`,
 `getRecentSessions(days?)`, `getTopTools(...)`, `getToolCountsForSession(id)`,
 `getToolCountsByRange(s, e, source?)`, `getDailyActivity(days?)`, `getModelBreakdown(days?)`,
-`getProjectCosts(days?)`, `getQuotaStats(sinceMs)`, `getDbStats()`.
+`getProjectCosts(days?)`, `getQuotaStats(sinceMs)`, `getDbStats()`. The full read-only namespace
+also includes projections, analytics, orchestration, billing blocks, intents, and more — see the
+type surface in `src/db.ts` (`dbOps`).
 
 **Pricing** — `findPricing`, `estimateCost`, `estimateTokensFromToolCounts`,
 `getContextWindow`, `MODEL_PRICING`, `KNOWN_CONTEXT_WINDOWS`, `PRICING`.

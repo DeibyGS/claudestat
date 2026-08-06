@@ -5,6 +5,7 @@ dist/
 *.tsbuildinfo
 *.bak
 *.tgz
+nohup.out
 
 # ─── OS / editor noise ────────────────────────────────────────────────────────
 .DS_Store

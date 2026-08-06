@@ -66,21 +66,27 @@ Works with **Claude Code** and **OpenCode**. Zero cloud dependencies. Pure Node.
 
 ## Why claudestat?
 
-Tools like ccusage are great for reviewing history. claudestat is for *while you're coding*.
+Two different jobs exist in the coding-agent space:
 
-It taps into Claude Code's hook system to capture every event the moment it fires, stores everything locally in SQLite, and gives you a live dashboard, quota alerts, and an MCP server — not just a report.
+- **What happened** — costs, token totals, daily/weekly/monthly reports. ccusage is the historical-analysis reference.
+- **What is running right now** — the live session, the live budget, *before* the quota runs out. claudestat and OpenUsage live here.
 
-| | claudestat | ccusage |
-|---|:---:|:---:|
-| Real-time event stream | ✅ | ❌ |
-| Live terminal trace (`watch`) | ✅ | ❌ |
-| Web dashboard | ✅ | ❌ |
-| Quota alerts + kill switch | ✅ | ❌ |
-| Loop detector | ✅ | ❌ |
-| MCP server (ask Claude about itself) | ✅ | ❌ |
-| MCP bundle (standalone, zero-config) | ✅ | ❌ |
-| Historical usage analysis | ✅ | ✅ |
-| Multi-CLI support (Codex, OpenCode, Amp, etc.) | ✅ | ✅ |
+claudestat hooks Claude Code's events the moment they fire, keeps everything local in SQLite, and surfaces a live web dashboard, quota alerts, and an MCP server.
+
+| | claudestat | ccusage | OpenUsage |
+|---|:---:|:---:|:---:|
+| Real-time event stream | ✅ | partial | ✅ |
+| Live terminal trace (`watch`) | ✅ | — | — |
+| Web dashboard | ✅ | — | TUI |
+| Quota alerts + kill switch | ✅ | — | quota only |
+| Loop / thrash detector | ✅ | — | — |
+| MCP server (ask Claude about itself) | ✅ | — | — |
+| Historical daily/weekly/monthly reports | ✅ | ✅ | partial |
+| Multi-CLI sources (Codex, OpenCode, Amp…) | ✅ | ✅ | ✅ |
+| Cross-provider spend in one view | focused | — | ✅ |
+| Local-first / SQLite (no cloud) | ✅ | ✅ | ✅ |
+
+The main difference is the moment: ccusage answers *what did I spend yesterday*; claudestat shows *what's happening while you code*.
 
 > If claudestat is useful, give it a ⭐ — it helps other developers find it.
 
@@ -194,6 +200,10 @@ claudestat start     # start the daemon manually
 | `claudestat share [session-id]` | Export session summary as ASCII or JSON (use `--copy` to copy to clipboard) |
 | `claudestat export [format]` | Export session data to JSON or CSV |
 | `claudestat roast` | Sarcastic usage analysis |
+| `claudestat resume` | Resume a paused session |
+| `claudestat loops` | List sessions with detected loops (context thrashing) |
+| `claudestat logs` | Show daemon logs (use `-n`, `--follow`, `--level`) |
+| `claudestat update` | Check for updates and install the latest version from npm |
 | `claudestat version` | Show version and check for updates |
 
 [Full command reference with output examples →](docs/COMMANDS.md)
@@ -356,7 +366,7 @@ By default the first `dbOps.*` call probes `http://127.0.0.1:7337/health` and th
 
 | What | Stability |
 |---|---|
-| `dbOps` (15 read-only query functions) | `@experimental` — lazy daemon-guarded |
+| `dbOps` (50+ read-only query functions) | `@experimental` — lazy daemon-guarded |
 | Pricing tables (`MODEL_PRICING`, `KNOWN_CONTEXT_WINDOWS`, `PRICING`) | `@experimental` |
 | Intelligence (`analyzeSession`, `detectLoops`, `predictSaturation`, …) | `@experimental` |
 | Forecasting + quota (`computeProjection`, `computeQuota`, …) | `@experimental` |

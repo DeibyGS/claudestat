@@ -212,23 +212,7 @@ claudestat start     # start the daemon manually
 
 ## Dashboard
 
-The dashboard lives at `http://localhost:7337` and has seven tabs: **Live** (real-time trace with source badge, expandable Bash commands, and last-task subtitle per source), **History** (sessions by date with day selector 7/14/30/90d, merged-session badge, search, cost filter, and compare panel), **Projects** (grid with weekly heatmap, search input, and filters for active, high-cost, or low-efficiency projects), **Analytics** (spend + tokens + hours + efficiency KPIs with period-over-period ↑↓% deltas, stacked token chart by input/output/cache, 52-week activity heatmap, source filter, weekly AI reports), **Top** (tool rankings by cost/count/duration with cost projection and expandable "Other" row for tools beyond top 10), **System** (hooks, agents, skills, workflows, context file limits, work mode distribution, OpenCode config, memory files with truncation warning, claudestat config), and **Orchestrate** (multi-agent swim-lane view with per-cycle cost, tokens, files changed, git commits, and model breakdown).
-
-![Live tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428670/claudeStat/live_bc2z7j.png)
-
-![History tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428669/claudeStat/history_dzwweo.png)
-
-![Projects tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428649/claudeStat/projects_xhmizz.png)
-
-![Analytics KPIs](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428682/claudeStat/analitycs_td5hpv.png)
-
-![Analytics charts](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428683/claudeStat/analitycs2_ni2wwd.png)
-
-![Top tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428637/claudeStat/top_qytho3.png)
-
-![System tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428650/claudeStat/system_zeackp.png)
-
-![Context notifications](https://res.cloudinary.com/dgscloudinary/image/upload/v1780428875/claudeStat/Captura_de_pantalla_2026-06-02_a_las_21.34.24_bee8k1.png)
+The dashboard lives at `http://localhost:7337` and has seven tabs: **Live**, **History**, **Projects**, **Analytics**, **Top**, **System**, and **Orchestrate**.
 
 [Dashboard details →](docs/DASHBOARD.md)
 

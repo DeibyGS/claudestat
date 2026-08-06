@@ -1,6 +1,6 @@
 # claudestat Dashboard
 
-The dashboard lives at `http://localhost:7337` and has six tabs.
+The dashboard lives at `http://localhost:7337` and has seven tabs.
 
 ---
 
@@ -66,3 +66,11 @@ Full configuration map for Claude Code and OpenCode:
 - **claudestat config** — plan, kill switch status, quota alert thresholds
 
 ![System tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1778225606/My%20portfolio%7D/system_ixurjb.png)
+
+---
+
+### Orchestrate
+
+Live swim-lane view of Claude Code + OpenCode multi-agent runs. Every orchestration cycle shows per-agent (CC/OC) cost, tokens (input/output/cache), model, and tool-call count, plus files changed and the git commit that closed the cycle. A Gantt timeline maps the whole run; click any cycle to drill into its per-agent trace.
+
+![Orchestrate tab](https://res.cloudinary.com/dgscloudinary/image/upload/v1786049565/claudeStat/orchestrate_plkjro.png)

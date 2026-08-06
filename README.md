@@ -224,6 +224,51 @@ The dashboard lives at `http://localhost:7337` and has seven tabs: **Live** (rea
 
 ---
 
+## AI Development Benchmark
+
+claudestat was engineered by a human developer working with AI as a **pair programming partner**. The AI accelerated implementation — architecture, design, and engineering decisions stayed human. Fittingly, claudestat measures itself: every metric below comes from its own event database.
+
+### How we worked together
+
+| Human-owned | AI implemented, always human-reviewed |
+|-------------|-------------------------------------|
+| Product vision & feature design | TypeScript service generation |
+| MCP server protocol & design | Tool scaffolding, dashboard components |
+| Data model (SQLite schema) | Refactoring, test scaffolding |
+| Architecture decisions | Config parsing, CLI commands |
+| Code review & final acceptance | Documentation, auxiliary scripts |
+
+**Workflow:** `Idea → Spec → AI implementation → Human review → Test → Refine → Merge`
+
+Development was **iterative, never a single prompt**: requirements → prepare context → generate → review → fix → validate → repeat. Code and tests shipped together; nothing merged without human review. PRs stayed within budget and were split with `/chained-pr` when needed.
+
+### AI Development Principles
+
+- AI never made product decisions.
+- Every implementation started from a written specification.
+- Documentation was treated as executable context for AI.
+- All generated code required human review.
+- Architecture was preserved over implementation speed.
+- Models were selected per task type (Claude Code for complex features, OpenCode for fast iterations).
+
+<details>
+<summary><strong>Supporting metrics</strong></summary>
+<br>
+
+| Metric | Value |
+|--------|-------|
+| AI sessions | 116 logged |
+| Measured development time | ~344 h |
+| Avg session efficiency | 77/100 |
+| Primary model | Claude Sonnet 4.6 (48 CC sessions) |
+| Secondary | OpenCode: DeepSeek V4 Flash/Pro, GLM-5, Mimo v2.5 (68 sessions) |
+
+_Measured with [ClaudeStat](https://github.com/DeibyGS/claudestat) — this project's own tracking tool. Approximate values._
+
+</details>
+
+---
+
 ## OpenCode Support
 
 When you run **OpenCode** alongside Claude Code, claudestat automatically detects both sessions and shows a source switcher in the Live tab.

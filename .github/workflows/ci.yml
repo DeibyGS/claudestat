@@ -11,9 +11,9 @@ jobs:
     name: Lint + Typecheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
@@ -36,9 +36,9 @@ jobs:
         node: ['22', '24']
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node }}
           cache: 'npm'
@@ -76,8 +76,8 @@ jobs:
     needs: [test]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
@@ -87,14 +87,24 @@ jobs:
         run: npm ci
         working-directory: dashboard
       - name: Validate NPM_TOKEN secret
-        run: |
-          if [ -z "${{ secrets.NPM_TOKEN }}" ]; then
-            echo "❌ NPM_TOKEN is not set in repo secrets"
-            exit 1
-          fi
-          echo "✅ NPM_TOKEN is set"
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 2
+          max_attempts: 3
+          retry_wait_seconds: 5
+          command: |
+            if [ -z "${{ secrets.NPM_TOKEN }}" ]; then
+              echo "❌ NPM_TOKEN is not set in repo secrets"
+              exit 1
+            fi
+            echo "✅ NPM_TOKEN is set"
       - name: Dry-run publish (packaging check)
-        run: npm publish --dry-run
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: npm publish --dry-run
 
   badge:
     name: Tests badge
@@ -114,7 +124,7 @@ jobs:
           }
           EOF
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: tests-badge
           path: badges/

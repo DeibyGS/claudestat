@@ -98,7 +98,36 @@ function hasClaudestatHook(entry: any): boolean {
   return entry.hooks?.some((h: any) => typeof h.command === 'string' && h.command.includes('claudestat'))
 }
 
-export async function runInstall(): Promise<void> {
+export async function runInstall(opts: { dryRun?: boolean; json?: boolean } = {}): Promise<void> {
+  if (opts.json) {
+    const cfg = readConfig()
+    const installed = fs.existsSync(CONFIG_PATH)
+    let hooksOk = false
+    try {
+      const settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS, 'utf8'))
+      hooksOk = Object.values(settings.hooks ?? {}).flat().some(hasClaudestatHook)
+    } catch {}
+    console.log(JSON.stringify({ installed, hooksOk, config: cfg }))
+    process.exit(0)
+  }
+
+  if (opts.dryRun) {
+    const installed = fs.existsSync(CONFIG_PATH)
+    let hooksOk = false
+    try {
+      const settings = JSON.parse(fs.readFileSync(CLAUDE_SETTINGS, 'utf8'))
+      hooksOk = Object.values(settings.hooks ?? {}).flat().some(hasClaudestatHook)
+    } catch {}
+    console.log('\n╔═══════════════════════════════════════════╗')
+    console.log('║       claudestat — Install (dry-run)      ║')
+    console.log('╚═══════════════════════════════════════════╝\n')
+    console.log(`  Config exists:     ${installed ? '✅' : '❌ (will create)'}`)
+    console.log(`  Hooks installed:   ${hooksOk ? '✅' : '❌ (will install)'}`)
+    console.log(`  MCP server:        (will register if needed)`)
+    console.log('\n  No changes were made.\n')
+    process.exit(0)
+  }
+
   if (!fs.existsSync(CONFIG_PATH)) {
     await runWizard()
   } else {

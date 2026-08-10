@@ -6,13 +6,16 @@ import { execSync } from 'child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { dbOps } from '../db'
 import { Router, type Request, type Response } from 'express'
-import { getOpencodeDir } from '../paths'
+import { getOpencodeDir, getOpencodeDb } from '../paths'
 import { estimateTokensFromToolCounts, estimateCost, findPricing } from '../model-pricing'
 
 export const orchestrationRouter = Router()
 
 const AI_COLLAB_DIR = path.join(os.homedir(), '.ai-collab')
 const ORCH_LOG_FILE = path.join(AI_COLLAB_DIR, 'orchestrate.log')
+const ORCH_LOG_MAX_LINES = 50_000
+const ORCH_LOG_CACHE_TTL_MS = 5_000
+let _logCache: { lines: string[]; ts: number } | null = null
 const PROJECTS_JSON  = path.join(getOpencodeDir(), 'projects.json')
 
 interface WorkflowJson {
@@ -372,6 +375,12 @@ function parseLog(sinceTs?: number): { cc: OrchEvent[]; oc: OrchEvent[]; detecte
 
 function readLogLines(maxLines: number): string[] {
   try {
+    const now = Date.now()
+    if (_logCache && (now - _logCache.ts) < ORCH_LOG_CACHE_TTL_MS) {
+      const cached = _logCache.lines
+      return cached.length > maxLines ? cached.slice(-maxLines) : cached
+    }
+
     // Read current log
     const lines: string[] = []
     if (fs.existsSync(ORCH_LOG_FILE)) {
@@ -397,8 +406,21 @@ function readLogLines(maxLines: number): string[] {
       }
     }
 
-    // Return last maxLines timestamped lines
-    return lines.length > maxLines ? lines.slice(-maxLines) : lines
+    // Trim if over limit
+    const result = lines.length > maxLines ? lines.slice(-maxLines) : lines
+
+    // Trim the file on disk if it exceeds limit
+    if (lines.length > ORCH_LOG_MAX_LINES) {
+      try {
+        const trimmed = lines.slice(-ORCH_LOG_MAX_LINES)
+        const tmpPath = ORCH_LOG_FILE + '.tmp'
+        fs.writeFileSync(tmpPath, trimmed.join('\n') + '\n')
+        fs.renameSync(tmpPath, ORCH_LOG_FILE)
+      } catch { /* best effort */ }
+    }
+
+    _logCache = { lines: result, ts: now }
+    return result
   } catch {
     return []
   }
@@ -821,11 +843,9 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
   return cycles
 }
 
-const OC_DB_PATH = path.join(os.homedir(), '.local', 'share', 'opencode', 'opencode.db')
-
 function readOcTokensFromDb(sessionId: string): { input: number; output: number } | null {
   try {
-    const db = new DatabaseSync(OC_DB_PATH, { readOnly: true })
+    const db = new DatabaseSync(getOpencodeDb(), { readOnly: true })
     const row = db.prepare('SELECT tokens_input, tokens_output FROM session WHERE id = ?').get(sessionId) as { tokens_input: number; tokens_output: number } | undefined
     db.close()
     if (!row || (row.tokens_input === 0 && row.tokens_output === 0)) return null
@@ -833,10 +853,24 @@ function readOcTokensFromDb(sessionId: string): { input: number; output: number 
   } catch { return null }
 }
 
+function readOcModelFromDb(sessionId: string): string | null {
+  try {
+    const db = new DatabaseSync(getOpencodeDb(), { readOnly: true })
+    const row = db.prepare('SELECT model FROM session WHERE id = ?').get(sessionId) as { model: string } | undefined
+    db.close()
+    return row?.model ?? null
+  } catch { return null }
+}
+
 const OC_FALLBACK_MODEL = 'deepseek-chat' // used when OC doesn't register model in opencode.db
 
-function resolveOcModel(raw: string | null): string {
-  return raw && findPricing(raw) ? raw : OC_FALLBACK_MODEL
+function resolveOcModel(raw: string | null, sessionId?: string | null): string {
+  if (raw && findPricing(raw)) return raw
+  if (sessionId) {
+    const dbModel = readOcModelFromDb(sessionId)
+    if (dbModel && findPricing(dbModel)) return dbModel
+  }
+  return OC_FALLBACK_MODEL
 }
 
 function enrichOcEstimate(cycle: OrchCycle): void {
@@ -847,13 +881,13 @@ function enrichOcEstimate(cycle: OrchCycle): void {
     if (real) {
       cycle.oc_input_tokens  = real.input
       cycle.oc_output_tokens = real.output
-      const model = resolveOcModel(cycle.oc_model)
+      const model = resolveOcModel(cycle.oc_model, cycle.oc_session_id)
       if ((cycle.oc_cost ?? 0) === 0) cycle.oc_cost = estimateCost(real.input, real.output, model)
       return
     }
   }
   // Fallback: estimate tokens from tool counts (deepseek if model unknown)
-  const model = resolveOcModel(cycle.oc_model)
+  const model = resolveOcModel(cycle.oc_model, cycle.oc_session_id)
   const estimated = estimateTokensFromToolCounts(cycle.oc_tool_counts)
   if (estimated === 0) return
   const outputEst = Math.round(estimated * 0.15) // output ~15% of input in typical agentic use

@@ -381,7 +381,9 @@ program
 program
   .command('install')
   .description('Install hooks into Claude Code settings')
-  .action(async () => { await runInstall(); process.exit(0) })
+  .option('--dry-run', 'Show what would be installed without making changes')
+  .option('--json', 'Output install status as JSON')
+  .action(async (opts) => { await runInstall({ dryRun: opts.dryRun, json: opts.json }); process.exit(0) })
 
 program
   .command('uninstall')

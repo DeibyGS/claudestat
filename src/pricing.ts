@@ -21,6 +21,11 @@ export const PRICING: Record<string, ModelPricing> = {
 
 export const DEFAULT_PRICING = PRICING['claude-sonnet-4-6']
 
+/**
+ * Known context windows by model ID.
+ * To add a new model: add an entry with the model ID as key and context size as value.
+ * Fallback for unknown models: 200,000 tokens.
+ */
 export const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   'claude-opus-4-6':          200_000,
   'claude-sonnet-4-6':        200_000,

@@ -10,7 +10,7 @@ import fs   from 'fs/promises'
 import fsSync from 'fs'
 import { type WatcherAdapter, type ParsedEvent, registerAdapter } from './adapter'
 import { getClaudeDir } from '../paths'
-import { calcCost, getContextWindow, PRICING, DEFAULT_PRICING } from '../pricing'
+import { calcCost, getContextWindow, PRICING, DEFAULT_PRICING, DEFAULT_MODEL } from '../pricing'
 import type { CostUpdate } from '../db'
 import type { BlockCostEntry } from '../db'
 
@@ -94,7 +94,7 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
         if (!msg?.usage) continue
 
         const usage = msg.usage as UsageEntry
-        const model = msg.model ?? 'claude-sonnet-4-6'
+        const model = msg.model ?? DEFAULT_MODEL
         hasNewAssistant = true
 
         if (obj.timestamp) {
@@ -341,7 +341,7 @@ export async function getAllBlockCostsForSession(sessionId: string): Promise<Blo
           }
           if (obj.type === 'assistant' && current) {
             const usage = obj.message?.usage
-            const model = (obj.message?.model as string) ?? 'claude-sonnet-4-6'
+            const model = (obj.message?.model as string) ?? DEFAULT_MODEL
             if (!usage) continue
             const price = PRICING[model] ?? DEFAULT_PRICING
             const M = 1_000_000

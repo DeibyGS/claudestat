@@ -9,15 +9,18 @@
 import http from 'http'
 import { renderTrace, type RenderState, type TraceEvent, type CostInfo } from './render'
 import { readWeeklyStats } from './weekly'
+import { readConfig } from './config'
 
-const DAEMON_HOST = 'localhost'
-const DAEMON_PORT = 7337
+function getDaemonPort(): number {
+  try { return readConfig().port } catch { return 7337 }
+}
 
 function clearScreen() { process.stdout.write('\x1b[2J\x1b[H') }
 
 async function checkDaemon(): Promise<boolean> {
   return new Promise(resolve => {
-    const req = http.get(`http://${DAEMON_HOST}:${DAEMON_PORT}/health`, res => {
+    const port = getDaemonPort()
+    const req = http.get(`http://localhost:${port}/health`, res => {
       resolve(res.statusCode === 200)
     })
     req.on('error', () => resolve(false))
@@ -27,8 +30,9 @@ async function checkDaemon(): Promise<boolean> {
 
 function connectSSE(onMessage: (msg: any) => void): Promise<void> {
   return new Promise((_, reject) => {
+    const port = getDaemonPort()
     const req = http.request({
-      hostname: DAEMON_HOST, port: DAEMON_PORT, path: '/stream', method: 'GET',
+      hostname: 'localhost', port, path: '/stream', method: 'GET',
       headers: { Accept: 'text/event-stream', 'Cache-Control': 'no-cache' }
     }, res => {
       let buffer = ''

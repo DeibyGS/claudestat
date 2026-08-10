@@ -45,6 +45,7 @@ export interface ClaudestatConfig {
   loopWindowSecs:       number          // tamaño de la ventana en segundos
   projectAliases:       Record<string, string>   // { "/path/to/repo": "MyApp" }
   webhookUrl:           string | null   // URL para alertas externas (null = desactivado)
+  contextWindowOverrides: Record<string, number>  // { "model-name": 500000 } — per-model context window override
 }
 
 const CONFIG_PATH = path.join(getClaudestatDir(), 'config.json')
@@ -69,6 +70,7 @@ const DEFAULTS: ClaudestatConfig = {
   loopWindowSecs:       120,
   projectAliases:       {},
   webhookUrl:           null,
+  contextWindowOverrides: {},
 }
 
 /** Lee la config del disco. Valores ausentes se rellenan con defaults. */

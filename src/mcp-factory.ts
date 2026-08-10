@@ -8,7 +8,7 @@ import { computeQuota, refreshFromApi } from './quota-tracker'
 import { getWeeklyInsightData, generateTip, getUsageInsights } from './insights'
 import { readConfig, getWarnLevel } from './config'
 import { getPidFile } from './paths'
-import { getContextWindow } from './pricing'
+import { getContextWindow, CONTEXT_THRESHOLDS } from './pricing'
 
 export interface ToolDefinition {
   name: string
@@ -493,7 +493,6 @@ const DEFAULT_TOOL_DEFINITIONS: ToolDefinition[] = [
 
 // ─── Context polling (push notifications) ─────────────────────────────────────
 
-const MCP_CONTEXT_THRESHOLDS = [50, 75, 90] as const
 const MCP_WEEKLY_THRESHOLDS = [25, 50, 75, 90, 100] as const
 const MCP_CYCLE_THRESHOLDS = [50, 75, 90, 100] as const
 
@@ -526,7 +525,7 @@ function startContextPolling(sdk: SdkMcpServer): NodeJS.Timeout {
       }
 
       if (pctCurrent >= 50) {
-        for (const th of MCP_CONTEXT_THRESHOLDS) {
+        for (const th of CONTEXT_THRESHOLDS) {
           if (pctCurrent >= th && !mcpContextThresholdsFired.has(th)) {
             mcpContextThresholdsFired.add(th)
             const usedK  = Math.round(contextUsed / 1000)

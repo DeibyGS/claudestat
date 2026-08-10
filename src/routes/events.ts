@@ -8,6 +8,7 @@ import { analyzeSession, analyzeSemanticLoops, predictSaturation } from '../inte
 import { summarizeSession }                    from '../summarizer'
 import { deriveSessionState, STATE_META }      from '../session-state'
 import { computeQuota, invalidateQuotaCache }  from '../quota-tracker'
+import { CONTEXT_THRESHOLDS }                  from '../pricing'
 import { readConfig, getWarnLevel }            from '../config'
 import { isRateLimited }                       from '../middleware/rate-limiter'
 import { broadcast, sessionLastEvent }         from './stream'
@@ -36,7 +37,6 @@ const CONTEXT_SAMPLES_MAX     = 20
 
 // ─── Context threshold tracking: qué thresholds ya se notificaron por sesión ──
 const contextThresholdsFired = new Map<string, Set<number>>()
-const CONTEXT_THRESHOLDS = [50, 75, 90] as const
 
 // Restore contextThresholdsFired from disk so restarts don't re-fire context alerts
 ;(function restoreContextThresholds() {

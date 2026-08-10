@@ -19,6 +19,7 @@ import fs   from 'fs'
 import path from 'path'
 import { readClaudeAuth, subscriptionTypeToPlan, getOAuthAccessToken } from './claude-auth'
 import { getClaudeDir, getClaudestatDir } from './paths'
+import { DEFAULT_MODEL } from './pricing'
 
 // ─── Planes y límites ─────────────────────────────────────────────────────────
 
@@ -133,7 +134,7 @@ function parseJSONLFile(filePath: string): ParsedEntry[] {
       // Respuestas del asistente: tienen datos de uso de tokens
       if (obj.type === 'assistant') {
         const usage = obj.message?.usage
-        const model = (obj.message?.model as string | undefined) ?? 'claude-sonnet-4-6'
+        const model = (obj.message?.model as string | undefined) ?? DEFAULT_MODEL
         entries.push({
           ts, type: 'assistant',
           model,

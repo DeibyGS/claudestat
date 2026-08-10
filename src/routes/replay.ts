@@ -1,10 +1,9 @@
 import { Router, type Request, type Response } from 'express'
 import { dbOps } from '../db'
 import { getOpencodeEvents } from './opencode-reader'
+import { getContextWindow } from '../pricing'
 
 export const replayRouter = Router()
-
-const CONTEXT_WINDOW = 200_000
 
 interface AssistantTurn {
   turn_index:   number
@@ -71,19 +70,23 @@ replayRouter.get('/session/:id/replay', (req: Request, res: Response) => {
   const { id } = req.params
 
   const session = dbOps.getSession(id)
+  const contextWindow = session?.context_window && session.context_window > 0
+    ? session.context_window
+    : getContextWindow(session?.dominant_model ?? 'unknown')
+
   if (session?.source === 'opencode') {
     try {
       const { events, prompts } = getOpencodeEvents(id)
       const turns = convertOpencodeToTurns(events, prompts)
-      res.json({ turns, context_window: CONTEXT_WINDOW })
+      res.json({ turns, context_window: contextWindow })
     } catch {
-      res.json({ turns: [], context_window: CONTEXT_WINDOW })
+      res.json({ turns: [], context_window: contextWindow })
     }
     return
   }
 
   const turns = dbOps.getAssistantTurns(id)
-  res.json({ turns, context_window: CONTEXT_WINDOW })
+  res.json({ turns, context_window: contextWindow })
 })
 
 interface AgentNode {

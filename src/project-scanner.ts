@@ -9,7 +9,7 @@ import fs   from 'fs'
 import path from 'path'
 import os   from 'os'
 import { getClaudeDir, encodeClaudePath, isWindows } from './paths'
-import { calcCost } from './pricing'
+import { calcCost, DEFAULT_MODEL } from './pricing'
 
 export interface HandoffProgress {
   done:     number
@@ -199,7 +199,7 @@ export function getJSONLStats(encodedDir: string): JSONLStats {
             const obj = JSON.parse(line)
             if (obj.type !== 'assistant') continue
             const usage = obj.message?.usage
-            const model = (obj.message?.model as string) ?? 'claude-sonnet-4-6'
+            const model = (obj.message?.model as string) ?? DEFAULT_MODEL
             if (!usage) continue
 
             hasAssistant = true
@@ -307,7 +307,7 @@ function getJSONLStatsByProject(dirPath: string): Map<string, JSONLStats> {
           const obj = JSON.parse(raw.trim())
           if (obj.type !== 'assistant') continue
           const usage = obj.message?.usage
-          const model = obj.message?.model ?? 'claude-sonnet-4-6'
+          const model = obj.message?.model ?? DEFAULT_MODEL
           if (!usage) continue
           hasAssistant = true
           const t = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0)

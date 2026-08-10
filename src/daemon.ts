@@ -41,6 +41,7 @@ import { summarizeSession }                                         from './summ
 import { getPidFile, getClaudestatDir, getDashboardDir, portCheckCmd, writePortFile, getPauseSignalFile, getOpencodeDir, isWindows }            from './paths'
 import { logger } from './logger'
 import { getAlertState, persistAlertState } from './alert-persist'
+import { CONTEXT_THRESHOLDS } from './pricing'
 
 const PORT = readConfig().port
 const app  = express()
@@ -196,7 +197,6 @@ let _weeklyThresholdsFired = new Set<number>()
 let _lastWeeklyPctSeen = 0
 let _lastCycleResetAt  = 0
 let _contextThresholdsFired = new Map<string, Set<number>>()
-const CONTEXT_THRESHOLDS = [50, 75, 90]
 
 function checkAlertLevel(
   level: 'yellow' | 'orange' | 'red' | null,

@@ -1,5 +1,6 @@
 import path from 'path'
 import { dbOps } from './db'
+import { PRICING } from './pricing'
 
 const WEEK_MS = 7 * 86_400_000
 const META_KEY = 'last_insight_at'
@@ -116,16 +117,9 @@ export function getUsageInsights(days = 7): UsageInsightsData {
     : outputInputRatio > 2  ? 'balanced'
     : 'reading-heavy'
 
-  const CACHE_READ_PRICE: Record<string, number> = {
-    'claude-haiku-4-5-20251001': 0.30 / 1_000_000,
-    'claude-sonnet-4-6':          2.70 / 1_000_000,
-    'claude-opus-4-6':            3.00 / 1_000_000,
-  }
-  const DEFAULT_CACHE_PRICE = 2.70 / 1_000_000
-
   const cacheByModel = dbOps.getCacheReadByModel(days)
   const cacheSavings = cacheByModel.reduce((total, row) => {
-    const price = CACHE_READ_PRICE[row.model] ?? DEFAULT_CACHE_PRICE
+    const price = PRICING[row.model]?.cacheRead ?? 0.30 / 1_000_000
     return total + row.cache_read * price
   }, 0)
 

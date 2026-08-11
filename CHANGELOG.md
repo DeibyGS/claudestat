@@ -5,6 +5,69 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.0] - 2026-08-11
+
+### Added
+
+- **Configurable context windows** — `contextWindowOverrides` in config adds or overrides model context windows without editing source (Bug #10)
+- **`install --dry-run`** — preview installation changes without applying them
+- **`install --json`** — machine-readable output for scripting
+- **Source maps** — `sourceMap: true` in `tsconfig.json` for readable stack traces
+
+### Changed
+
+- **OpenCode model detection** — model is read directly from `opencode.db` via `getOpencodeDb()`, honoring the `OPENCODE_DB` env var; fewer sessions reported as `unknown`
+- **Orchestration log rotation** — log trims at 50,000 lines with a 5s cache TTL, preventing unbounded growth (~3.4 MB/day)
+- **Pricing consolidation** — three duplicate pricing tables merged into `pricing.ts`, three `CONTEXT_THRESHOLDS` duplicates deduplicated, `DEFAULT_MODEL` exported as a shared constant
+- **README** — rebalanced comparison table (claudestat vs ccusage vs OpenUsage), added missing CLI commands (`resume`, `loops`, `logs`, `update`), documented the full 50+ function `dbOps` surface
+
+### Fixed
+
+- **`watch` command port** — the configured daemon port was ignored
+- **`replay` context window** — used a hardcoded value instead of the model's real context window
+- **CI workflow** — actions updated to v5 (checkout, setup-node, upload-artifact) plus `nick-fields/retry@v3` for transient publish-check failures
+
+## [1.16.1] - 2026-08-05
+
+### Fixed
+
+- **Session-closed desktop notification** — new `src/session-tracker.ts` detects session close by replacement (a new session from the same source means the previous one ended), firing the notification exactly once per session; pending notifications are flushed on daemon shutdown
+
+### Added
+
+- **AI Development Benchmark** — README section documenting the process-focused benchmark
+
+## [1.16.0] - 2026-08-05
+
+### Changed
+
+- **MCP server migrated to the official SDK** — the custom JSON-RPC engine was replaced by `@modelcontextprotocol/sdk@1.30.0`
+
+## [1.15.0] - 2026-07-26
+
+### Added
+
+- **Windows compatibility (~99% of features)** — cross-platform paths and signals, health check over Node `http` (no `curl` dependency), auto-start via `schtasks`, clipboard via `clip`
+
+### Changed
+
+- **README overhaul** — 9 MCP tools, Windows service, MCP bundle, 7 dashboard tabs
+
+## [1.14.0] - 2026-07-26
+
+### Added
+
+- **`createMcpServer()` factory** — extracted from `mcp-server.ts` into `src/mcp-factory.ts`; `mcp-server.ts` is now a thin CLI wrapper and the factory is exported from `src/lib.ts`
+
+## [1.13.0] - 2026-07-07
+
+### Added
+
+- **Public library API** — `src/lib.ts` barrel exposing the read-only `dbOps` surface plus pure helpers (`findPricing`, `analyzeSession`, …)
+- **Lazy daemon guard** — `src/lib-guard.ts` checks daemon health on first `dbOps` property access via a Proxy; configurable with `configure({ throwOnNoDaemon })` or `CLAUDESTAT_LIB_THROW_ON_NO_DAEMON`
+
+> **Note:** the library surface is `@experimental` until v2.0 — exports may break in minor and patch releases. Pin an exact version.
+
 ## [1.12.2] - 2026-06-23
 
 ### Added

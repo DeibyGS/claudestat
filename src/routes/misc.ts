@@ -12,6 +12,7 @@ import { computeMetaStats, getMetaHistory } from '../meta-stats'
 import { computeQuota }         from '../quota-tracker'
 import { readConfig, writeConfig, validateConfig } from '../config'
 import { getSessionPrompts }    from '../enricher'
+import { findJSONLForSession, extractSemanticData, syntheticStopsFor } from '../watchers/claude-code'
 import { readClaudeStats }      from '../claude-stats'
 import { getCachedGitInfo, getCachedPRStatus } from '../cache/projects-cache'
 import { inferProjectCwd }      from './projects'
@@ -125,7 +126,27 @@ miscRouter.get('/sessions', (_req: Request, res: Response) => {
 miscRouter.get('/api/session-events', (req: Request, res: Response) => {
   const sessionId = req.query.session_id as string | undefined
   if (!sessionId) return res.status(400).json({ error: 'session_id required' })
-  res.json({ events: dbOps.getSessionEvents(sessionId) })
+  const session = dbOps.getSession(sessionId)
+  const events  = dbOps.getSessionEvents(sessionId)
+  if (session?.source !== 'claude-code' && !events.some(e => e.source === 'claude-code')) {
+    return res.json({ events })
+  }
+  // Stops sintéticos: ver syntheticStopsFor(). Si el JSONL de la sesión ya no
+  // existe (comprimida/borrada) se devuelven solo los eventos reales.
+  ;(async () => {
+    try {
+      const filePath = await findJSONLForSession(sessionId)
+      if (!filePath) return res.json({ events })
+      const semantic = await extractSemanticData(filePath)
+      if (!semantic) return res.json({ events })
+      const realStopTs = events.filter(e => e.type === 'Stop').map(s => Number(s.ts))
+      const synStops   = syntheticStopsFor(sessionId, semantic.turns, realStopTs)
+      const merged     = [...events, ...synStops].sort((a, b) => Number(a.ts) - Number(b.ts))
+      res.json({ events: merged })
+    } catch {
+      res.json({ events })
+    }
+  })()
 })
 
 // ─── GET /prompts — mensajes del usuario para una sesión ─────────────────────

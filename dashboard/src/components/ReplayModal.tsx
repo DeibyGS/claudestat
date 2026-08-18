@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { X, AlertCircle, ChevronRight } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts'
 import type { AssistantTurnData, AgentNode } from '../types'
+import { Tip } from './Tip'
 
 interface ReplayData {
   turns:          AssistantTurnData[]
@@ -17,6 +18,16 @@ function fmtTok(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
   if (n >= 1_000)     return `${Math.round(n / 1_000)}K`
   return String(n)
+}
+
+function MetaChip({ text, color }: { text: string; color: string }) {
+  return (
+    <span style={{
+      fontSize: 9, color, background: `${color}18`,
+      border: `1px solid ${color}30`, borderRadius: 3, padding: '1px 5px',
+      fontFamily: 'monospace',
+    }}>{text}</span>
+  )
 }
 
 function AgentTreeNode({ node, depth = 0 }: { node: AgentNode; depth?: number }) {
@@ -154,6 +165,54 @@ export function ReplayModal({ sessionId, onClose }: Props) {
                             border: '1px solid #58a6ff30', borderRadius: 3, padding: '1px 5px',
                           }}>{tc}</span>
                         ))}
+                        {turn.model && (
+                          <Tip position="top" align="left" content={
+                            <div>
+                              <div style={{ color: '#d2a8ff', fontWeight: 700, fontSize: 13, marginBottom: 5 }}>Model</div>
+                              <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
+                                Model that generated this turn, e.g. claude-sonnet-5 (claude- prefix trimmed).
+                              </div>
+                            </div>
+                          }>
+                            <MetaChip text={turn.model.replace('claude-', '')} color="#d2a8ff" />
+                          </Tip>
+                        )}
+                        {turn.effort && (
+                          <Tip position="top" align="left" content={
+                            <div>
+                              <div style={{ color: '#7ee787', fontWeight: 700, fontSize: 13, marginBottom: 5 }}>Effort</div>
+                              <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
+                                Reasoning level of this turn: low = direct · medium = balanced · high = extended thinking (Pro/Max).
+                              </div>
+                            </div>
+                          }>
+                            <MetaChip text={turn.effort} color="#7ee787" />
+                          </Tip>
+                        )}
+                        {turn.stop_reason && (
+                          <Tip position="top" align="left" content={
+                            <div>
+                              <div style={{ color: '#8b949e', fontWeight: 700, fontSize: 13, marginBottom: 5 }}>Stop reason</div>
+                              <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
+                                Why the model ended this turn: end_turn = complete · tool_use = called a tool · max_tokens = budget hit.
+                              </div>
+                            </div>
+                          }>
+                            <MetaChip text={turn.stop_reason} color="#8b949e" />
+                          </Tip>
+                        )}
+                        {turn.stop_sequence && (
+                          <Tip position="top" align="left" content={
+                            <div>
+                              <div style={{ color: '#ffa198', fontWeight: 700, fontSize: 13, marginBottom: 5 }}>Stop sequence</div>
+                              <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
+                                Custom string(s) that cut this turn's generation — rarely present.
+                              </div>
+                            </div>
+                          }>
+                            <MetaChip text={turn.stop_sequence} color="#ffa198" />
+                          </Tip>
+                        )}
                       </div>
                       <span style={{ fontSize: 9, color: ctxColor, fontFamily: 'monospace', flexShrink: 0 }}>
                         {fmtTok(turn.context_used)} · {ctxPct}%
@@ -177,9 +236,19 @@ export function ReplayModal({ sessionId, onClose }: Props) {
             <div style={{ width: 320, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               {/* Context Decay Curve */}
               <div style={{ padding: '10px 14px 4px', borderBottom: '1px solid #21262d' }}>
-                <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  Context Decay
-                </div>
+                <Tip position="top" align="left" content={
+                  <div>
+                    <div style={{ color: '#58a6ff', fontWeight: 700, fontSize: 13, marginBottom: 5 }}>Context usage</div>
+                    <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
+                      Estimated request context (input + cache read + cache creation + output) as % of the session window.
+                      Rises as history accumulates; a flat line means the context barely grew between turns.
+                    </div>
+                  </div>
+                }>
+                  <div style={{ fontSize: 10, color: '#7d8590', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', cursor: 'default' }}>
+                    Context Decay
+                  </div>
+                </Tip>
                 {chartData.length >= 2 ? (
                   <ResponsiveContainer width="100%" height={140}>
                     <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>

@@ -22,11 +22,15 @@ import {
   type CostUpdateCallback,
   type CompactDetectedCallback,
 } from '../enricher'
-import { findJSONLForSession, extractSemanticData } from '../watchers/claude-code'
+import { findJSONLForSession, extractSemanticData, syntheticStopsFor } from '../watchers/claude-code'
 import { getAlertState, persistAlertState } from '../alert-persist'
 
 // ─── Semantic extraction debounce: 3s after last new assistant turn ───────────
 const semanticDebounce = new Map<string, ReturnType<typeof setTimeout>>()
+
+// Turnos ya cerrados con Stop sintético por sesión (evita Stops duplicados en
+// re-escaneos del mismo JSONL). Clave: ts del turno (== ts del Stop sintético).
+const syntheticStopsEmitted = new Map<string, Set<number>>()
 
 // ─── Predictive saturation: context samples + alert cooldown per session ──────
 const contextSamples   = new Map<string, Array<{ ts: number; context_used: number }>>()
@@ -465,6 +469,26 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
         if (semLoops.length > 0) {
           broadcast({ type: 'semantic_loop', payload: { session_id: sessionId, loops: semLoops } })
         }
+
+        // ─── Bloques por turno (fix granularidad CC) ─────────────────────────────
+        // Claude Code emite un hook Stop real ~1 vez por respuesta del modelo, por lo
+        // que el TracePanel agrupa varias herramientas en un solo bloque gigante.
+        // Aquí se emite un Stop sintético por cada turno *cerrado* (que ya tiene un
+        // turno siguiente) para cortar el bloque como OpenCode lo hace por turno.
+        // syntheticStopsFor() deduplica contra el Stop real del hook; el mapa
+        // in-memory evita re-emitir en re-escaneos del mismo JSONL.
+        try {
+          const realStops = dbOps.getSessionEvents(sessionId).filter(e => e.type === 'Stop')
+          const synStops  = syntheticStopsFor(sessionId, semantic.turns, realStops.map(s => Number(s.ts)))
+          const emitted   = syntheticStopsEmitted.get(sessionId) ?? new Set<number>()
+          let changed     = false
+          for (const stop of synStops) {
+            if (emitted.has(stop.ts)) continue
+            emitted.add(stop.ts); changed = true
+            broadcast({ type: 'event', payload: stop })
+          }
+          if (changed) syntheticStopsEmitted.set(sessionId, emitted)
+        } catch (err) { logger.warn('[events] Synthetic Stop error: ' + String(err)) }
       } catch (err) { logger.warn('[events] Semantic extraction error: ' + String(err)) }
     }, 3_000))
   }

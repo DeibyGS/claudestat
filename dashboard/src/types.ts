@@ -274,13 +274,17 @@ export interface QuotaStats {
 }
 
 export interface AssistantTurnData {
-  turn_index:   number
-  ts?:          number
+  turn_index:    number
+  ts?:           number
   text_preview?: string
-  tool_calls:   string[]
-  error_count:  number
-  output_chars: number
-  context_used: number
+  tool_calls:    string[]
+  error_count:   number
+  output_chars:  number
+  context_used:  number
+  model?:        string
+  effort?:       string
+  stop_reason?:  string
+  stop_sequence?: string
 }
 
 export interface AgentNode {

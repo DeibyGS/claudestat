@@ -162,4 +162,66 @@ describe('extractSemanticData', () => {
     assert.equal(result.turns.length, 2)
     assert.equal(result.avg_output_chars, 3) // (2+4)/2 = 3
   })
+
+  test('captures LLM metadata (effort, model, stop_reason, stop_sequence) per turn', async () => {
+    const content = makeJSONL([
+      {
+        type: 'assistant',
+        effort: 'high',
+        timestamp: '2026-01-01T00:00:00.000Z',
+        message: {
+          content: [{ type: 'text', text: 'ok' }],
+          model: 'claude-sonnet-5',
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 10, output_tokens: 2 },
+        },
+      },
+      {
+        type: 'assistant',
+        effort: 'low',
+        message: {
+          content: [{ type: 'text', text: 'tool time' }],
+          model: 'claude-opus-5',
+          stop_reason: 'tool_use',
+          stop_sequence: ['grep'],
+          usage: { input_tokens: 5, output_tokens: 1 },
+        },
+      },
+    ])
+    await fs.writeFile(tmpFile, content)
+
+    const result = await extractSemanticData(tmpFile)
+    assert.ok(result !== null)
+    assert.equal(result.turns.length, 2)
+    assert.equal(result.turns[0].model, 'claude-sonnet-5')
+    assert.equal(result.turns[0].effort, 'high')
+    assert.equal(result.turns[0].stop_reason, 'end_turn')
+    assert.equal(result.turns[0].stop_sequence, undefined)
+    assert.equal(result.turns[1].model, 'claude-opus-5')
+    assert.equal(result.turns[1].effort, 'low')
+    assert.equal(result.turns[1].stop_reason, 'tool_use')
+    assert.equal(result.turns[1].stop_sequence, JSON.stringify(['grep']))
+  })
+
+  test('leaves LLM metadata undefined when absent from the raw line', async () => {
+    const content = makeJSONL([
+      {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: 'no meta' }],
+          usage: { input_tokens: 3, output_tokens: 1 },
+        },
+      },
+    ])
+    await fs.writeFile(tmpFile, content)
+
+    const result = await extractSemanticData(tmpFile)
+    assert.ok(result !== null)
+    const turn = result.turns[0]
+    assert.equal(turn.model, undefined)
+    assert.equal(turn.effort, undefined)
+    assert.equal(turn.stop_reason, undefined)
+    assert.equal(turn.stop_sequence, undefined)
+  })
 })

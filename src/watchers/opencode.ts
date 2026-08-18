@@ -241,7 +241,7 @@ export const opencodeAdapter: PollableAdapter = {
             cache_read: row.tokens_cache_read,
             cache_creation: row.tokens_cache_write,
             cost_usd: estimatedCost,
-            context_used: row.tokens_input + row.tokens_cache_read + row.tokens_cache_write,
+            context_used: row.tokens_input + row.tokens_cache_read + row.tokens_cache_write + row.tokens_output,
             context_window: getContextWindow(modelId),
             lastModel: modelId,
             firstTs: row.time_created,

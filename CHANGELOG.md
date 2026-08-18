@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.0] - 2026-08-18
+
+### Added
+
+- **Assistant-turn metadata tooltips** — hover on the Model, Effort, Stop reason and Stop sequence chips in the session replay shows an explanatory tooltip; "Context Decay" heading now has its own tooltip too
+- **Turn metadata** — `model`, `effort`, `stop_reason` and `stop_sequence` are now persisted per assistant turn (migration v26) and surfaced in the dashboard types
+
+### Fixed
+
+- **OpenCode `context_used` underreporting** — output tokens were not counted; the metric now sums input + cache_read + cache_write + output, matching the Claude Code side (#74)
+- **Claude Code live-tab blocks** — a session showed one giant block instead of one per turn because block slicing only cuts on `Stop` events, which Claude Code emits roughly once per response. Synthetic per-turn Stops (deduplicated against real ones) are now served over SSE and the polling API, so blocks match OpenCode granularity (#73)
+- **Live-tab list reset with parallel sessions** — an SSE event arriving from an *other* session (OC vs CC) cleared the visible event list; those events are now ignored (#73)
+- **SSE init event cap** — bumped from 200 to 2000 so long sessions render fully on first connect (#73)
+- **Tooltips clipped by scroll container** — `Tip` renders through a portal to `document.body` with fixed positioning and viewport clamping, so tooltips are no longer cut off inside the scrollable panel (#73)
+
 ## [1.17.0] - 2026-08-11
 
 ### Added

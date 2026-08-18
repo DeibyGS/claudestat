@@ -203,6 +203,10 @@ export interface AssistantTurn {
   error_count: number
   output_chars: number
   context_used: number
+  model?: string
+  effort?: string
+  stop_reason?: string
+  stop_sequence?: string
 }
 
 export interface SemanticData {
@@ -265,8 +269,16 @@ export async function extractSemanticData(filePath: string): Promise<SemanticDat
 
           const usage = obj.message?.usage
           const contextUsed = usage
-            ? ((usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0))
+            ? ((usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.output_tokens ?? 0))
             : 0
+
+          const llmMsg      = obj.message ?? {}
+          const stopSeq     = llmMsg.stop_sequence
+          const stopSequence = typeof stopSeq === 'string'
+            ? stopSeq
+            : Array.isArray(stopSeq)
+              ? JSON.stringify(stopSeq)
+              : undefined
 
           pendingTurn = {
             turn_index:   turnIndex++,
@@ -276,6 +288,10 @@ export async function extractSemanticData(filePath: string): Promise<SemanticDat
             error_count:  0,
             output_chars: outputChars,
             context_used: contextUsed,
+            model:        typeof llmMsg.model     === 'string' ? llmMsg.model     : undefined,
+            effort:       typeof obj.effort       === 'string' ? obj.effort       : undefined,
+            stop_reason:  typeof llmMsg.stop_reason === 'string' ? llmMsg.stop_reason : undefined,
+            stop_sequence: stopSequence,
           }
         } else if ((obj.type === 'human' || obj.type === 'user') && pendingTurn) {
           const msgContent = obj.message?.content
@@ -365,6 +381,39 @@ export async function getAllBlockCostsForSession(sessionId: string): Promise<Blo
 
 export interface SessionPrompt {
   index: number; ts: number; text: string
+}
+
+/**
+ * Calcula los Stops sintéticos pendientes para una sesión de Claude Code.
+ *
+ * Problema que resuelve: Claude Code emite un hook `Stop` real ~1 vez por respuesta
+ * del modelo, por lo que el TracePanel (que corta bloques solo en `Stop`) agrupa
+ * varias herramientas en un único bloque gigante. OpenCode, en cambio, sintetiza un
+ * `Stop` por turno y se ve "correcto".
+ *
+ * Aquí se generan Stops sintéticos para cada turno *cerrado* (que ya tiene un turno
+ * siguiente) cuyo límite NO esté ya cubierto por un Stop real del hook (dedupe por
+ * límite: un Stop real con ts en [turno[i].ts, turno[i+1].ts) cierra ese límite).
+ * Los Stops sintéticos solo viajan por SSE / polling del dashboard — nunca se
+ * insertan en la base de datos — para no contaminar métricas de sesión.
+ *
+ * Determinista: misma entrada → misma salida (usado en events.ts y misc.ts).
+ */
+export function syntheticStopsFor(
+  sessionId: string,
+  turns: AssistantTurn[],
+  realStopTs: number[],
+): Array<{ type: 'Stop'; session_id: string; ts: number; synthetic: true }> {
+  const stops: Array<{ type: 'Stop'; session_id: string; ts: number; synthetic: true }> = []
+  for (let i = 0; i < turns.length - 1; i++) {
+    const turn = turns[i]
+    if (typeof turn.ts !== 'number') continue
+    const boundaryEnd = typeof turns[i + 1]?.ts === 'number' ? turns[i + 1]!.ts! : Number.POSITIVE_INFINITY
+    // El hook real de CC ya emitió un Stop dentro de este límite de turno → no duplicar
+    if (realStopTs.some(t => t >= turn.ts! && t < boundaryEnd)) continue
+    stops.push({ type: 'Stop', session_id: sessionId, ts: turn.ts, synthetic: true })
+  }
+  return stops
 }
 
 export async function getSessionPrompts(sessionId: string): Promise<SessionPrompt[]> {

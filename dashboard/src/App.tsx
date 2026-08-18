@@ -607,8 +607,10 @@ function handleMessage(prev: AppState, msg: any): AppState {
   }
   if (msg.type === 'event') {
     const evt = msg.payload as TraceEvent & { session_id: string }
-    if (evt.session_id && evt.session_id !== prev.sessionId && prev.sessionId !== '') {
-      return { ...prev, sessionId: evt.session_id, cwd: evt.cwd || '', startedAt: evt.ts, events: [], blockCosts: [], pendingBlockCost: null }
+    // Ignorar eventos de otra sesión: evitaba que la vista live se resetease
+    // (events: []) al alternar entre sesiones activas simultáneas (OC + CC).
+    if (evt.session_id && prev.sessionId && evt.session_id !== prev.sessionId) {
+      return prev
     }
     let events = [...prev.events]
     if (evt.type === 'Done' && evt.tool_name) {

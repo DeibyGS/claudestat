@@ -1,14 +1,15 @@
 // ─── GET /stream — SSE para claudestat watch ─────────────────────────────────
 
 import { Router, type Request, type Response } from 'express'
-import { dbOps } from '../db'
+import { dbOps, type EventRow } from '../db'
 import type { BlockCostEntry } from '../db'
 import { processLatestForSession, getAllBlockCostsForSession } from '../enricher'
+import { findJSONLForSession, extractSemanticData, syntheticStopsFor } from '../watchers/claude-code'
 import { deriveSessionState } from '../session-state'
 
 export const streamRouter = Router()
 
-const SSE_INIT_EVENT_LIMIT = 200
+const SSE_INIT_EVENT_LIMIT = 2000
 
 const sseClients = new Map<string, Response>()
 
@@ -50,28 +51,48 @@ streamRouter.get('/stream', (req: Request, res: Response) => {
   const clientId = Math.random().toString(36).slice(2)
   sseClients.set(clientId, res)
 
-  const latestSession = dbOps.getLatestSession()
+const latestSession = dbOps.getLatestSession()
   if (latestSession) {
     const allEvents   = dbOps.getSessionEvents(latestSession.id)
-    const events      = allEvents.length > SSE_INIT_EVENT_LIMIT
-      ? allEvents.slice(-SSE_INIT_EVENT_LIMIT)
-      : allEvents
     const lastEvt     = sessionLastEvent.get(latestSession.id)
     const state       = deriveSessionState(lastEvt?.type, lastEvt?.ts ?? latestSession.last_event_at ?? latestSession.started_at)
 
-    getAllBlockCostsForSession(latestSession.id).then((blockCosts: BlockCostEntry[]) => {
-      const subAgentSessions = dbOps.getChildSessions(latestSession.id)
-      res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events, blockCosts, subAgentSessions })}\n\n`)
+    // Stops sintéticos por turno CC: ver syntheticStopsFor(). Si el JSONL no existe
+    // se envían solo los eventos reales. Se mergean para que la primera conexión
+    // muestre los bloques por turno igual que OC (consistente con /api/session-events).
+    const withSynStops = (base: EventRow[]): Promise<EventRow[]> => {
+      if (latestSession.source !== 'claude-code') return Promise.resolve(base)
+      return findJSONLForSession(latestSession.id).then(async filePath => {
+        try {
+          if (!filePath) return base
+          const semantic = await extractSemanticData(filePath)
+          if (!semantic) return base
+          const realStopTs = base.filter(e => e.type === 'Stop').map(s => Number(s.ts))
+          const synStops   = syntheticStopsFor(latestSession.id, semantic.turns, realStopTs)
+          return [...base, ...synStops] as EventRow[]
+        } catch { return base }
+      }).catch(() => base)
+    }
 
-      if (_onCostUpdateRef) {
-        processLatestForSession(latestSession.id, _onCostUpdateRef).catch((err: Error) =>
-          console.error('[stream] Error processing latest session:', err)
-        )
-      }
-    }).catch((err: Error) => {
-      console.error('[stream] Error loading block costs:', err)
-      const subAgentSessions = dbOps.getChildSessions(latestSession.id)
-      res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events, blockCosts: [], subAgentSessions })}\n\n`)
+    withSynStops(allEvents).then(merged => {
+      const initEvents = merged.length > SSE_INIT_EVENT_LIMIT
+        ? merged.slice(-SSE_INIT_EVENT_LIMIT)
+        : merged
+
+      getAllBlockCostsForSession(latestSession.id).then((blockCosts: BlockCostEntry[]) => {
+        const subAgentSessions = dbOps.getChildSessions(latestSession.id)
+        res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events: initEvents, blockCosts, subAgentSessions })}\n\n`)
+
+        if (_onCostUpdateRef) {
+          processLatestForSession(latestSession.id, _onCostUpdateRef).catch((err: Error) =>
+            console.error('[stream] Error processing latest session:', err)
+          )
+        }
+      }).catch((err: Error) => {
+        console.error('[stream] Error loading block costs:', err)
+        const subAgentSessions = dbOps.getChildSessions(latestSession.id)
+        res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events: initEvents, blockCosts: [], subAgentSessions })}\n\n`)
+      })
     })
   }
 

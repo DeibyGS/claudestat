@@ -171,6 +171,12 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
       UNIQUE(run_key, cycle_index) ON CONFLICT REPLACE
     );
   ` },
+  { version: 26, sql: `
+    ALTER TABLE assistant_turns ADD COLUMN model         TEXT;
+    ALTER TABLE assistant_turns ADD COLUMN effort         TEXT;
+    ALTER TABLE assistant_turns ADD COLUMN stop_reason    TEXT;
+    ALTER TABLE assistant_turns ADD COLUMN stop_sequence  TEXT
+  ` },
 ]
 
 function runMigrations() {
@@ -225,6 +231,10 @@ export interface AssistantTurnRow {
   error_count: number
   output_chars: number
   context_used: number
+  model?: string
+  effort?: string
+  stop_reason?: string
+  stop_sequence?: string
 }
 
 export interface EventRow {
@@ -764,7 +774,8 @@ const stmts = {
   `),
 
   getAssistantTurns: db.prepare(`
-    SELECT turn_index, ts, text_preview, tool_calls, error_count, output_chars, context_used
+    SELECT turn_index, ts, text_preview, tool_calls, error_count, output_chars, context_used,
+           model, effort, stop_reason, stop_sequence
     FROM assistant_turns WHERE session_id = ? ORDER BY turn_index ASC
   `),
 
@@ -1218,16 +1229,21 @@ export const dbOps = {
   upsertAssistantTurns(sessionId: string, turns: AssistantTurnRow[]) {
     db.prepare(`DELETE FROM assistant_turns WHERE session_id = ?`).run(sessionId)
     const insert = db.prepare(`
-      INSERT INTO assistant_turns (session_id, turn_index, ts, text_preview, tool_calls, error_count, output_chars, context_used)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO assistant_turns (session_id, turn_index, ts, text_preview, tool_calls, error_count, output_chars, context_used, model, effort, stop_reason, stop_sequence)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     for (const t of turns) {
-      insert.run(sessionId, t.turn_index, t.ts ?? null, t.text_preview ?? null, JSON.stringify(t.tool_calls ?? []), t.error_count, t.output_chars, t.context_used)
+      insert.run(
+        sessionId, t.turn_index, t.ts ?? null, t.text_preview ?? null, JSON.stringify(t.tool_calls ?? []),
+        t.error_count, t.output_chars, t.context_used,
+        t.model ?? null, t.effort ?? null, t.stop_reason ?? null, t.stop_sequence ?? null,
+      )
     }
   },
 
   getAssistantTurns(sessionId: string): AssistantTurnRow[] {
-    return (stmts.getAssistantTurns.all(sessionId) as any[]).map(r => ({
+    const rows = stmts.getAssistantTurns.all(sessionId) as any[]
+    return rows.map(r => ({
       turn_index:   r.turn_index,
       ts:           r.ts ?? undefined,
       text_preview: r.text_preview ?? undefined,
@@ -1235,6 +1251,10 @@ export const dbOps = {
       error_count:  r.error_count,
       output_chars: r.output_chars,
       context_used: r.context_used ?? 0,
+      model:        r.model ?? undefined,
+      effort:       r.effort ?? undefined,
+      stop_reason:  r.stop_reason ?? undefined,
+      stop_sequence: r.stop_sequence ?? undefined,
     }))
   },
 

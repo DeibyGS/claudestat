@@ -134,6 +134,8 @@ Then just ask:
 - **Source filter** — filter KPIs, charts, and tool rankings by Claude Code / OpenCode across all tabs
 - **Multi-tool coordination** — live intent panel with real collision detection (same file edited by CC and OC)
 - **Programmatic Library API** — import `dbOps`, pricing, and intelligence functions directly from your own tools (`v1.13.0+`, `@experimental`)
+- **KPI mini-charts** — interactive bar charts for cost/block evolution and area charts for context progression in KPI cards
+- **Enhanced header layout** — compact navbar with model name, project, and uniform badge heights
 
 ---
 

@@ -80,6 +80,8 @@ export default function App() {
   const [claudeCodeEvents,  setClaudeCodeEvents]  = useState<TraceEvent[]>([])
   const [claudeCodePrompts, setClaudeCodePrompts] = useState<Array<{ index: number; ts: number; text: string }>>([])
   const [ocContextInfo, setOcContextInfo] = useState<{ context_used?: number; context_window?: number } | undefined>()
+  const [ocLastEntry, setOcLastEntry] = useState<{ inputTokens: number; outputTokens: number; cacheRead?: number; inputUsd: number; outputUsd: number; totalUsd: number } | undefined>()
+  const [ocModelUsage, setOcModelUsage] = useState<Array<{ model: string; sessions: number; totalCost: number }>>([])
   const [orchData, setOrchData] = useState<OrchTimeline | null>(null)
   const stateRef = useRef(state)
   stateRef.current = state
@@ -177,6 +179,17 @@ export default function App() {
             if (p.context_used != null || p.context_window != null) {
               setOcContextInfo({ context_used: p.context_used, context_window: p.context_window })
             }
+          }
+          if (msg.type === 'block_cost' && msg.payload?.session_id) {
+            const p = msg.payload
+            setOcLastEntry({
+              inputTokens: p.inputTokens ?? 0,
+              outputTokens: p.outputTokens ?? 0,
+              cacheRead: p.cacheRead,
+              inputUsd: p.inputUsd ?? 0,
+              outputUsd: p.outputUsd ?? 0,
+              totalUsd: p.totalUsd ?? 0,
+            })
           }
           setState(prev => handleMessage(prev, msg))
         } catch {}
@@ -382,6 +395,7 @@ export default function App() {
   useEffect(() => {
     fetch('/quota').then(r => r.ok ? r.json() : null).then(d => d && setQuota(d)).catch(() => {})
     fetch('/api/quota-stats').then(r => r.json()).then(setQuotaStats).catch(() => {})
+    fetch('/api/oc-model-usage?days=7').then(r => r.ok ? r.json() : null).then(d => d && setOcModelUsage(d.models ?? [])).catch(() => {})
   }, [state.sessionState])
 
   // ── Fetch por tab ───────────────────────────────────────────────────────────
@@ -464,8 +478,9 @@ export default function App() {
   const ccHeavyTokens = lastBlock && lastBlock.inputTokens >= HEAVY_BLOCK_THRESHOLD ? lastBlock.inputTokens : null
   const ccHeavyCache = lastBlock && lastBlock.cacheRead != null && lastBlock.cacheRead >= HEAVY_BLOCK_THRESHOLD ? lastBlock.cacheRead : lastBlock && lastBlock.context_used != null && lastBlock.context_used >= HEAVY_BLOCK_THRESHOLD ? lastBlock.context_used : undefined
   const ocSource = freshSources.find(s => s.source === 'opencode')
-  const ocHeavyTokens = ocSource && ocSource.input_tokens >= HEAVY_BLOCK_THRESHOLD ? ocSource.input_tokens : null
-  const ocHeavyCache = ocSource && ocSource.cache_read >= HEAVY_BLOCK_THRESHOLD ? ocSource.cache_read : undefined
+  const ocThreshold = ocSource && ocSource.input_tokens >= HEAVY_BLOCK_THRESHOLD
+  const ocHeavyTokens = ocThreshold ? (ocLastEntry?.inputTokens ?? ocSource!.input_tokens) : null
+  const ocHeavyCache = ocThreshold ? (ocLastEntry?.cacheRead ?? ocSource!.cache_read) : undefined
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -512,7 +527,7 @@ export default function App() {
               events={isClaudeCode || !selectedSession ? ccEvents : opencodeEvents}
               startedAt={isClaudeCode ? (ccEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now()) : (opencodeEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now())}
               cost={sourceCost}
-              blockCosts={isClaudeCode ? state.blockCosts : []}
+              blockCosts={state.blockCosts}
               meta={isClaudeCode ? metaStats : undefined}
               quota={isClaudeCode ? quota : undefined}
               sessionState={isClaudeCode ? ccState : ocState}
@@ -523,6 +538,7 @@ export default function App() {
               subAgentSessions={isClaudeCode ? state.subAgentSessions : []}
               cliLabel={isClaudeCode ? 'Claude Code' : (selectedSession ? (SOURCE_LABELS[selectedSession.source] ?? selectedSession.source) : 'Claude Code')}
               burnRateTokensPerMin={isClaudeCode ? undefined : ocBurnRate}
+              ocModelUsage={isClaudeCode ? undefined : ocModelUsage}
             />
           </div>
         </>
@@ -654,20 +670,13 @@ function handleMessage(prev: AppState, msg: any): AppState {
     const p = msg.payload
     if (p.session_id !== prev.sessionId) return prev
     const entry: BlockCost = { inputUsd: p.inputUsd, outputUsd: p.outputUsd, totalUsd: p.totalUsd, inputTokens: p.inputTokens ?? 0, outputTokens: p.outputTokens ?? 0, cacheRead: p.cacheRead, cache_creation: p.cacheCreate, context_used: p.context_used, context_window: p.context_window }
-    // Acumular sub-turnos del bloque en curso — se empuja a blockCosts al recibir Stop
     const pend = prev.pendingBlockCost
-    const merged: BlockCost = pend ? {
-      inputUsd:       pend.inputUsd     + entry.inputUsd,
-      outputUsd:      pend.outputUsd    + entry.outputUsd,
-      totalUsd:       pend.totalUsd     + entry.totalUsd,
-      inputTokens:    pend.inputTokens  + entry.inputTokens,
-      outputTokens:   pend.outputTokens + entry.outputTokens,
-      cacheRead:      (pend.cacheRead    ?? 0) + (entry.cacheRead    ?? 0),
-      cache_creation: (pend.cache_creation ?? 0) + (entry.cache_creation ?? 0),
-      context_used:   entry.context_used,
-      context_window: entry.context_window,
-    } : entry
-    return { ...prev, pendingBlockCost: merged }
+    const next = { ...prev }
+    if (pend) {
+      next.blockCosts = [...prev.blockCosts, pend]
+    }
+    next.pendingBlockCost = entry
+    return next
   }
   // summary_ready — el daemon generó un resumen IA para la sesión activa
   // Refrescamos el historial en el próximo render (el usuario lo verá al abrir History)
@@ -726,5 +735,7 @@ function buildCost(session: any): CostInfo | undefined {
     output_tokens: session.total_output_tokens ?? 0, cache_read: session.total_cache_read ?? 0,
     cache_creation: session.total_cache_creation ?? 0, efficiency_score: session.efficiency_score ?? 100,
     loops: [],
+    context_used:   session.context_used ?? 0,
+    context_window: session.context_window ?? 0,
   }
 }

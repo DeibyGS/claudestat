@@ -53,7 +53,7 @@ export function Tip({
   return (
     <span
       ref={triggerRef}
-      style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}
+      style={{ position: 'relative', display: 'block', width: '100%', height: '100%' }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >

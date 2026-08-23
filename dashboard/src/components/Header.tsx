@@ -101,8 +101,8 @@ const S = {
 
   /* Brand */
   brand: {
-    display: 'flex', alignItems: 'center', gap: 8,
-    marginRight: 4, flexShrink: 0,
+    display: 'inline-flex', alignItems: 'center', gap: 8,
+    marginRight: 0, flexShrink: 0, height: '100%',
   } as React.CSSProperties,
   dot: (connected: boolean, status?: string): React.CSSProperties => ({
     width: 7, height: 7, borderRadius: '50%',
@@ -117,7 +117,7 @@ const S = {
 
   sep: {
     width: 1, height: 20, background: '#21262d',
-    margin: '0 12px', flexShrink: 0,
+    margin: '0 4px', flexShrink: 0,
   } as React.CSSProperties,
 
   /* Tabs */
@@ -127,7 +127,7 @@ const S = {
   } as React.CSSProperties,
   tab: (active: boolean): React.CSSProperties => ({
     display: 'flex', alignItems: 'center', gap: 6,
-    padding: '0 12px',
+    padding: '0 10px',
     fontSize: 12, fontWeight: active ? 600 : 400,
     color: active ? '#e6edf3' : '#6e7681',
     cursor: 'pointer',
@@ -166,19 +166,21 @@ const S = {
     background: '#21262d', border: '1px solid #30363d',
     borderRadius: 5, padding: '2px 8px',
     fontSize: 11, fontWeight: 600, flexShrink: 0,
+    whiteSpace: 'nowrap', lineHeight: '16px',
   }),
   ctxBar: (color: string): React.CSSProperties => ({
     display: 'inline-flex', alignItems: 'center', gap: 6,
     background: '#21262d', border: `1px solid ${color}44`,
     borderRadius: 5, padding: '2px 8px',
     fontSize: 11, fontWeight: 600, color,
-    flexShrink: 0,
+    flexShrink: 0, whiteSpace: 'nowrap', lineHeight: '16px',
   }),
   disconnected: {
     display: 'inline-flex', alignItems: 'center', gap: 5,
     background: '#f8514920', border: '1px solid #f8514940',
     borderRadius: 5, padding: '2px 8px',
     fontSize: 11, fontWeight: 600, color: '#f85149',
+    whiteSpace: 'nowrap', lineHeight: '16px',
   } as React.CSSProperties,
 }
 
@@ -268,36 +270,38 @@ export function Header({ activeSources: as, state, connStatus, activeTab, onTabC
 
   return (
     <div style={S.header}>
-      {/* Brand */}
-      <Tip align="left" content={
-        <div>
-          <div style={{ color: CONN_COLOR[connStatus], fontWeight: 700, fontSize: 13, marginBottom: 6 }}>
-            {CONN_LABEL[connStatus]}
+      {/* Brand + Tabs juntos */}
+      <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+        <Tip align="left" content={
+          <div>
+            <div style={{ color: CONN_COLOR[connStatus], fontWeight: 700, fontSize: 13, marginBottom: 6 }}>
+              {CONN_LABEL[connStatus]}
+            </div>
+            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
+              {connStatus === 'error'
+                ? <>Daemon not responding — retrying...<br />Check: <code>claudestat start</code></>
+                : <>Daemon listening on localhost:7337<br />Real-time data via SSE</>
+              }
+            </div>
           </div>
-          <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
-            {connStatus === 'error'
-              ? <>Daemon not responding — retrying...<br />Check: <code>claudestat start</code></>
-              : <>Daemon listening on localhost:7337<br />Real-time data via SSE</>
-            }
+        }>
+          <div style={S.brand}>
+            <div style={{ ...S.dot(connected), background: CONN_COLOR[connStatus], boxShadow: connected ? `0 0 5px ${CONN_COLOR[connStatus]}` : undefined }} />
+            <span style={S.brandName}>claudestat</span>
           </div>
-        </div>
-      }>
-        <div style={S.brand}>
-          <div style={{ ...S.dot(connected), background: CONN_COLOR[connStatus], boxShadow: connected ? `0 0 5px ${CONN_COLOR[connStatus]}` : undefined }} />
-          <span style={S.brandName}>claudestat</span>
-        </div>
-      </Tip>
+        </Tip>
 
-      <div style={S.sep} />
+        <div style={S.sep} />
 
-      {/* Tabs */}
-      <div style={S.tabs}>
-        {TAB_LABELS.map(({ id, label, icon: Icon }) => (
-          <button key={id} style={S.tab(activeTab === id)} onClick={() => onTabChange(id)}>
-            <Icon size={12} />
-            {label}
-          </button>
-        ))}
+        {/* Tabs */}
+        <div style={S.tabs}>
+          {TAB_LABELS.map(({ id, label, icon: Icon }) => (
+            <button key={id} style={S.tab(activeTab === id)} onClick={() => onTabChange(id)}>
+              <Icon size={12} />
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div style={S.spacer} />
@@ -348,11 +352,13 @@ export function Header({ activeSources: as, state, connStatus, activeTab, onTabC
                   borderRadius: 5, padding: '2px 8px',
                   fontSize: 11, fontWeight: 600, color: srcColor,
                   flexShrink: 0, cursor: 'default',
+                  whiteSpace: 'nowrap', lineHeight: '16px',
                 }}>
                   <span style={{ width: 6, height: 6, borderRadius: '50%', background: srcColor, flexShrink: 0 }} />
                   {srcLabel}
-                  {info.project && <span style={{ color: `${srcColor}99`, fontWeight: 400, fontSize: 10 }}>· {info.project.split('/').pop() ?? info.project}</span>}
-                  {info.cost > 0 && <span style={{ color: '#8b949e', fontWeight: 400 }}>{fmtCost(info.cost)}</span>}
+                  {ml && <span style={{ color: '#8b949e', fontWeight: 400 }}>{ml.name}</span>}
+                  {info.project && <FolderOpen size={10} style={{ color: '#6e7681', marginLeft: 2 }} />}
+                  {info.project && <span style={{ color: '#8b949e', fontWeight: 400 }}>{info.project.split('/').pop() ?? info.project}</span>}
                 </span>
               </Tip>
             )
@@ -402,6 +408,7 @@ export function Header({ activeSources: as, state, connStatus, activeTab, onTabC
               borderRadius: 5, padding: '2px 8px',
               fontSize: 11, fontWeight: 600, color: modelLabel.color,
               flexShrink: 0, cursor: 'default',
+              whiteSpace: 'nowrap', lineHeight: '16px',
             }}>
               {modelLabel.name}
             </span>
@@ -432,7 +439,7 @@ export function Header({ activeSources: as, state, connStatus, activeTab, onTabC
             borderRadius: 5, padding: '2px 8px',
             fontSize: 11, fontWeight: 600, color: '#d29922',
             animation: 'toolBlink 1.8s ease-in-out infinite',
-            flexShrink: 0,
+            flexShrink: 0, whiteSpace: 'nowrap', lineHeight: '16px',
           }}>
             <Wrench size={10} />
             {activeTool}
@@ -482,6 +489,7 @@ function UptimeBadge({ startedAt }: { startedAt: number }) {
       background: '#21262d', border: '1px solid #30363d',
       borderRadius: 5, padding: '2px 8px',
       fontSize: 11, fontWeight: 500, color: '#8b949e',
+      whiteSpace: 'nowrap', lineHeight: '16px',
     }} title="Current session duration">
       {fmtUptime(startedAt)}
     </span>

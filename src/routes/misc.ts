@@ -601,3 +601,28 @@ miscRouter.get('/api/logs', (req: Request, res: Response) => {
   }
 })
 
+// ─── GET /api/oc-model-usage — weekly model breakdown for OpenCode ──────────
+
+miscRouter.get('/api/oc-model-usage', (req: Request, res: Response) => {
+  const days = Math.min(30, Math.max(1, parseInt(req.query.days as string || '7', 10) || 7))
+  const sinceMs = Date.now() - days * 24 * 60 * 60 * 1000
+
+  const sessions = dbOps.getAllSessions()
+    .filter(s => s.source === 'opencode' && s.started_at >= sinceMs)
+
+  const modelMap = new Map<string, { sessions: number; totalCost: number }>()
+  for (const s of sessions) {
+    const model = s.dominant_model || 'unknown'
+    const existing = modelMap.get(model) ?? { sessions: 0, totalCost: 0 }
+    existing.sessions++
+    existing.totalCost += s.total_cost_usd ?? 0
+    modelMap.set(model, existing)
+  }
+
+  const models = [...modelMap.entries()]
+    .map(([model, data]) => ({ model, ...data }))
+    .sort((a, b) => b.sessions - a.sessions)
+
+  res.json({ models })
+})
+

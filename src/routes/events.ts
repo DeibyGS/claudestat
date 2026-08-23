@@ -362,8 +362,8 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
             session_id:   sessionId,
             minutes_left: prediction.minutesLeft,
             pct_per_min:  prediction.pctPerMin,
-            context_used: cost.context_used,
-            context_window: cost.context_window,
+      context_used:          cost.context_used,
+      context_window:        cost.context_window,
           }
         })
       }

@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.1] - 2026-08-23
+
+### Fixed
+
+- **Live-tab execution blocks fragmented per tool call** — `syntheticStopsFor()` emitted a synthetic `Stop` between every `AssistantTurn`, but Claude Code writes one JSONL `assistant` line per tool call, not per full response, so long sessions showed hundreds of one-tool blocks instead of grouping by user turn. Synthetic stops are now restricted to turns that actually close a real user prompt (#79)
+- **KPI cost/context mini-charts regression (v1.20.0)** — the `blockCosts` sub-turn merge for the Cost/block and Context KPI cards was pushing each sub-turn directly instead of accumulating until `Stop`, breaking the charts introduced in 1.20.0; restored the merge-until-`Stop` logic and scoped blocks to the active live session (#79)
+- **`claude-sonnet-5` context window** — added to `KNOWN_CONTEXT_WINDOWS` (1M tokens); `context_used` no longer double-counts `output_tokens`
+
+## [1.20.0] - 2026-08-23
+
+### Added
+
+- **KPI mini-charts** — interactive Cost/block bar chart and Context usage area chart (with 85% compaction threshold line) on the Live tab KPI cards
+- **OpenCode session-based context tracking** via `step-finish` events
+
+### Changed
+
+- **Header layout** — compact navbar alignment and uniform badge heights
+- **Heavy context notification** — now shows actual token values instead of a generic warning
+
+### Fixed
+
+- **CC `context_used` formula** — corrected to match official documentation
+
 ## [1.19.0] - 2026-08-23
 
 ### Fixed

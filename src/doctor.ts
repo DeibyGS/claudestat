@@ -4,6 +4,7 @@ import os            from 'os'
 import { execSync, spawnSync }  from 'child_process'
 import { getClaudeDir, getClaudestatDir, whichCmd, whichAllCmd, isWindows } from './paths'
 import { readConfig } from './config'
+import { getOAuthAccessToken } from './claude-auth'
 
 interface Check {
   label: string
@@ -203,6 +204,34 @@ export async function runDoctor(): Promise<void> {
     ok:    mcpOk,
     note:  mcpNote,
     fix:   mcpOk ? undefined : 'claudestat install',
+  })
+
+  // 12. Anthropic OAuth API accessible (for accurate weekly quota)
+  let apiOk = false
+  let apiNote: string | undefined
+  try {
+    const token = getOAuthAccessToken()
+    if (!token) {
+      apiNote = 'No OAuth token found — weekly quota will use JSONL estimation'
+    } else {
+      const ctrl = new AbortController()
+      const timer = setTimeout(() => ctrl.abort(), 5000)
+      const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
+        headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20' },
+        signal: ctrl.signal,
+      })
+      clearTimeout(timer)
+      apiOk = res.ok
+      if (!res.ok) apiNote = `HTTP ${res.status} — weekly quota will use JSONL estimation`
+    }
+  } catch (e) {
+    apiNote = `Network error: ${e instanceof Error ? e.message : String(e)}`
+  }
+  checks.push({
+    label: 'Anthropic OAuth API accessible',
+    ok:    apiOk,
+    note:  apiNote,
+    fix:   apiOk ? undefined : 'Check network connection and OAuth token (claude auth status)',
   })
 
   // ── Print results ───────────────────────────────────────────

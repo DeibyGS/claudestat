@@ -285,7 +285,7 @@ export async function refreshFromApi(): Promise<void> {
     }
     try { fs.writeFileSync(API_DISK_CACHE, JSON.stringify(apiCache), 'utf8') } catch { }
     invalidateQuotaCache()
-  } catch { /* no network or keychain — silent fallback to JSONL */ }
+  } catch (e) { process.stderr.write(`[claudestat] API quota fetch failed, using JSONL estimation: ${e instanceof Error ? e.message : String(e)}\n`) }
 }
 
 // ─── Caché de 30 segundos ─────────────────────────────────────────────────────

@@ -21,7 +21,7 @@ import os     from 'os'
 import { dbOps }                                                    from './db'
 import { startEnricher, stopEnricher }                                        from './enricher'
 import { readConfig, getWarnLevel }                                 from './config'
-import { computeQuota }                                              from './quota-tracker'
+import { computeQuota, refreshFromApi }                                              from './quota-tracker'
 import { sendDesktopNotification, sendWebhookAlert } from './notifier'
 import { eventsRouter, onCostUpdate, onCompactDetected, setSessionTracker }            from './routes/events'
 import { createSessionTracker }                                                          from './session-tracker'
@@ -242,10 +242,22 @@ function startAlertPolling() {
     persistAlertState()
   }
 
+  // Refresh API quota data every 5 minutes for accurate weekly alerts
+  const API_REFRESH_MS = 5 * 60_000
+  let lastApiRefresh = 0
+
   alertInterval = setInterval(() => {
     try {
       const cfg  = readConfig()
       if (!cfg.alertsEnabled) return
+
+      // Refresh API cache periodically for accurate weekly quota data
+      const now = Date.now()
+      if (now - lastApiRefresh >= API_REFRESH_MS) {
+        lastApiRefresh = now
+        refreshFromApi().catch(() => {}) // silent — errors logged inside refreshFromApi
+      }
+
       const data = computeQuota(cfg.plan ?? undefined)
       const resetMins = Math.ceil(data.cycleResetMs / 60_000)
 
@@ -557,7 +569,8 @@ export function startDaemon() {
     // Polling de alertas de rate limit cada 60s
     startAlertPolling()
 
-    // API quota data is refreshed on-demand by the CLI status command (disk cache shared)
+    // Initial API quota refresh + periodic every 5 minutes (inside alert polling)
+    refreshFromApi().catch(() => {})
   })
 
   // Manejo de error de puerto ocupado — fuera del callback para capturar EADDRINUSE

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.0] - 2026-08-23
+
+### Fixed
+
+- **Context window notifications accuracy** — `context_used` now includes output tokens in Claude Code watcher, matching the real context usage reported by the API
+- **Weekly quota alerts using real data** — daemon now calls `refreshFromApi()` at startup and every 5 minutes, so weekly quota alerts use actual Anthropic API percentages instead of JSONL-based estimation
+- **Silent API failures** — quota tracker now logs errors when the Anthropic OAuth API is unreachable instead of falling back silently to JSONL estimation
+
+### Added
+
+- **`claudestat doctor` API check** — new check #12 verifies Anthropic OAuth API accessibility and reports whether weekly quota will use real or estimated data
+- **Notification system tests** — 32 new tests covering context threshold triggers, weekly/cycle alerts, cooldown logic, and anti-duplicate mechanisms
+
 ## [1.18.0] - 2026-08-18
 
 ### Added

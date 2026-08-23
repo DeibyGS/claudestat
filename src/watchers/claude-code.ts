@@ -209,6 +209,7 @@ export interface AssistantTurn {
   effort?: string
   stop_reason?: string
   stop_sequence?: string
+  turnEnd?: boolean
 }
 
 export interface SemanticData {
@@ -297,11 +298,17 @@ export async function extractSemanticData(filePath: string): Promise<SemanticDat
           }
         } else if ((obj.type === 'human' || obj.type === 'user') && pendingTurn) {
           const msgContent = obj.message?.content
-          if (!Array.isArray(msgContent)) continue
-          for (const block of msgContent as any[]) {
-            if (block?.type === 'tool_result' && block.is_error === true) {
-              pendingTurn.error_count++
-              totalErrorBlocks++
+          // Un tool_result es continuación del turno en curso; cualquier otro contenido
+          // (texto plano o array sin tool_result al inicio) es un prompt real del usuario
+          // y cierra el turno — mismo criterio que getAllBlockCostsForSession().
+          const isToolResultOnly = Array.isArray(msgContent) && msgContent[0]?.type === 'tool_result'
+          if (!isToolResultOnly) pendingTurn.turnEnd = true
+          if (Array.isArray(msgContent)) {
+            for (const block of msgContent as any[]) {
+              if (block?.type === 'tool_result' && block.is_error === true) {
+                pendingTurn.error_count++
+                totalErrorBlocks++
+              }
             }
           }
         }
@@ -369,6 +376,8 @@ export async function getAllBlockCostsForSession(sessionId: string): Promise<Blo
             const outTok = usage.output_tokens ?? 0
             current.inputUsd += inUsd; current.outputUsd += outUsd; current.totalUsd += inUsd + outUsd
             current.inputTokens += inTok; current.outputTokens += outTok
+            current.context_used = inTok
+            current.context_window = getContextWindow(model)
           }
         } catch { /* skip malformed */ }
       }
@@ -389,15 +398,18 @@ export interface SessionPrompt {
  * Calcula los Stops sintéticos pendientes para una sesión de Claude Code.
  *
  * Problema que resuelve: Claude Code emite un hook `Stop` real ~1 vez por respuesta
- * del modelo, por lo que el TracePanel (que corta bloques solo en `Stop`) agrupa
- * varias herramientas en un único bloque gigante. OpenCode, en cambio, sintetiza un
- * `Stop` por turno y se ve "correcto".
+ * completa al usuario, pero un mismo turno JSONL (`AssistantTurn`) se genera por cada
+ * llamada a herramienta intermedia (Bash, Grep, Read...), no solo al final. Sintetizar
+ * un Stop entre *cada* turno agrupaba erróneamente un bloque de ejecución por
+ * herramienta individual en vez de por respuesta completa. OpenCode, en cambio,
+ * sintetiza un `Stop` por turno de usuario y se ve "correcto".
  *
- * Aquí se generan Stops sintéticos para cada turno *cerrado* (que ya tiene un turno
- * siguiente) cuyo límite NO esté ya cubierto por un Stop real del hook (dedupe por
- * límite: un Stop real con ts en [turno[i].ts, turno[i+1].ts) cierra ese límite).
- * Los Stops sintéticos solo viajan por SSE / polling del dashboard — nunca se
- * insertan en la base de datos — para no contaminar métricas de sesión.
+ * Aquí se generan Stops sintéticos solo para los turnos marcados `turnEnd` (el último
+ * turno antes de un prompt real del usuario — mismo criterio que
+ * getAllBlockCostsForSession()) cuyo límite NO esté ya cubierto por un Stop real del
+ * hook (dedupe por límite: un Stop real con ts en [turno[i].ts, turno[i+1].ts) cierra
+ * ese límite). Los Stops sintéticos solo viajan por SSE / polling del dashboard —
+ * nunca se insertan en la base de datos — para no contaminar métricas de sesión.
  *
  * Determinista: misma entrada → misma salida (usado en events.ts y misc.ts).
  */
@@ -409,7 +421,7 @@ export function syntheticStopsFor(
   const stops: Array<{ type: 'Stop'; session_id: string; ts: number; synthetic: true }> = []
   for (let i = 0; i < turns.length - 1; i++) {
     const turn = turns[i]
-    if (typeof turn.ts !== 'number') continue
+    if (typeof turn.ts !== 'number' || !turn.turnEnd) continue
     const boundaryEnd = typeof turns[i + 1]?.ts === 'number' ? turns[i + 1]!.ts! : Number.POSITIVE_INFINITY
     // El hook real de CC ya emitió un Stop dentro de este límite de turno → no duplicar
     if (realStopTs.some(t => t >= turn.ts! && t < boundaryEnd)) continue

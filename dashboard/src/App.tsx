@@ -527,7 +527,7 @@ export default function App() {
               events={isClaudeCode || !selectedSession ? ccEvents : opencodeEvents}
               startedAt={isClaudeCode ? (ccEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now()) : (opencodeEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now())}
               cost={sourceCost}
-              blockCosts={state.blockCosts}
+              blockCosts={state.blockCosts.filter(b => !b.sessionId || b.sessionId === activeLiveSessionId)}
               meta={isClaudeCode ? metaStats : undefined}
               quota={isClaudeCode ? quota : undefined}
               sessionState={isClaudeCode ? ccState : ocState}
@@ -611,8 +611,8 @@ function handleMessage(prev: AppState, msg: any): AppState {
       events:           (msg.events || []) as TraceEvent[],
       cost:             buildCost(s),
       sessionState:     (s.state as SessionState) ?? 'idle',
-      blockCosts:        (msg.blockCosts || []) as BlockCost[],
-      subAgentSessions:  (msg.subAgentSessions || []) as SubAgentSession[],
+      blockCosts:       (msg.blockCosts || []).map((b: any) => ({ ...b, sessionId: s.id })) as BlockCost[],
+      subAgentSessions: (msg.subAgentSessions || []) as SubAgentSession[],
       pendingBlockCost:  null,
     }
   }
@@ -669,14 +669,21 @@ function handleMessage(prev: AppState, msg: any): AppState {
   if (msg.type === 'block_cost') {
     const p = msg.payload
     if (p.session_id !== prev.sessionId) return prev
-    const entry: BlockCost = { inputUsd: p.inputUsd, outputUsd: p.outputUsd, totalUsd: p.totalUsd, inputTokens: p.inputTokens ?? 0, outputTokens: p.outputTokens ?? 0, cacheRead: p.cacheRead, cache_creation: p.cacheCreate, context_used: p.context_used, context_window: p.context_window }
+    const entry: BlockCost = { inputUsd: p.inputUsd, outputUsd: p.outputUsd, totalUsd: p.totalUsd, inputTokens: p.inputTokens ?? 0, outputTokens: p.outputTokens ?? 0, cacheRead: p.cacheRead, cache_creation: p.cacheCreate, context_used: p.context_used, context_window: p.context_window, sessionId: p.session_id }
     const pend = prev.pendingBlockCost
-    const next = { ...prev }
-    if (pend) {
-      next.blockCosts = [...prev.blockCosts, pend]
-    }
-    next.pendingBlockCost = entry
-    return next
+    const merged: BlockCost = pend ? {
+      inputUsd:       pend.inputUsd     + entry.inputUsd,
+      outputUsd:      pend.outputUsd    + entry.outputUsd,
+      totalUsd:       pend.totalUsd     + entry.totalUsd,
+      inputTokens:    pend.inputTokens  + entry.inputTokens,
+      outputTokens:   pend.outputTokens + entry.outputTokens,
+      cacheRead:      (pend.cacheRead      ?? 0) + (entry.cacheRead      ?? 0),
+      cache_creation: (pend.cache_creation ?? 0) + (entry.cache_creation ?? 0),
+      context_used:   entry.context_used,
+      context_window: entry.context_window,
+      sessionId:      p.session_id,
+    } : entry
+    return { ...prev, pendingBlockCost: merged }
   }
   // summary_ready — el daemon generó un resumen IA para la sesión activa
   // Refrescamos el historial en el próximo render (el usuario lo verá al abrir History)

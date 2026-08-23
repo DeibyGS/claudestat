@@ -49,6 +49,7 @@ export interface BlockCost {
   cache_creation?: number  // tokens de cache creados
   context_used?:   number  // tokens de contexto activo al final del bloque
   context_window?: number  // tamaño máximo del modelo
+  sessionId?:      string  // sesión a la que pertenece este bloque
 }
 
 export interface SubAgentSession {

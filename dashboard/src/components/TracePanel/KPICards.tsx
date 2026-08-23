@@ -1,3 +1,4 @@
+import { useMemo, useRef, useEffect } from 'react'
 import { BrainCircuit, ArrowDownLeft, DollarSign, Boxes } from 'lucide-react'
 import { BarChart, Bar, Cell, AreaChart, Area, ReferenceLine, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts'
 import type { CostInfo, BlockCost, SessionState } from '../../types'
@@ -5,6 +6,7 @@ import { Tip } from '../Tip'
 import { fmtUsd, fmtTok } from './utils'
 
 const COMPACT_THRESHOLD = 0.85
+const MAX_POINTS = 20
 
 function KPICard({ icon: Icon, iconColor, label, value, barPct, barColor, tooltip, sub, children }: {
   icon:       typeof BrainCircuit
@@ -84,21 +86,29 @@ export function KPICards({ cost, promptCount, blockCosts = [], sessionState = 'i
     : lastBlockUsd > avgBlockUsd * 1.1 ? '#d29922'
     : '#58a6ff'
 
-  const MAX_BLOCKS = 20
-  const barData = blockCosts.slice(-MAX_BLOCKS).map((b, i) => ({
-    idx: blockCosts.length - MAX_BLOCKS + i,
+  const barData = useMemo(() => blockCosts.slice(-MAX_POINTS).map((b, i) => ({
+    idx: blockCosts.length - MAX_POINTS + i,
     cost: (b.inputUsd ?? 0) + (b.outputUsd ?? 0),
     inputTokens: b.inputTokens ?? 0,
     outputTokens: b.outputTokens ?? 0,
-  }))
+  })), [blockCosts])
   const hasBarData = barData.length > 0 && barData.some(d => d.cost > 0)
 
-  const ctxData = blockCosts.slice(-MAX_BLOCKS).map((b, i) => {
-    if (!b.context_used || !b.context_window || b.context_window === 0) return null
-    const pct = Math.min(100, Math.round(b.context_used / (b.context_window * COMPACT_THRESHOLD) * 100))
-    return { idx: blockCosts.length - MAX_BLOCKS + i, pct, used: b.context_used, window: b.context_window }
-  }).filter(Boolean) as { idx: number; pct: number; used: number; window: number }[]
-  const hasCtxData = ctxData.length >= 2
+  const ctxHistoryRef = useRef<{ pct: number; used: number; window: number }[]>([])
+  const prevCtxUsedRef = useRef<number | undefined>()
+
+  useEffect(() => {
+    if (cost?.context_used && cost?.context_window && cost.context_window > 0) {
+      if (cost.context_used !== prevCtxUsedRef.current) {
+        prevCtxUsedRef.current = cost.context_used
+        const pct = Math.min(100, Math.round(cost.context_used / (cost.context_window * COMPACT_THRESHOLD) * 100))
+        ctxHistoryRef.current = [...ctxHistoryRef.current.slice(-(MAX_POINTS - 1)), { pct, used: cost.context_used, window: cost.context_window }]
+      }
+    }
+  }, [cost?.context_used, cost?.context_window])
+
+  const ctxData = ctxHistoryRef.current
+  const hasCtxData = ctxData.length >= 1
   const lastCtxPct = ctxData.length > 0 ? ctxData[ctxData.length - 1].pct : 0
   const ctxLineColor = lastCtxPct >= 80 ? '#f85149' : lastCtxPct >= 50 ? '#d29922' : '#3fb950'
 
@@ -128,7 +138,7 @@ export function KPICards({ cost, promptCount, blockCosts = [], sessionState = 'i
       >
         {hasCtxData && (
           <ResponsiveContainer width="100%" height={40}>
-            <AreaChart data={ctxData} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+            <AreaChart data={ctxData.map((d, i) => ({ i, ...d }))} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
               <ReferenceLine y={100} stroke="#f8514944" strokeDasharray="3 3" />
               <RechartsTooltip
                 content={({ active, payload }) => {
@@ -136,7 +146,7 @@ export function KPICards({ cost, promptCount, blockCosts = [], sessionState = 'i
                   const d = payload[0].payload as typeof ctxData[0]
                   return (
                     <div style={{ background: '#1c2128', border: '1px solid #30363d', borderRadius: 6, padding: '5px 8px', fontSize: 10, color: '#c9d1d9', whiteSpace: 'nowrap' }}>
-                      <div style={{ fontWeight: 700, color: ctxLineColor }}>Block #{d.idx} — {d.pct}%</div>
+                      <div style={{ fontWeight: 700, color: ctxLineColor }}>{d.pct}%</div>
                       <div style={{ color: '#8b949e' }}>{fmtTok(d.used)} / {fmtTok(d.window)}</div>
                     </div>
                   )

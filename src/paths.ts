@@ -57,7 +57,19 @@ export function getDashboardDir(): string {
       if (fs.existsSync(path.join(c, 'index.html'))) return c
     }
   }
-  return path.join(__dirname, '..', 'dashboard', 'dist')
+
+  const defaultPath = path.join(__dirname, '..', 'dashboard', 'dist')
+  if (fs.existsSync(path.join(defaultPath, 'index.html'))) return defaultPath
+
+  const fallbackCandidates = [
+    path.join(process.cwd(), 'dashboard', 'dist'),
+    path.join(getClaudestatDir(), 'dashboard'),
+  ]
+  for (const c of fallbackCandidates) {
+    if (fs.existsSync(path.join(c, 'index.html'))) return c
+  }
+
+  return defaultPath
 }
 
 // ─── Claude Code data directory ────────────────────────────────────────────────

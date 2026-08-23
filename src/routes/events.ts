@@ -362,8 +362,8 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
             session_id:   sessionId,
             minutes_left: prediction.minutesLeft,
             pct_per_min:  prediction.pctPerMin,
-            context_used: cost.context_used,
-            context_window: cost.context_window,
+      context_used:          cost.context_used,
+      context_window:        cost.context_window,
           }
         })
       }
@@ -442,14 +442,16 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
     broadcast({
       type: 'block_cost',
       payload: {
-        session_id:   sessionId,
-        inputUsd:     cost.lastEntry.inputUsd,
-        outputUsd:    cost.lastEntry.outputUsd,
-        totalUsd:     cost.lastEntry.totalUsd,
-        inputTokens:  cost.lastEntry.inputTokens,
-        outputTokens: cost.lastEntry.outputTokens,
-        cacheRead:    cost.lastEntry.cacheRead,
-        cacheCreate:  cost.lastEntry.cacheCreate,
+        session_id:    sessionId,
+        inputUsd:      cost.lastEntry.inputUsd,
+        outputUsd:     cost.lastEntry.outputUsd,
+        totalUsd:      cost.lastEntry.totalUsd,
+        inputTokens:   cost.lastEntry.inputTokens,
+        outputTokens:  cost.lastEntry.outputTokens,
+        cacheRead:     cost.lastEntry.cacheRead,
+        cacheCreate:   cost.lastEntry.cacheCreate,
+        context_used:  cost.lastEntry.context_used,
+        context_window: cost.lastEntry.context_window,
       }
     })
 

@@ -232,6 +232,51 @@ export const opencodeAdapter: PollableAdapter = {
           cache_creation_input_tokens: row.tokens_cache_write,
         })
 
+        // Query latest step-finish for actual context usage
+        let contextUsed = row.tokens_input + row.tokens_cache_read + row.tokens_cache_write + row.tokens_output
+        let lastEntry: CostUpdate['lastEntry'] = undefined
+        try {
+          if (db) {
+            const stepFinish = db.prepare(
+              `SELECT json_extract(data, '$.tokens.total') as total_tokens,
+                      json_extract(data, '$.tokens.input') as input_tokens,
+                      json_extract(data, '$.tokens.output') as output_tokens,
+                      json_extract(data, '$.tokens.cache.read') as cache_read,
+                      json_extract(data, '$.tokens.cache.write') as cache_write,
+                      json_extract(data, '$.cost') as cost
+               FROM part
+               WHERE session_id = ?
+               AND json_extract(data, '$.type') = 'step-finish'
+               ORDER BY time_created DESC
+               LIMIT 1`
+            ).get(row.id) as { total_tokens: number; input_tokens: number; output_tokens: number; cache_read: number; cache_write: number; cost: number } | undefined
+
+            if (stepFinish && stepFinish.total_tokens) {
+              contextUsed = stepFinish.total_tokens
+              // Compute block cost from step-finish data
+              const price = calcCost(modelId, {
+                input_tokens: stepFinish.input_tokens ?? 0,
+                output_tokens: stepFinish.output_tokens ?? 0,
+                cache_read_input_tokens: stepFinish.cache_read ?? 0,
+                cache_creation_input_tokens: stepFinish.cache_write ?? 0,
+              })
+              if (price > 0) {
+                lastEntry = {
+                  inputUsd: price * 0.7,
+                  outputUsd: price * 0.3,
+                  totalUsd: price,
+                  inputTokens: (stepFinish.input_tokens ?? 0) + (stepFinish.cache_read ?? 0) + (stepFinish.cache_write ?? 0),
+                  outputTokens: stepFinish.output_tokens ?? 0,
+                  cacheRead: stepFinish.cache_read ?? 0,
+                  cacheCreate: stepFinish.cache_write ?? 0,
+                  context_used: stepFinish.total_tokens,
+                  context_window: getContextWindow(modelId),
+                }
+              }
+            }
+          }
+        } catch { /* ignore — table may not exist */ }
+
         return {
           sessionId: row.id,
           cwd: projectCwd,
@@ -241,11 +286,12 @@ export const opencodeAdapter: PollableAdapter = {
             cache_read: row.tokens_cache_read,
             cache_creation: row.tokens_cache_write,
             cost_usd: estimatedCost,
-            context_used: row.tokens_input + row.tokens_cache_read + row.tokens_cache_write + row.tokens_output,
+            context_used: contextUsed,
             context_window: getContextWindow(modelId),
             lastModel: modelId,
             firstTs: row.time_created,
             lastTs:  row.time_updated,
+            lastEntry,
           } satisfies CostUpdate,
         }
       })

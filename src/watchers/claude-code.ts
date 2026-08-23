@@ -113,7 +113,6 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
         totals.context_used    = (usage.input_tokens                ?? 0)
                                + (usage.cache_read_input_tokens     ?? 0)
                                + (usage.cache_creation_input_tokens ?? 0)
-                               + (usage.output_tokens               ?? 0)
         totals.context_window  = getContextWindow(model)
 
         const price = PRICING[model] ?? DEFAULT_PRICING
@@ -140,6 +139,8 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
         totalUsd,
         inputTokens: lastInputTokens, outputTokens: lastOutputTokens,
         cacheRead: lastCacheRead, cacheCreate: lastCacheCreate,
+        context_used: totals.context_used,
+        context_window: totals.context_window,
       }
     }
 
@@ -270,7 +271,7 @@ export async function extractSemanticData(filePath: string): Promise<SemanticDat
 
           const usage = obj.message?.usage
           const contextUsed = usage
-            ? ((usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.output_tokens ?? 0))
+            ? ((usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0))
             : 0
 
           const llmMsg      = obj.message ?? {}

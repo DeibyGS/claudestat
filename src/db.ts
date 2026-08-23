@@ -252,13 +252,15 @@ export interface EventRow {
 }
 
 export interface BlockCostEntry {
-  inputUsd:     number
-  outputUsd:    number
-  totalUsd:     number
-  inputTokens:  number
-  outputTokens: number
-  cacheRead?:   number
-  cacheCreate?: number
+  inputUsd:      number
+  outputUsd:     number
+  totalUsd:      number
+  inputTokens:   number
+  outputTokens:  number
+  cacheRead?:    number
+  cacheCreate?:  number
+  context_used?:   number
+  context_window?: number
 }
 
 export interface CostUpdate {

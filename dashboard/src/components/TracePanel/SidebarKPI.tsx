@@ -4,7 +4,13 @@ import {
   Info, CircleX, ChevronsUpDown, ChevronsDownUp,
   type LucideIcon,
 } from 'lucide-react'
-import type { CostInfo, MetaStats, MetaAlert, QuotaData, SessionState, QuotaStats } from '../../types'
+import type { CostInfo, MetaStats, MetaAlert, QuotaData, SessionState } from '../../types'
+
+export interface OcModelUsage {
+  model:    string
+  sessions: number
+  totalCost: number
+}
 import { Tip } from '../Tip'
 import {
   fmtUsd, fmtTok, fmtResetMs,
@@ -161,28 +167,24 @@ export function EfficiencyAlert({ cost, events, prompts }: {
 
 // ─── SidebarKPI ───────────────────────────────────────────────────────────────
 
-export function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStats, startedAt, promptCount = 0, burnRateTokensPerMin }: {
+export function SidebarKPI({ cost, quota, sessionState = 'idle', meta, ocModelUsage, startedAt, burnRateTokensPerMin }: {
   cost?:                  CostInfo
   quota?:                 QuotaData
   sessionState?:          SessionState
   meta?:                  MetaStats
-  quotaStats?:            QuotaStats
+  ocModelUsage?:          OcModelUsage[]
   startedAt?:             number
-  promptCount?:           number
   burnRateTokensPerMin?:  number
 }) {
   const sm = STATE_META[sessionState]
 
-  const COMPACT_THRESHOLD = 0.85  // keep in sync with KPIBar.tsx
+  const COMPACT_THRESHOLD = 0.85
   const compactWindow = cost?.context_window ? Math.round(cost.context_window * COMPACT_THRESHOLD) : null
   const contextPct = cost?.context_used && compactWindow
     ? Math.min(100, Math.round(cost.context_used / compactWindow * 100)) : null
   const ctxFree    = contextPct !== null ? 100 - contextPct : null
   const ctxColor   = ctxFree === null ? '#484f58'
     : ctxFree < 15 ? '#f85149' : ctxFree < 35 ? '#d29922' : '#3fb950'
-
-  const quotaColor = !quota ? '#484f58'
-    : quota.cyclePct > 85 ? '#f85149' : quota.cyclePct > 65 ? '#d29922' : '#58a6ff'
 
   const alerts: MetaAlert[] = []
   if (meta?.alerts) alerts.push(...meta.alerts)
@@ -191,9 +193,8 @@ export function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStat
   else if (contextPct !== null && contextPct > 65)
     alerts.push({ level: 'warning', message: `Context at ${contextPct}%`, metric: 'context' })
 
-  const resetMs = quota
-    ? (quota.cycleResetAt ? quota.cycleResetAt - Date.now() : quota.cycleResetMs)
-    : 0
+  const hasQuotaModels = quota && (quota.weeklyHoursSonnet > 0 || quota.weeklyHoursOpus > 0)
+  const hasOcModels = ocModelUsage && ocModelUsage.length > 0
 
   return (
     <div style={{ borderBottom: '1px solid #21262d', flexShrink: 0, background: '#090d12' }}>
@@ -263,139 +264,48 @@ export function SidebarKPI({ cost, quota, sessionState = 'idle', meta, quotaStat
         })()}
       </div>
 
-      {/* ── Contexto ── */}
-      <div style={{ padding: '8px 12px 6px', borderBottom: '1px solid #161b22' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 5 }}>
-          <Tip position="bottom" align="left" content={
-            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
-              <div style={{ fontWeight: 700, color: ctxColor, marginBottom: 4 }}>Context window</div>
-              <div style={{ color: '#7d8590' }}>% calculated over auto-compact threshold (~85% of total window)</div>
-              <div style={{ color: '#7d8590', marginTop: 4 }}>Same as "X% until auto-compact" in Claude Code CLI</div>
-              <div style={{ color: '#484f58', marginTop: 6, fontSize: 10 }}>
-                Total: <span style={{ color: '#e6edf3' }}>{fmtTok(cost?.context_window ?? 200_000)}</span>
-                {'  ·  '}Threshold: <span style={{ color: '#e6edf3' }}>{fmtTok(compactWindow ?? 170_000)}</span>
-              </div>
-            </div>
-          }>
-            <span style={{ fontSize: 10, color: '#6e7681', cursor: 'default', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <BrainCircuit size={10} color="#484f58" />
-              Context
-            </span>
-          </Tip>
-          <span style={{ fontSize: 13, fontWeight: 700, color: ctxColor, fontVariantNumeric: 'tabular-nums' }}>
-            {ctxFree !== null ? `${ctxFree}% free` : '—'}
-          </span>
-        </div>
-        <div style={{ height: 5, background: '#161b22', borderRadius: 3, overflow: 'hidden', marginBottom: 4 }}>
-          {contextPct !== null && (
-            <div style={{
-              width: `${contextPct}%`, height: '100%', background: ctxColor,
-              borderRadius: 3, transition: 'width 0.5s',
-              boxShadow: ctxFree !== null && ctxFree < 20 ? `0 0 6px ${ctxColor}88` : undefined,
-              animation: ctxFree !== null && ctxFree < 20 ? 'ctxPulse 1.2s ease-in-out infinite' : undefined,
-            }} />
-          )}
-        </div>
-        {cost?.context_used && (
-          <div style={{ fontSize: 9, color: '#484f58', display: 'flex', gap: 6 }}>
-            <span>{fmtTok(cost.context_used)} used</span>
-            <span style={{ color: '#3d444d' }}>·</span>
-            <span>compact @{fmtTok(compactWindow ?? 170_000)}</span>
+      {/* ── Modelos semana (CC o OC) ── */}
+      {hasQuotaModels && (
+        <div style={{ padding: '7px 12px 7px', borderBottom: '1px solid #161b22' }}>
+          <div style={{ fontSize: 10, color: '#484f58', marginBottom: 5 }}>This week</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <ModelBarMini label="Sonnet" color="#58a6ff" hours={quota!.weeklyHoursSonnet} limit={quota!.weeklyLimitSonnet} />
+            {quota!.weeklyLimitOpus > 0 && (
+              <ModelBarMini label="Opus" color="#d29922" hours={quota!.weeklyHoursOpus} limit={quota!.weeklyLimitOpus} />
+            )}
+            {(quota!.weeklyHoursHaiku ?? 0) > 0 && (
+              <ModelBarMini label="Haiku" color="#3fb950" hours={quota!.weeklyHoursHaiku!} limit={0} />
+            )}
           </div>
-        )}
-        {ctxFree !== null && ctxFree < CTX_CRITICAL_FREE && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4, padding: '3px 6px', background: `${EFFICIENCY_ALERT_COLOR}15`, border: `1px solid ${EFFICIENCY_ALERT_COLOR}35`, borderRadius: 4 }}>
-            <TriangleAlert size={9} color={EFFICIENCY_ALERT_COLOR} style={{ flexShrink: 0 }} />
-            <span style={{ fontSize: 9, color: EFFICIENCY_ALERT_COLOR, fontWeight: 600 }}>
-              Auto-compact imminent — {ctxFree}% free
-            </span>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* ── Mensajes ── */}
-      {promptCount > 0 && (
-        <div style={{ padding: '8px 12px 6px', borderBottom: '1px solid #161b22' }}>
-          {(() => {
-            const MSG_SOFT_LIMIT = 20
-            const msgPct  = Math.min(100, Math.round(promptCount / MSG_SOFT_LIMIT * 100))
-            const msgColor = promptCount < 15 ? '#3fb950' : promptCount < 20 ? '#d29922' : '#f85149'
-            return (
-              <>
-                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 5 }}>
-                  <Tip position="bottom" align="left" content={
-                    <div style={{ fontSize: 11, lineHeight: 1.7 }}>
-                      <div style={{ fontWeight: 700, color: msgColor, marginBottom: 4 }}>Session messages</div>
-                      <div style={{ color: '#7d8590' }}>Number of user turns in this session.</div>
-                      <div style={{ color: '#484f58', marginTop: 6 }}>
-                        <div>Reference: &lt;15 normal · 15-20 heavy · &gt;20 very long session</div>
-                      </div>
-                    </div>
-                  }>
-                    <span style={{ fontSize: 10, color: '#6e7681', cursor: 'default', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <ArrowDownLeft size={10} color="#484f58" />
-                      Messages
-                    </span>
-                  </Tip>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: msgColor, fontVariantNumeric: 'tabular-nums' }}>
-                    {promptCount}
+      {hasOcModels && !hasQuotaModels && (
+        <div style={{ padding: '7px 12px 7px', borderBottom: '1px solid #161b22' }}>
+          <div style={{ fontSize: 10, color: '#484f58', marginBottom: 5 }}>Models (7d)</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {ocModelUsage!.slice(0, 4).map(m => {
+              const mc = m.model.includes('opus') ? '#d29922'
+                : m.model.includes('haiku') ? '#3fb950'
+                : m.model.includes('deepseek') ? '#bc8cff'
+                : '#58a6ff'
+              const ml = m.model.includes('opus') ? 'Opus'
+                : m.model.includes('haiku') ? 'Haiku'
+                : m.model.includes('deepseek') ? 'DeepSeek'
+                : m.model.includes('mimo') ? 'Mimo'
+                : m.model.length > 12 ? m.model.slice(0, 12) + '…' : m.model
+              return (
+                <div key={m.model} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <span style={{ color: mc, fontSize: 9, fontWeight: 700, width: 52, flexShrink: 0 }}>{ml}</span>
+                  <div style={{ flex: 1, height: 3, background: '#21262d', borderRadius: 2, overflow: 'hidden' }}>
+                    <div style={{ width: `${Math.min(100, Math.round(m.sessions / (ocModelUsage![0]?.sessions || 1) * 100))}%`, height: '100%', borderRadius: 2, background: mc }} />
+                  </div>
+                  <span style={{ color: '#6e7681', fontSize: 9, width: 22, textAlign: 'right', flexShrink: 0 }}>
+                    {m.sessions}
                   </span>
                 </div>
-                <div style={{ height: 5, background: '#161b22', borderRadius: 3, overflow: 'hidden' }}>
-                  <div style={{
-                    width: `${msgPct}%`, height: '100%', background: msgColor,
-                    borderRadius: 3, transition: 'width 0.5s',
-                    boxShadow: promptCount >= 20 ? `0 0 6px ${msgColor}88` : undefined,
-                  }} />
-                </div>
-              </>
-            )
-          })()}
-        </div>
-      )}
-
-      {/* ── Modelos semana ── */}
-      {quota && (quota.weeklyHoursSonnet > 0 || quota.weeklyHoursOpus > 0) && (
-        <div style={{ padding: '7px 12px 7px' }}>
-          <Tip position="bottom" align="left" content={
-            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
-              <div style={{ fontWeight: 700, color: '#e6edf3', marginBottom: 4 }}>Weekly usage by model</div>
-              <div style={{ color: '#7d8590' }}>Accumulated activity hours by model this week.</div>
-              <div style={{ color: '#484f58', marginTop: 6 }}>Limit based on your Claude plan ({PLAN_LABEL[quota.detectedPlan] ?? quota.detectedPlan})</div>
-            </div>
-          }>
-            <div style={{ fontSize: 10, color: '#484f58', marginBottom: 5, cursor: 'default' }}>This week</div>
-          </Tip>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <ModelBarMini label="Sonnet" color="#58a6ff" hours={quota.weeklyHoursSonnet} limit={quota.weeklyLimitSonnet} />
-            {quota.weeklyLimitOpus > 0 && (
-              <ModelBarMini label="Opus" color="#d29922" hours={quota.weeklyHoursOpus} limit={quota.weeklyLimitOpus} />
-            )}
-            {(quota.weeklyHoursHaiku ?? 0) > 0 && (
-              <ModelBarMini label="Haiku" color="#3fb950" hours={quota.weeklyHoursHaiku!} limit={0} />
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ── P90 reference ── */}
-      {quotaStats && quotaStats.sessionCount >= 5 && (
-        <div style={{ padding: '6px 12px 4px', borderTop: '1px solid #161b22' }}>
-          <Tip position="bottom" align="left" content={
-            <div style={{ fontSize: 11, lineHeight: 1.7 }}>
-              <div style={{ fontWeight: 700, color: '#e6edf3', marginBottom: 4 }}>Percentil 90 (P90)</div>
-              <div style={{ color: '#7d8590' }}>90% of your sessions consume fewer tokens and cost than this value.</div>
-              <div style={{ color: '#484f58', marginTop: 6 }}>Calculated based on {quotaStats.sessionCount} historical sessions.</div>
-            </div>
-          }>
-            <div style={{ fontSize: 9, color: '#484f58', marginBottom: 3, cursor: 'default' }}>Your typical usage (P90)</div>
-          </Tip>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <span style={{ fontSize: 10, color: '#6e7681' }}>{fmtTok(quotaStats.p90Tokens ?? 0)} tokens</span>
-            <span style={{ color: '#3d444d', fontSize: 10 }}>·</span>
-            <span style={{ fontSize: 10, color: '#6e7681' }}>~${(quotaStats.p90Cost ?? 0).toFixed(2)}</span>
-            <span style={{ color: '#3d444d', fontSize: 10 }}>·</span>
-            <span style={{ fontSize: 9, color: '#3d444d' }}>{quotaStats.sessionCount} sessions</span>
+              )
+            })}
           </div>
         </div>
       )}

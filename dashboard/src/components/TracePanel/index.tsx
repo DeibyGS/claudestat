@@ -4,8 +4,9 @@ import type { TraceEvent, CostInfo, BlockCost, MetaStats, QuotaData, SessionStat
 import { groupBlocks } from './utils'
 import type { HiddenCostStats, SessionPromptItem } from './utils'
 import { SidebarKPI } from './SidebarKPI'
+import type { OcModelUsage } from './SidebarKPI'
+import { KPICards } from './KPICards'
 import { SidebarStats } from './SidebarStats'
-import { CostTimeline } from './CostTimeline'
 import { ContextCurve } from './ContextCurve'
 import { BlockListItem } from './BlockListItem'
 import { BlockDetailPanel } from './BlockDetailPanel'
@@ -30,6 +31,7 @@ interface Props {
   subAgentSessions?:     SubAgentSession[]
   cliLabel?:             string
   burnRateTokensPerMin?: number
+  ocModelUsage?:         OcModelUsage[]
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -40,7 +42,7 @@ function toActorLabel(model?: string): string {
   return seg === 'claude' ? 'Claude' : seg.charAt(0).toUpperCase() + seg.slice(1)
 }
 
-export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quota, sessionState = 'idle', weeklyData = [], hiddenCost, prompts = [], quotaStats, subAgentSessions = [], cliLabel = 'Claude Code', burnRateTokensPerMin }: Props) {
+export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quota, sessionState = 'idle', weeklyData = [], hiddenCost, prompts = [], quotaStats, subAgentSessions = [], cliLabel = 'Claude Code', burnRateTokensPerMin, ocModelUsage }: Props) {
   const actorLabel = toActorLabel(cost?.model)
   const listRef        = useRef<HTMLDivElement>(null)
   // null = auto-follow last block
@@ -120,7 +122,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
     return (
       <div style={{ display: 'flex', height: '100%', flex: 1, background: '#0d1117', overflow: 'hidden' }}>
         <div style={{ width: 360, flexShrink: 0, borderRight: '1px solid #21262d', display: 'flex', flexDirection: 'column', background: '#090d12', overflow: 'hidden' }}>
-          <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} quotaStats={quotaStats} startedAt={startedAt} promptCount={0} burnRateTokensPerMin={burnRateTokensPerMin} />
+          <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} ocModelUsage={ocModelUsage} startedAt={startedAt} burnRateTokensPerMin={burnRateTokensPerMin} />
         </div>
         {emptyPane}
       </div>
@@ -144,10 +146,7 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
         background: '#090d12', overflow: 'hidden',
       }}>
         {/* KPI section */}
-        <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} quotaStats={quotaStats} startedAt={startedAt} promptCount={prompts.length} burnRateTokensPerMin={burnRateTokensPerMin} />
-
-        {/* Cost Timeline inside sidebar */}
-        <CostTimeline blocks={blocks} blockCosts={blockCosts} selected={selectedIdx} onSelect={handleSelect} />
+        <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} ocModelUsage={ocModelUsage} startedAt={startedAt} burnRateTokensPerMin={burnRateTokensPerMin} />
 
         {/* Context degradation curve */}
         <ContextCurve blocks={blocks} blockCosts={blockCosts} />
@@ -175,6 +174,9 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
 
       {/* ── Right: block detail (full width) ── */}
       <div style={{ flex: 1, overflow: 'hidden', background: '#0d1117', display: 'flex', flexDirection: 'column' }}>
+        {/* KPI Cards */}
+        <KPICards cost={cost} promptCount={prompts.length} blockCosts={blockCosts} sessionState={sessionState} burnRateTokensPerMin={burnRateTokensPerMin} />
+
         {/* Source badge + sub-tabs */}
         <div style={{
           flexShrink: 0, padding: '4px 14px', borderBottom: '1px solid #21262d',

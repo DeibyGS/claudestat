@@ -80,6 +80,9 @@ app.get('/health', (_req: Request, res: Response) => {
 // ─── Dashboard React (servir estáticos del build de Vite) ────────────────────
 
 const DASHBOARD_DIST = getDashboardDir()
+if (!fs.existsSync(path.join(DASHBOARD_DIST, 'index.html'))) {
+  logger.warn(`Dashboard not found at ${DASHBOARD_DIST} — UI will not be available`)
+}
 app.use(express.static(DASHBOARD_DIST, {
   setHeaders(res, filePath) {
     if (filePath.endsWith('.html')) {

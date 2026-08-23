@@ -369,6 +369,8 @@ export async function getAllBlockCostsForSession(sessionId: string): Promise<Blo
             const outTok = usage.output_tokens ?? 0
             current.inputUsd += inUsd; current.outputUsd += outUsd; current.totalUsd += inUsd + outUsd
             current.inputTokens += inTok; current.outputTokens += outTok
+            current.context_used = inTok
+            current.context_window = getContextWindow(model)
           }
         } catch { /* skip malformed */ }
       }

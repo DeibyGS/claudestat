@@ -7,7 +7,6 @@ import { SidebarKPI } from './SidebarKPI'
 import type { OcModelUsage } from './SidebarKPI'
 import { KPICards } from './KPICards'
 import { SidebarStats } from './SidebarStats'
-import { CostTimeline } from './CostTimeline'
 import { ContextCurve } from './ContextCurve'
 import { BlockListItem } from './BlockListItem'
 import { BlockDetailPanel } from './BlockDetailPanel'
@@ -148,9 +147,6 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
       }}>
         {/* KPI section */}
         <SidebarKPI cost={cost} quota={quota} sessionState={sessionState} meta={meta} ocModelUsage={ocModelUsage} startedAt={startedAt} burnRateTokensPerMin={burnRateTokensPerMin} />
-
-        {/* Cost Timeline inside sidebar */}
-        <CostTimeline blocks={blocks} blockCosts={blockCosts} selected={selectedIdx} onSelect={handleSelect} />
 
         {/* Context degradation curve */}
         <ContextCurve blocks={blocks} blockCosts={blockCosts} />

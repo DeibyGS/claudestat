@@ -269,6 +269,8 @@ export const opencodeAdapter: PollableAdapter = {
                   outputTokens: stepFinish.output_tokens ?? 0,
                   cacheRead: stepFinish.cache_read ?? 0,
                   cacheCreate: stepFinish.cache_write ?? 0,
+                  context_used: stepFinish.total_tokens,
+                  context_window: getContextWindow(modelId),
                 }
               }
             }

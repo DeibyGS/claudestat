@@ -139,6 +139,8 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
         totalUsd,
         inputTokens: lastInputTokens, outputTokens: lastOutputTokens,
         cacheRead: lastCacheRead, cacheCreate: lastCacheCreate,
+        context_used: totals.context_used,
+        context_window: totals.context_window,
       }
     }
 

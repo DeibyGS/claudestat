@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.21.2] - 2026-08-25
+
+### Fixed
+
+- **`claude-sonnet-5` context window** — corrected to 967K tokens (the real auto-compact window reported by Claude Code's `/context`), was hardcoded to 1M
+- **Live-tab context KPI showed the other tool's data** — Claude Code's context KPI read from a single global "latest session" SSE state shared across sources, so it displayed OpenCode's numbers whenever OpenCode was the most recently active session; Claude Code now tracks its own context state, filtered by the currently selected session so a sub-agent session can't overwrite the parent's KPI either
+- **Cost/block history missing on connect** — `/stream` init loaded block-cost history only for whichever session was globally "latest" across sources; Claude Code and OpenCode now each resolve their own latest session independently
+- **OpenCode Cost/block KPI always showed "—"** — OpenCode has no `Stop` hook event, so cost fragments accumulated in a pending buffer that never flushed; each OpenCode block now closes immediately (a `step-finish` is already a complete turn), with a dedup guard so an in-progress turn's poll ticks don't push duplicate blocks, and historical blocks now backfill on connect
+- **Dashboard crashed to a black screen when switching between Claude Code/OpenCode Live tabs** — `ContextCurve` declared a `useCallback` after a conditional early return, violating the Rules of Hooks; alternating tabs changed the hook count between renders and crashed React (#81)
+
 ## [1.21.1] - 2026-08-23
 
 ### Fixed

@@ -443,6 +443,7 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
       type: 'block_cost',
       payload: {
         session_id:    sessionId,
+        source:        sessionSource,
         inputUsd:      cost.lastEntry.inputUsd,
         outputUsd:     cost.lastEntry.outputUsd,
         totalUsd:      cost.lastEntry.totalUsd,

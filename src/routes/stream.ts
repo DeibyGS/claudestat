@@ -2,9 +2,10 @@
 
 import { Router, type Request, type Response } from 'express'
 import { dbOps, type EventRow } from '../db'
-import type { BlockCostEntry } from '../db'
+import type { BlockCostEntry, SessionRow } from '../db'
 import { processLatestForSession, getAllBlockCostsForSession } from '../enricher'
 import { findJSONLForSession, extractSemanticData, syntheticStopsFor } from '../watchers/claude-code'
+import { getAllStepFinishBlocksForSession } from '../watchers/opencode'
 import { deriveSessionState } from '../session-state'
 
 export const streamRouter = Router()
@@ -74,12 +75,33 @@ const latestSession = dbOps.getLatestSession()
       }).catch(() => base)
     }
 
+    // El historial de bloques (blockCosts) se lee por fuente — CC del .jsonl, OC de su
+    // SQLite — así que se busca contra la sesión más reciente DE CADA FUENTE, no contra
+    // "latestSession" (que es de una sola) — para no perder el historial de la otra
+    // cuando corren en simultáneo. Cada entry queda tagged con el id real de su sesión.
+    const ccSessionForBlocks = latestSession.source === 'claude-code'
+      ? latestSession
+      : dbOps.getLatestClaudeSession()
+    const ocSessionForBlocks = latestSession.source === 'opencode'
+      ? latestSession
+      : dbOps.getLatestOpencodeSession()
+
     withSynStops(allEvents).then(merged => {
       const initEvents = merged.length > SSE_INIT_EVENT_LIMIT
         ? merged.slice(-SSE_INIT_EVENT_LIMIT)
         : merged
 
-      getAllBlockCostsForSession(latestSession.id).then((blockCosts: BlockCostEntry[]) => {
+      const tagBlocks = (session: SessionRow | undefined, fetchBlocks: (id: string) => Promise<BlockCostEntry[]>) =>
+        session
+          ? fetchBlocks(session.id).then(costs => costs.map(c => ({ ...c, sessionId: session.id })))
+          : Promise.resolve([])
+
+      const blockCostsPromise = Promise.all([
+        tagBlocks(ccSessionForBlocks, getAllBlockCostsForSession),
+        tagBlocks(ocSessionForBlocks, getAllStepFinishBlocksForSession),
+      ]).then(([ccBlocks, ocBlocks]) => [...ccBlocks, ...ocBlocks])
+
+      blockCostsPromise.then((blockCosts) => {
         const subAgentSessions = dbOps.getChildSessions(latestSession.id)
         res.write(`data: ${JSON.stringify({ type: 'init', session: { ...latestSession, state }, events: initEvents, blockCosts, subAgentSessions })}\n\n`)
 

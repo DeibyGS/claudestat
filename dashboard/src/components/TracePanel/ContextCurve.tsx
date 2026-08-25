@@ -27,11 +27,10 @@ export function ContextCurve({ blocks, blockCosts }: Props) {
   })
 
   const valid = points.filter(Boolean) as NonNullable<typeof points[0]>[]
-  if (valid.length < 2) return null
 
-  const lastPct = valid[valid.length - 1].pct
-  const lineColor = lastPct >= 80 ? '#f85149' : lastPct >= 50 ? '#d29922' : '#3fb950'
-
+  // Hooks deben correr siempre, sin importar `valid.length` — moverlo debajo del
+  // return condicional viola las Rules of Hooks (crashea al alternar CC/OC, que
+  // cambian `valid.length` entre 0-1 y 2+ de un render al siguiente).
   const handleMouseMove = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     const rect = svgRef.current?.getBoundingClientRect()
     if (!rect || valid.length < 2) return
@@ -40,6 +39,11 @@ export function ContextCurve({ blocks, blockCosts }: Props) {
     const idx  = Math.min(valid.length - 1, Math.max(0, Math.round(relX / step)))
     setHovered(idx)
   }, [valid.length])
+
+  if (valid.length < 2) return null
+
+  const lastPct = valid[valid.length - 1].pct
+  const lineColor = lastPct >= 80 ? '#f85149' : lastPct >= 50 ? '#d29922' : '#3fb950'
 
   const W = 100   // viewBox width (percentage-based, SVG scales)
 

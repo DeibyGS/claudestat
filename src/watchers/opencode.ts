@@ -12,7 +12,7 @@ import path from 'path'
 import { type PollableAdapter, type PollSession, type ParsedEvent, registerAdapter } from './adapter'
 import { getOpencodeDb } from '../paths'
 import { getContextWindow, calcCost } from '../pricing'
-import type { CostUpdate } from '../db'
+import type { CostUpdate, BlockCostEntry } from '../db'
 import { dbOps } from '../db'
 import { findProjectCwdForFile } from '../routes/helpers'
 
@@ -28,6 +28,49 @@ function parseModel(raw: string | null): string {
     return obj.id ?? 'unknown'
   } catch {
     return 'unknown'
+  }
+}
+
+interface StepFinishRow {
+  total_tokens: number; input_tokens: number; output_tokens: number; cache_read: number; cache_write: number
+  time_created: number
+}
+
+const STEP_FINISH_COLUMNS = `json_extract(data, '$.tokens.total') as total_tokens,
+              json_extract(data, '$.tokens.input') as input_tokens,
+              json_extract(data, '$.tokens.output') as output_tokens,
+              json_extract(data, '$.tokens.cache.read') as cache_read,
+              json_extract(data, '$.tokens.cache.write') as cache_write,
+              time_created`
+
+// pollSessions() corre cada 3s para toda sesión con time_updated reciente — ese timestamp
+// puede avanzar por escrituras intermedias (tool calls) sin que el último step-finish haya
+// cambiado. Sin este guard, el mismo step-finish se re-emite como block_cost en cada tick
+// mientras el turno está en curso, y como block_cost de OC ahora empuja directo a blockCosts
+// (no espera un Stop que OC no tiene), eso duplicaba bloques idénticos en el Live tab.
+const lastEmittedStepFinishTs = new Map<string, number>()
+
+// Un 'step-finish' de OC ya es un turno completo (a diferencia de CC, que fragmenta
+// un turno en varias llamadas API) — se usa tanto para el bloque en vivo (pollSessions,
+// solo el último) como para el historial completo (getAllStepFinishBlocksForSession).
+function stepFinishRowToBlockCost(row: StepFinishRow, modelId: string): BlockCostEntry | null {
+  const price = calcCost(modelId, {
+    input_tokens: row.input_tokens ?? 0,
+    output_tokens: row.output_tokens ?? 0,
+    cache_read_input_tokens: row.cache_read ?? 0,
+    cache_creation_input_tokens: row.cache_write ?? 0,
+  })
+  if (price <= 0) return null
+  return {
+    inputUsd:       price * 0.7,
+    outputUsd:      price * 0.3,
+    totalUsd:       price,
+    inputTokens:    (row.input_tokens ?? 0) + (row.cache_read ?? 0) + (row.cache_write ?? 0),
+    outputTokens:   row.output_tokens ?? 0,
+    cacheRead:      row.cache_read ?? 0,
+    cacheCreate:    row.cache_write ?? 0,
+    context_used:   row.total_tokens,
+    context_window: getContextWindow(modelId),
   }
 }
 
@@ -238,40 +281,19 @@ export const opencodeAdapter: PollableAdapter = {
         try {
           if (db) {
             const stepFinish = db.prepare(
-              `SELECT json_extract(data, '$.tokens.total') as total_tokens,
-                      json_extract(data, '$.tokens.input') as input_tokens,
-                      json_extract(data, '$.tokens.output') as output_tokens,
-                      json_extract(data, '$.tokens.cache.read') as cache_read,
-                      json_extract(data, '$.tokens.cache.write') as cache_write,
-                      json_extract(data, '$.cost') as cost
+              `SELECT ${STEP_FINISH_COLUMNS}
                FROM part
                WHERE session_id = ?
                AND json_extract(data, '$.type') = 'step-finish'
                ORDER BY time_created DESC
                LIMIT 1`
-            ).get(row.id) as { total_tokens: number; input_tokens: number; output_tokens: number; cache_read: number; cache_write: number; cost: number } | undefined
+            ).get(row.id) as StepFinishRow | undefined
 
             if (stepFinish && stepFinish.total_tokens) {
               contextUsed = stepFinish.total_tokens
-              // Compute block cost from step-finish data
-              const price = calcCost(modelId, {
-                input_tokens: stepFinish.input_tokens ?? 0,
-                output_tokens: stepFinish.output_tokens ?? 0,
-                cache_read_input_tokens: stepFinish.cache_read ?? 0,
-                cache_creation_input_tokens: stepFinish.cache_write ?? 0,
-              })
-              if (price > 0) {
-                lastEntry = {
-                  inputUsd: price * 0.7,
-                  outputUsd: price * 0.3,
-                  totalUsd: price,
-                  inputTokens: (stepFinish.input_tokens ?? 0) + (stepFinish.cache_read ?? 0) + (stepFinish.cache_write ?? 0),
-                  outputTokens: stepFinish.output_tokens ?? 0,
-                  cacheRead: stepFinish.cache_read ?? 0,
-                  cacheCreate: stepFinish.cache_write ?? 0,
-                  context_used: stepFinish.total_tokens,
-                  context_window: getContextWindow(modelId),
-                }
+              if (stepFinish.time_created !== lastEmittedStepFinishTs.get(row.id)) {
+                lastEmittedStepFinishTs.set(row.id, stepFinish.time_created)
+                lastEntry = stepFinishRowToBlockCost(stepFinish, modelId) ?? undefined
               }
             }
           }
@@ -301,6 +323,49 @@ export const opencodeAdapter: PollableAdapter = {
       db?.close()
     }
   },
+}
+
+// Cache del historial de bloques por sesión OC — mismo criterio que
+// blockCostCache en claude-code.ts: sin esto, cada reconexión SSE (/stream)
+// vuelve a escanear TODOS los step-finish de la sesión desde cero.
+const stepFinishBlocksCache = new Map<string, { data: BlockCostEntry[]; ts: number }>()
+const STEP_FINISH_CACHE_TTL = 5 * 60_000
+
+// Historial de bloques para OC: un entry por cada 'step-finish' registrado —
+// mismo criterio que pollSessions() usa para el bloque en vivo, pero sobre
+// TODOS los steps de la sesión en vez de solo el último. Permite que el
+// Live tab arranque con el historial completo de Cost/block, no solo el
+// primer bloque que llegue después de conectarse.
+export async function getAllStepFinishBlocksForSession(sessionId: string): Promise<BlockCostEntry[]> {
+  const cached = stepFinishBlocksCache.get(sessionId)
+  if (cached && Date.now() - cached.ts < STEP_FINISH_CACHE_TTL) return cached.data
+
+  let db: ReturnType<typeof openDb> | null = null
+  try {
+    db = openDb()
+    const sessionRow = db.prepare(`SELECT model FROM session WHERE id = ?`).get(sessionId) as { model: string | null } | undefined
+    const modelId = parseModel(sessionRow?.model ?? null)
+
+    const rows = db.prepare(
+      `SELECT ${STEP_FINISH_COLUMNS}
+       FROM part
+       WHERE session_id = ?
+       AND json_extract(data, '$.type') = 'step-finish'
+       ORDER BY time_created ASC`
+    ).all(sessionId) as StepFinishRow[]
+
+    const blocks = rows
+      .filter(r => r.total_tokens)
+      .map(r => stepFinishRowToBlockCost(r, modelId))
+      .filter((b): b is BlockCostEntry => b !== null)
+
+    stepFinishBlocksCache.set(sessionId, { data: blocks, ts: Date.now() })
+    return blocks
+  } catch {
+    return cached?.data ?? []
+  } finally {
+    db?.close()
+  }
 }
 
 export function isSessionArchived(sessionId: string): boolean {

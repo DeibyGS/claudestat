@@ -27,7 +27,7 @@ const MAX_EVENTS = 10_000
 
 const EMPTY: AppState = {
   sessionId: '', cwd: '', startedAt: Date.now(), events: [], weeklyData: [],
-  sessionState: 'idle', blockCosts: [], pendingBlockCost: null, subAgentSessions: []
+  sessionState: 'idle', blockCosts: [], pendingBlockCostBySession: {}, subAgentSessions: []
 }
 
 class OrchErrorBoundary extends Component<{ children: ReactNode }, { err: string | null }> {
@@ -80,11 +80,16 @@ export default function App() {
   const [claudeCodeEvents,  setClaudeCodeEvents]  = useState<TraceEvent[]>([])
   const [claudeCodePrompts, setClaudeCodePrompts] = useState<Array<{ index: number; ts: number; text: string }>>([])
   const [ocContextInfo, setOcContextInfo] = useState<{ context_used?: number; context_window?: number } | undefined>()
+  const [ccContextInfo, setCcContextInfo] = useState<{ context_used?: number; context_window?: number } | undefined>()
   const [ocLastEntry, setOcLastEntry] = useState<{ inputTokens: number; outputTokens: number; cacheRead?: number; inputUsd: number; outputUsd: number; totalUsd: number } | undefined>()
   const [ocModelUsage, setOcModelUsage] = useState<Array<{ model: string; sessions: number; totalCost: number }>>([])
   const [orchData, setOrchData] = useState<OrchTimeline | null>(null)
   const stateRef = useRef(state)
   stateRef.current = state
+  // El listener SSE se registra una sola vez (useEffect con deps []) — un ref evita
+  // que quede con el valor de activeLiveSessionId de aquel primer render.
+  const activeLiveSessionIdRef = useRef(activeLiveSessionId)
+  activeLiveSessionIdRef.current = activeLiveSessionId
 
   const fetchSystemConfig = useCallback(() => {
     setSystemConfigError(false)
@@ -174,13 +179,21 @@ export default function App() {
             )
             return
           }
-          if (msg.type === 'cost_update' && msg.payload?.source === 'opencode') {
+          // Filtrar por la sesión seleccionada — no solo por source — evita que un
+          // sub-agente CC (mismo source, otra sesión) pise el KPI de la sesión padre.
+          if (msg.type === 'cost_update' && msg.payload?.source === 'opencode' && msg.payload.session_id === activeLiveSessionIdRef.current) {
             const p = msg.payload
             if (p.context_used != null || p.context_window != null) {
               setOcContextInfo({ context_used: p.context_used, context_window: p.context_window })
             }
           }
-          if (msg.type === 'block_cost' && msg.payload?.session_id) {
+          if (msg.type === 'cost_update' && msg.payload?.source === 'claude-code' && msg.payload.session_id === activeLiveSessionIdRef.current) {
+            const p = msg.payload
+            if (p.context_used != null || p.context_window != null) {
+              setCcContextInfo({ context_used: p.context_used, context_window: p.context_window })
+            }
+          }
+          if (msg.type === 'block_cost' && msg.payload?.session_id && msg.payload?.source === 'opencode') {
             const p = msg.payload
             setOcLastEntry({
               inputTokens: p.inputTokens ?? 0,
@@ -450,11 +463,11 @@ export default function App() {
       efficiency_score:     isClaudeCode ? (state.cost?.efficiency_score ?? 100) : -1,
       model:                selectedSession.model,
       loops:                isClaudeCode ? (state.cost?.loops ?? []) : [],
-      context_used:         isClaudeCode ? state.cost?.context_used : ocContextInfo?.context_used,
-      context_window:       isClaudeCode ? state.cost?.context_window : ocContextInfo?.context_window,
+      context_used:         isClaudeCode ? ccContextInfo?.context_used : ocContextInfo?.context_used,
+      context_window:       isClaudeCode ? ccContextInfo?.context_window : ocContextInfo?.context_window,
       projected_hourly_usd: isClaudeCode ? state.cost?.projected_hourly_usd : undefined,
     }
-  }, [selectedSession, isClaudeCode, state.cost, ocContextInfo])
+  }, [selectedSession, isClaudeCode, state.cost, ocContextInfo, ccContextInfo])
 
   const ocBurnRate = useMemo(() => {
     if (isClaudeCode || !selectedSession || opencodeEvents.length < 2) return undefined
@@ -611,9 +624,9 @@ function handleMessage(prev: AppState, msg: any): AppState {
       events:           (msg.events || []) as TraceEvent[],
       cost:             buildCost(s),
       sessionState:     (s.state as SessionState) ?? 'idle',
-      blockCosts:       (msg.blockCosts || []).map((b: any) => ({ ...b, sessionId: s.id })) as BlockCost[],
+      blockCosts:       (msg.blockCosts || []) as BlockCost[],  // ya vienen tagged con su sessionId real (ver stream.ts)
       subAgentSessions: (msg.subAgentSessions || []) as SubAgentSession[],
-      pendingBlockCost:  null,
+      pendingBlockCostBySession: {},
     }
   }
   if (msg.type === 'state_change') {
@@ -623,10 +636,22 @@ function handleMessage(prev: AppState, msg: any): AppState {
   }
   if (msg.type === 'event') {
     const evt = msg.payload as TraceEvent & { session_id: string }
-    // Ignorar eventos de otra sesión: evitaba que la vista live se resetease
-    // (events: []) al alternar entre sesiones activas simultáneas (OC + CC).
+
+    // Stop = fin de bloque: guardar coste acumulado y resetear pendiente.
+    // Por sessionId propio (no gateado a prev.sessionId) para no perder bloques
+    // de la sesión no-"primaria" cuando CC y OC corren en simultáneo.
+    let blockCosts = prev.blockCosts
+    let pendingBlockCostBySession = prev.pendingBlockCostBySession
+    if (evt.type === 'Stop' && evt.session_id && pendingBlockCostBySession[evt.session_id]) {
+      blockCosts = [...blockCosts, pendingBlockCostBySession[evt.session_id]]
+      pendingBlockCostBySession = { ...pendingBlockCostBySession }
+      delete pendingBlockCostBySession[evt.session_id]
+    }
+
+    // Ignorar eventos de otra sesión para el log en vivo (events): evitaba que la
+    // vista live se resetease (events: []) al alternar entre sesiones simultáneas.
     if (evt.session_id && prev.sessionId && evt.session_id !== prev.sessionId) {
-      return prev
+      return { ...prev, blockCosts, pendingBlockCostBySession }
     }
     let events = [...prev.events]
     if (evt.type === 'Done' && evt.tool_name) {
@@ -639,14 +664,9 @@ function handleMessage(prev: AppState, msg: any): AppState {
       events = [...events, evt]
     }
     if (events.length > MAX_EVENTS) events = events.slice(-MAX_EVENTS)
-    const next: AppState = { ...prev, events }
+    const next: AppState = { ...prev, events, blockCosts, pendingBlockCostBySession }
     if (!prev.sessionId && evt.session_id) {
       next.sessionId = evt.session_id; next.cwd = evt.cwd || ''; next.startedAt = evt.ts
-    }
-    // Stop = fin de bloque: guardar coste acumulado y resetear pendiente
-    if (evt.type === 'Stop' && prev.pendingBlockCost) {
-      next.blockCosts       = [...prev.blockCosts, prev.pendingBlockCost]
-      next.pendingBlockCost = null
     }
     return next
   }
@@ -668,9 +688,15 @@ function handleMessage(prev: AppState, msg: any): AppState {
   }
   if (msg.type === 'block_cost') {
     const p = msg.payload
-    if (p.session_id !== prev.sessionId) return prev
+    if (!p.session_id) return prev
     const entry: BlockCost = { inputUsd: p.inputUsd, outputUsd: p.outputUsd, totalUsd: p.totalUsd, inputTokens: p.inputTokens ?? 0, outputTokens: p.outputTokens ?? 0, cacheRead: p.cacheRead, cache_creation: p.cacheCreate, context_used: p.context_used, context_window: p.context_window, sessionId: p.session_id }
-    const pend = prev.pendingBlockCost
+    // OC (y otras fuentes poll-based) no emiten un 'Stop' de hook: cada block_cost ya
+    // representa un turno completo (step-finish), así que va directo a blockCosts en
+    // vez de acumularse en pendingBlockCostBySession esperando un Stop que nunca llega.
+    if (p.source && p.source !== 'claude-code') {
+      return { ...prev, blockCosts: [...prev.blockCosts, entry] }
+    }
+    const pend = prev.pendingBlockCostBySession[p.session_id]
     const merged: BlockCost = pend ? {
       inputUsd:       pend.inputUsd     + entry.inputUsd,
       outputUsd:      pend.outputUsd    + entry.outputUsd,
@@ -683,7 +709,7 @@ function handleMessage(prev: AppState, msg: any): AppState {
       context_window: entry.context_window,
       sessionId:      p.session_id,
     } : entry
-    return { ...prev, pendingBlockCost: merged }
+    return { ...prev, pendingBlockCostBySession: { ...prev.pendingBlockCostBySession, [p.session_id]: merged } }
   }
   // summary_ready — el daemon generó un resumen IA para la sesión activa
   // Refrescamos el historial en el próximo render (el usuario lo verá al abrir History)

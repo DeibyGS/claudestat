@@ -279,7 +279,7 @@ Click between **Claude Code** and **OpenCode** to see each session's real-time v
 | Intent detection (Exploring / Implementing…) | ✅ | ✅ |
 | Session cost | ✅ | ✅ |
 | Weekly usage chart | ✅ | ✅ |
-| Per-block cost breakdown | ✅ | — |
+| Per-block cost breakdown | ✅ | ✅ |
 | Quota / context window | ✅ | — |
 
 OpenCode data is read directly from its local SQLite database — no configuration required.

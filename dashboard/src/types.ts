@@ -67,8 +67,8 @@ export interface AppState {
   cost?:            CostInfo
   weeklyData:       DayStats[]
   sessionState:     SessionState
-  blockCosts:       BlockCost[]       // un entry por bloque completo (agrupado por Stop)
-  pendingBlockCost: BlockCost | null  // acumula sub-turnos del bloque en curso
+  blockCosts:       BlockCost[]                  // un entry por bloque completo (agrupado por Stop), de cualquier sesión activa
+  pendingBlockCostBySession: Record<string, BlockCost>  // acumula sub-turnos del bloque en curso, por sessionId — permite CC y OC en simultáneo
   subAgentSessions: SubAgentSession[] // sub-sesiones lanzadas por Agent en esta sesión
 }
 

@@ -2,8 +2,9 @@
 
 # claudestat
 
-**Live AI coding monitor — real-time trace, quota guard, and MCP server**
+**Real-time observability for AI coding agents — Claude Code & OpenCode**
 
+Monitor tokens, costs, tool calls, agents, MCP, sessions, quotas and multi-agent orchestration locally.
 Most tools read your logs after a session ends. claudestat hooks into every event as it fires.
 See what your AI is spending right now, get alerted before you hit your quota, and ask Claude about its own usage — from inside the terminal.
 
@@ -44,6 +45,8 @@ Works with **Claude Code** and **OpenCode**. Zero cloud dependencies. Pure Node.
 ## Table of Contents
 
 - [Why claudestat?](#why-claudestat)
+- [Who is ClaudeStat for?](#who-is-claudestat-for)
+- [Use ClaudeStat if...](#use-claudestat-if)
 - [Ask Claude about itself](#ask-claude-about-itself)
 - [Features](#features)
 - [Quick Start](#quick-start)
@@ -73,22 +76,60 @@ Two different jobs exist in the coding-agent space:
 
 claudestat hooks Claude Code's events the moment they fire, keeps everything local in SQLite, and surfaces a live web dashboard, quota alerts, and an MCP server.
 
-| | claudestat | ccusage | OpenUsage |
-|---|:---:|:---:|:---:|
-| Real-time event stream | ✅ | partial | ✅ |
-| Live terminal trace (`watch`) | ✅ | — | — |
-| Web dashboard | ✅ | — | TUI |
-| Quota alerts + kill switch | ✅ | — | quota only |
-| Loop / thrash detector | ✅ | — | — |
-| MCP server (ask Claude about itself) | ✅ | — | — |
-| Historical daily/weekly/monthly reports | ✅ | ✅ | partial |
-| Multi-CLI sources (Codex, OpenCode, Amp…) | ✅ | ✅ | ✅ |
-| Cross-provider spend in one view | focused | — | ✅ |
-| Local-first / SQLite (no cloud) | ✅ | ✅ | ✅ |
+| | claudestat | ccusage | OpenUsage | Langfuse | Agent Trail |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Real-time event stream | ✅ | partial | ✅ | ✅ | ✅ |
+| Live terminal trace (`watch`) | ✅ | — | — | — | — |
+| Web dashboard | ✅ | — | TUI | ✅ | ✅ |
+| Quota alerts + kill switch | ✅ | — | quota only | — | — |
+| Loop / thrash detector | ✅ | — | — | — | — |
+| MCP server (ask Claude about itself) | ✅ | — | — | — | — |
+| Claude Code support | ✅ | ✅ | ✅ | ✅ | ✅ |
+| OpenCode support | ✅ | ✅ | ✅ | — | — |
+| Tool tracing | ✅ | limited | — | ✅ | ✅ |
+| Agents / subagents | ✅ | — | — | ✅ | ✅ |
+| Orchestration view | ✅ | — | — | ✅ | ✅ |
+| Historical reports | ✅ | ✅ | partial | ✅ | ✅ |
+| Local-first / SQLite (no cloud) | ✅ | ✅ | ✅ | configurable | ✅ |
 
-The main difference is the moment: ccusage answers *what did I spend yesterday*; claudestat shows *what's happening while you code*.
+The main difference is the moment: ccusage answers *what did I spend yesterday*; claudestat shows *what's happening while you code*. Langfuse and Agent Trail offer observability but are cloud-first or require infrastructure setup.
 
 > If claudestat is useful, give it a ⭐ — it helps other developers find it.
+
+---
+
+## Who is ClaudeStat for?
+
+ClaudeStat is for developers who use AI coding agents and want to understand what those agents are doing, how much they cost, and when they become inefficient.
+
+Especially useful if you:
+
+- use Claude Code
+- use OpenCode
+- run multiple coding agents simultaneously
+- use subagents and orchestration
+- use MCP servers
+- care about token and API costs
+- work with long-running agent sessions
+- want local/private telemetry (no cloud)
+- need real-time visibility, not post-session reports
+
+---
+
+## Use ClaudeStat if...
+
+Use ClaudeStat when you want to:
+
+- monitor Claude Code in real time
+- monitor OpenCode in real time
+- track token usage and AI coding costs
+- see which tools consume the most budget
+- monitor agents and subagents
+- inspect MCP activity
+- detect context thrashing and loops
+- protect your quota with alerts and kill switch
+- understand multi-agent orchestration
+- keep telemetry completely local
 
 ---
 
@@ -503,7 +544,7 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\.claudestat"  # Windows (PowerShel
 PRs are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/claudestat
+git clone https://github.com/DeibyGS/claudestat
 cd claudestat
 npm install
 node --require tsx/cjs tests/index.ts   # run all tests

@@ -1,6 +1,6 @@
 {
   "name": "@statforge/claudestat",
-  "version": "1.21.2",
+  "version": "1.22.0",
   "private": false,
   "publishConfig": {
     "access": "public"

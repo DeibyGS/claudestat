@@ -87,7 +87,7 @@ const COLORS = [
   '#58a6ff', '#3fb950', '#d29922', '#f0883e', '#bc8cff',
   '#f778ba', '#79c0ff', '#56d364', '#e3b341', '#ff7b72',
 ]
-const GRID_COLS = '32px 200px 70px 60px 80px 80px'
+const GRID_COLS = '28px minmax(160px, 1fr) 55px 55px 65px 75px'
 
 function Sparkline({ data, color }: { data: number[]; color: string }) {
   const w = 60, h = 16, pad = 2
@@ -300,12 +300,12 @@ export function TopView() {
                           </div>
                         }>
                           <span style={{
-                            fontSize: 9, fontWeight: 700, letterSpacing: '0.04em',
-                            padding: '1px 5px', borderRadius: 3,
+                            fontSize: 8, fontWeight: 700, letterSpacing: '0.03em',
+                            padding: '1px 4px', borderRadius: 3,
                             background: t.source === 'opencode' ? '#0d1f10' : '#0d1e33',
                             border: `1px solid ${sourceColor(t.source)}60`,
                             color: sourceColor(t.source),
-                            cursor: 'default', whiteSpace: 'nowrap',
+                            cursor: 'default', whiteSpace: 'nowrap', flexShrink: 0,
                           }}>
                             {sourceLabel(t.source)}
                           </span>
@@ -385,7 +385,7 @@ function ProjectionCard({ label, tooltip, costSoFar, projected, daysWithData }: 
   return (
     <div style={{
       flex: 1, background: '#161b22', border: '1px solid #21262d',
-      borderRadius: 8, padding: '14px 16px',
+      borderRadius: 8, padding: '10px 14px 14px', minWidth: 0,
     }}>
       <Tip position="top" align="left" content={
         <div style={{ fontSize: 11, lineHeight: 1.7 }}>
@@ -393,20 +393,20 @@ function ProjectionCard({ label, tooltip, costSoFar, projected, daysWithData }: 
           <div style={{ color: '#7d8590' }}>{tooltip}</div>
         </div>
       }>
-        <div style={{ fontSize: 11, fontWeight: 600, color: '#8b949e', marginBottom: 8, cursor: 'default' }}>{label}</div>
+        <div style={{ fontSize: 10, fontWeight: 600, color: '#8b949e', marginBottom: 2, cursor: 'default' }}>{label}</div>
       </Tip>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
-        <span style={{ fontSize: 22, fontWeight: 700, color: '#e6edf3' }}>{fmtCostPrecise(projected)}</span>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+        <span style={{ fontSize: 20, fontWeight: 700, color: '#e6edf3', lineHeight: 1.3 }}>{fmtCostPrecise(projected)}</span>
         <Tip position="top" align="left" content={
           <div style={{ fontSize: 11, lineHeight: 1.7 }}>
             <div style={{ fontWeight: 700, color: '#58a6ff', marginBottom: 4 }}>Projected spend</div>
             <div style={{ color: '#7d8590' }}>Extrapolated from daily average based on {daysWithData.toFixed(1)} days of data</div>
           </div>
         }>
-          <span style={{ fontSize: 11, color: '#8b949e', cursor: 'default' }}>projected</span>
+          <span style={{ fontSize: 9, color: '#8b949e', cursor: 'default' }}>projected</span>
         </Tip>
       </div>
-      <div style={{ fontSize: 11, color: '#484f58' }}>
+      <div style={{ fontSize: 10, color: '#484f58', lineHeight: 1.3, marginTop: 2 }}>
         {fmtCostPrecise(costSoFar)} spent over {daysWithData.toFixed(1)} days
       </div>
     </div>

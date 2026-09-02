@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { FolderGit2, Search } from 'lucide-react'
+import { FolderGit2, Search, DollarSign, Cpu, Clock, BarChart3 } from 'lucide-react'
 import type { ProjectSummary, DayStats } from '../types'
 import { ProjectCard } from './ProjectCard'
 import { Tip } from './Tip'
@@ -20,38 +20,29 @@ function WeeklyHeatmap({ data }: { data: DayStats[] }) {
   const max  = Math.max(...data.map(d => d.tokens), 1)
   const week = data.slice(-7)
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-      <div style={{ display: 'flex', gap: 3 }}>
-        {week.map((d, i) => {
-          const pct = d.tokens / max
-          const bg  = pct < 0.05 ? '#1c2128'
-            : pct < 0.3  ? '#0e4429'
-            : pct < 0.6  ? '#006d32'
-            : pct < 0.85 ? '#26a641'
-            : '#39d353'
-          return (
-            <Tip key={i} position="top" align="right" content={
-              <div>
-                <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 3 }}>{d.date}</div>
-                <div style={{ color: '#7d8590', fontSize: 10 }}>{fmtTok(d.tokens)} tokens that day</div>
-              </div>
-            }>
-              <div style={{
-                width: 12, height: 12, borderRadius: 2,
-                background: bg,
-                border: '1px solid #21262d',
-              }} />
-            </Tip>
-          )
-        })}
-      </div>
-      <div style={{ display: 'flex', gap: 3 }}>
-        {week.map((d, i) => (
-          <span key={i} style={{ width: 12, fontSize: 8, color: '#484f58', textAlign: 'center' }}>
-            {DAY_LABELS[new Date(d.date + 'T12:00:00').getDay()]}
-          </span>
-        ))}
-      </div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+      {week.map((d, i) => {
+        const pct = d.tokens / max
+        const bg  = pct < 0.05 ? '#1c2128'
+          : pct < 0.3  ? '#0e4429'
+          : pct < 0.6  ? '#006d32'
+          : pct < 0.85 ? '#26a641'
+          : '#39d353'
+        return (
+          <Tip key={i} position="top" align="right" content={
+            <div>
+              <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 3 }}>{d.date}</div>
+              <div style={{ color: '#7d8590', fontSize: 10 }}>{fmtTok(d.tokens)} tokens that day</div>
+            </div>
+          }>
+            <div style={{
+              width: 10, height: 10, borderRadius: 2,
+              background: bg,
+              border: '1px solid #21262d',
+            }} />
+          </Tip>
+        )
+      })}
     </div>
   )
 }
@@ -82,18 +73,16 @@ function SkeletonCard() {
 }
 
 const S = {
-  wrap:    { padding: '16px 24px', overflowY: 'auto' as const, overflowX: 'hidden' as const, height: '100%' },
-  summary: {
-    display: 'flex', alignItems: 'center', gap: 20,
-    padding: '12px 16px', marginBottom: 20,
-    background: '#161b22', borderRadius: 8, border: '1px solid #21262d',
-    flexWrap: 'wrap' as const,
-  },
-  sumItem: { display: 'flex', flexDirection: 'column' as const, gap: 2 },
-  sumVal:  { color: '#e6edf3', fontWeight: 700, fontSize: 16 },
-  sumLbl:  { color: '#7d8590', fontSize: 11 },
+  wrap:    { padding: '12px 20px', overflowY: 'auto' as const, overflowX: 'hidden' as const, height: '100%' },
+  kpiRow:  { display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 14 },
+  kpiCard: { display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: '#161b22', borderRadius: 8, border: '1px solid #21262d', minWidth: 0 },
+  kpiIcon: (bg: string): React.CSSProperties => ({
+    width: 30, height: 30, borderRadius: 6, background: bg,
+    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  }),
+  kpiVal:  { color: '#e6edf3', fontWeight: 700, fontSize: 15, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  kpiLbl:  { color: '#7d8590', fontSize: 9, lineHeight: 1.2 },
   grid:    { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 },
-  sep:     { width: 1, height: 32, background: '#21262d', flexShrink: 0 },
 }
 
 const FILTERS: { key: string; label: string; fn: (p: ProjectSummary) => boolean }[] = [
@@ -135,79 +124,91 @@ export function ProjectsView({ projects, activeProject, weeklyData = [], loading
         }
       `}</style>
 
-      {/* Resumen global */}
-      <div style={S.summary}>
+      {/* KPI cards */}
+      <div style={S.kpiRow}>
         <Tip position="bottom" align="left" content={
           <div>
             <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Projects</div>
-            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>Number of projects detected by claudestat in <code>~/.claude/projects/</code></div>
+            <div style={{ color: '#7d8590', fontSize: 10 }}>Detected in <code>~/.claude/projects/</code></div>
           </div>
         }>
-          <div style={S.sumItem}>
-            <span style={S.sumVal}>{projects.length}</span>
-            <span style={S.sumLbl}>projects</span>
+          <div style={S.kpiCard}>
+            <div style={S.kpiIcon('#58a6ff18')}>
+              <FolderGit2 size={16} color="#58a6ff" />
+            </div>
+            <div>
+              <div style={S.kpiVal}>{projects.length}</div>
+              <div style={S.kpiLbl}>projects</div>
+            </div>
           </div>
         </Tip>
-        <div style={S.sep} />
         <Tip position="bottom" align="left" content={
           <div>
             <div style={{ color: '#3fb950', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Total cost</div>
-            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>Sum of all API costs of all sessions across all projects</div>
+            <div style={{ color: '#7d8590', fontSize: 10 }}>Sum of all API costs across all projects</div>
           </div>
         }>
-          <div style={S.sumItem}>
-            <span style={S.sumVal}>${totalCost.toFixed(2)}</span>
-            <span style={S.sumLbl}>total cost</span>
+          <div style={S.kpiCard}>
+            <div style={S.kpiIcon('#3fb95018')}>
+              <DollarSign size={16} color="#3fb950" />
+            </div>
+            <div>
+              <div style={{ ...S.kpiVal, color: '#3fb950' }}>${totalCost.toFixed(2)}</div>
+              <div style={S.kpiLbl}>total cost</div>
+            </div>
           </div>
         </Tip>
-        <div style={S.sep} />
         <Tip position="bottom" align="left" content={
           <div>
             <div style={{ color: '#79c0ff', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Total tokens</div>
-            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>Input + Output + Cache read accumulated across all projects</div>
+            <div style={{ color: '#7d8590', fontSize: 10 }}>Input + Output + Cache read</div>
           </div>
         }>
-          <div style={S.sumItem}>
-            <span style={S.sumVal}>{fmtTok(totalTokens)}</span>
-            <span style={S.sumLbl}>total tokens</span>
+          <div style={S.kpiCard}>
+            <div style={S.kpiIcon('#79c0ff18')}>
+              <Cpu size={16} color="#79c0ff" />
+            </div>
+            <div>
+              <div style={{ ...S.kpiVal, color: '#79c0ff' }}>{fmtTok(totalTokens)}</div>
+              <div style={S.kpiLbl}>tokens</div>
+            </div>
           </div>
         </Tip>
-        <div style={S.sep} />
         <Tip position="bottom" align="left" content={
           <div>
-            <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Historical sessions</div>
-            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>Total sessions recorded by claudestat across all projects</div>
+            <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Sessions</div>
+            <div style={{ color: '#7d8590', fontSize: 10 }}>Total recorded across all projects</div>
           </div>
         }>
-          <div style={S.sumItem}>
-            <span style={S.sumVal}>{totalSessions}</span>
-            <span style={S.sumLbl}>historical sessions</span>
+          <div style={S.kpiCard}>
+            <div style={S.kpiIcon('#e6edf318')}>
+              <Clock size={16} color="#e6edf3" />
+            </div>
+            <div>
+              <div style={S.kpiVal}>{totalSessions}</div>
+              <div style={S.kpiLbl}>sessions</div>
+            </div>
           </div>
         </Tip>
         {withHandoff.length > 0 && (
-          <>
-            <div style={S.sep} />
-            <Tip position="bottom" align="left" content={
+          <Tip position="bottom" align="left" content={
+            <div>
+              <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Avg progress</div>
+              <div style={{ color: '#7d8590', fontSize: 10 }}>Across {withHandoff.length} project{withHandoff.length !== 1 ? 's' : ''} with HANDOFF</div>
+            </div>
+          }>
+            <div style={S.kpiCard}>
+              <div style={S.kpiIcon(avgProgress >= 70 ? '#3fb95018' : '#d2992218')}>
+                <BarChart3 size={16} color={avgProgress >= 70 ? '#3fb950' : '#d29922'} />
+              </div>
               <div>
-                <div style={{ color: '#e6edf3', fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Average progress</div>
-                <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.5 }}>% of completed tasks averaged across {withHandoff.length} project{withHandoff.length !== 1 ? 's' : ''} with HANDOFF.md</div>
-              </div>
-            }>
-              <div style={S.sumItem}>
-                <span style={{ ...S.sumVal, color: avgProgress >= 70 ? '#3fb950' : '#d29922' }}>
+                <div style={{ ...S.kpiVal, color: avgProgress >= 70 ? '#3fb950' : '#d29922' }}>
                   {avgProgress > 0 ? `${avgProgress}%` : '—'}
-                </span>
-                <span style={S.sumLbl}>average progress</span>
+                </div>
+                <div style={S.kpiLbl}>avg progress</div>
               </div>
-            </Tip>
-          </>
-        )}
-        {/* C.13 — Heatmap 7 días */}
-        {weeklyData.length > 0 && (
-          <>
-            <div style={S.sep} />
-            <WeeklyHeatmap data={weeklyData} />
-          </>
+            </div>
+          </Tip>
         )}
       </div>
 

@@ -4,6 +4,12 @@
  * OpenCode stores sessions in ~/.local/share/opencode/opencode.db (SQLite).
  * The session table has cost, token counts, model, and timestamps directly.
  * Uses PollableAdapter — no JSONL files, no chokidar.
+ *
+ * Schema v2 (OpenCode 2.x): sessions/messages live in `session_v2` /
+ * `session_message`; tool parts are embedded in `session_message.data.content[]`
+ * and per-step tokens live in `session_message.data.tokens` (v1 used a separate
+ * `part` row of type 'step-finish'). The v1 tables remain read-only for old
+ * installs — see oc-schema.ts.
  */
 
 import fs   from 'fs'
@@ -15,6 +21,7 @@ import { getContextWindow, calcCost } from '../pricing'
 import type { CostUpdate, BlockCostEntry } from '../db'
 import { dbOps } from '../db'
 import { findProjectCwdForFile } from '../routes/helpers'
+import { hasOcV2, ocSessionTable } from './oc-schema'
 
 function openDb() {
   const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
@@ -42,6 +49,50 @@ const STEP_FINISH_COLUMNS = `json_extract(data, '$.tokens.total') as total_token
               json_extract(data, '$.tokens.cache.read') as cache_read,
               json_extract(data, '$.tokens.cache.write') as cache_write,
               time_created`
+
+// v2: cada assistant message con `tokens` es un paso (equivalente al
+// 'step-finish' de v1). total_tokens replica la fórmula de v1
+// (input + output + reasoning + cache.read + cache.write).
+// El costo usa solo input/output/cache (paridad con v1): OpenCode reporta el
+// coste real en session_v2.cost cuando es no-cero; aquí solo estimamos.
+const V2_STEP_COLUMNS = `COALESCE(json_extract(m.data, '$.tokens.input'), 0) as input_tokens,
+              COALESCE(json_extract(m.data, '$.tokens.output'), 0) as output_tokens,
+              COALESCE(json_extract(m.data, '$.tokens.cache.read'), 0) as cache_read,
+              COALESCE(json_extract(m.data, '$.tokens.cache.write'), 0) as cache_write,
+              COALESCE(json_extract(m.data, '$.tokens.input'), 0)
+                + COALESCE(json_extract(m.data, '$.tokens.output'), 0)
+                + COALESCE(json_extract(m.data, '$.tokens.reasoning'), 0)
+                + COALESCE(json_extract(m.data, '$.tokens.cache.read'), 0)
+                + COALESCE(json_extract(m.data, '$.tokens.cache.write'), 0) as total_tokens,
+              m.time_created`
+
+// Un "paso" = step-finish (v1) o assistant message con tokens (v2).
+function querySteps(
+  db: ReturnType<typeof openDb>,
+  sessionId: string,
+  v2: boolean,
+  dir: 'ASC' | 'DESC',
+  limit?: number
+): StepFinishRow[] {
+  const lim = Number.isInteger(limit) ? ` LIMIT ${limit as number}` : ''
+  if (v2) {
+    return db.prepare(
+      `SELECT ${V2_STEP_COLUMNS}
+       FROM session_message m
+       WHERE m.session_id = ?
+       AND m.type = 'assistant'
+       AND json_extract(m.data, '$.tokens') IS NOT NULL
+       ORDER BY m.seq ${dir}${lim}`
+    ).all(sessionId) as StepFinishRow[]
+  }
+  return db.prepare(
+    `SELECT ${STEP_FINISH_COLUMNS}
+     FROM part
+     WHERE session_id = ?
+     AND json_extract(data, '$.type') = 'step-finish'
+     ORDER BY time_created ${dir}${lim}`
+  ).all(sessionId) as StepFinishRow[]
+}
 
 // pollSessions() corre cada 3s para toda sesión con time_updated reciente — ese timestamp
 // puede avanzar por escrituras intermedias (tool calls) sin que el último step-finish haya
@@ -78,15 +129,27 @@ const HOME = os.homedir()
 
 function inferProjectFromParts(db: ReturnType<typeof openDb> | null, sessionId: string): string | undefined {
   if (!db) return undefined
-  const parts = db.prepare(`
-    SELECT p.data FROM part p
-    JOIN message m ON p.message_id = m.id
-    WHERE m.session_id = ?
-    AND json_extract(p.data, '$.type') = 'tool'
-    AND json_extract(p.data, '$.tool') IN ('read', 'write', 'edit', 'glob', 'grep')
-    ORDER BY p.time_created DESC
-    LIMIT 30
-  `).all(sessionId) as Array<{ data: string }>
+  const v2 = hasOcV2(db)
+
+  const parts = v2
+    ? db.prepare(`
+        SELECT je.value AS data
+        FROM session_message m, json_each(m.data, '$.content') je
+        WHERE m.session_id = ?
+        AND json_extract(je.value, '$.type') = 'tool'
+        AND json_extract(je.value, '$.name') IN ('read', 'write', 'edit', 'glob', 'grep')
+        ORDER BY m.seq DESC
+        LIMIT 30
+      `).all(sessionId) as Array<{ data: string }>
+    : db.prepare(`
+        SELECT p.data FROM part p
+        JOIN message m ON p.message_id = m.id
+        WHERE m.session_id = ?
+        AND json_extract(p.data, '$.type') = 'tool'
+        AND json_extract(p.data, '$.tool') IN ('read', 'write', 'edit', 'glob', 'grep')
+        ORDER BY p.time_created DESC
+        LIMIT 30
+      `).all(sessionId) as Array<{ data: string }>
 
   const roots = new Map<string, number>()
   for (const { data } of parts) {
@@ -104,25 +167,50 @@ function inferProjectFromParts(db: ReturnType<typeof openDb> | null, sessionId: 
   return [...roots.entries()].sort((a, b) => b[1] - a[1])[0][0]
 }
 
+interface ToolEntry { toolName: string; ts: number; externalId: string }
+
 function importToolEvents(ocDb: ReturnType<typeof openDb>, sessionId: string, targetSessionId?: string): void {
-  const parts = ocDb.prepare(`
-    SELECT p.id, p.data, p.time_created
-    FROM part p
-    JOIN message m ON p.message_id = m.id
-    WHERE m.session_id = ?
-    AND json_extract(p.data, '$.type') = 'tool'
-    AND json_extract(p.data, '$.state') IS NOT NULL
-    ORDER BY p.time_created ASC
-  `).all(sessionId) as Array<{ id: string; data: string; time_created: number }>
+  const v2 = hasOcV2(ocDb)
+
+  // v2: los tool parts viven dentro de session_message.data.content[] con
+  // {type:'tool', id, name, state, time:{created,ran,completed}}.
+  const parts = v2
+    ? ocDb.prepare(`
+        SELECT m.id AS message_id, je.key AS part_index, je.value AS data
+        FROM session_message m, json_each(m.data, '$.content') je
+        WHERE m.session_id = ?
+        AND json_extract(je.value, '$.type') = 'tool'
+        AND json_extract(je.value, '$.state') IS NOT NULL
+        ORDER BY m.seq ASC
+      `).all(sessionId) as Array<{ message_id: string; part_index: number; data: string }>
+    : ocDb.prepare(`
+        SELECT p.id, p.data, p.time_created
+        FROM part p
+        JOIN message m ON p.message_id = m.id
+        WHERE m.session_id = ?
+        AND json_extract(p.data, '$.type') = 'tool'
+        AND json_extract(p.data, '$.state') IS NOT NULL
+        ORDER BY p.time_created ASC
+      `).all(sessionId) as Array<{ id: string; data: string; time_created: number }>
 
   const destId = targetSessionId ?? sessionId
 
-  const entries: Array<{ toolName: string; ts: number; externalId: string }> = []
+  const entries: ToolEntry[] = []
   for (const part of parts) {
     try {
-      const toolName = (JSON.parse(part.data) as { tool?: string }).tool
+      const parsed = JSON.parse(part.data) as {
+        tool?: string; name?: string
+        time?: { created?: number }
+        state?: unknown
+      }
+      const toolName = v2 ? parsed.name : parsed.tool
       if (!toolName) continue
-      entries.push({ toolName, ts: part.time_created, externalId: part.id })
+      const ts = v2 ? (parsed.time?.created ?? 0) : (part as { time_created: number }).time_created
+      if (!ts) continue
+      const externalId = v2
+        ? `${(part as { message_id: string }).message_id}#${(part as { part_index: number }).part_index}`
+        : (part as { id: string }).id
+      entries.push({ toolName, ts, externalId })
     } catch {}
   }
 
@@ -226,10 +314,11 @@ export const opencodeAdapter: PollableAdapter = {
     let db: ReturnType<typeof openDb> | null = null
     try {
       db = openDb()
+      const v2 = hasOcV2(db)
       const rows = db.prepare(
         `SELECT id, directory, model, cost, tokens_input, tokens_output, tokens_cache_read, tokens_cache_write,
                 time_created, time_updated
-         FROM session
+         FROM ${ocSessionTable(db)}
          WHERE time_updated >= ?
          AND time_archived IS NULL`
       ).all(since) as Array<{
@@ -275,19 +364,14 @@ export const opencodeAdapter: PollableAdapter = {
           cache_creation_input_tokens: row.tokens_cache_write,
         })
 
-        // Query latest step-finish for actual context usage
+        // Query latest step for actual context usage (step-finish en v1,
+        // último assistant message con tokens en v2)
         let contextUsed = row.tokens_input + row.tokens_cache_read + row.tokens_cache_write + row.tokens_output
         let lastEntry: CostUpdate['lastEntry'] = undefined
         try {
           if (db) {
-            const stepFinish = db.prepare(
-              `SELECT ${STEP_FINISH_COLUMNS}
-               FROM part
-               WHERE session_id = ?
-               AND json_extract(data, '$.type') = 'step-finish'
-               ORDER BY time_created DESC
-               LIMIT 1`
-            ).get(row.id) as StepFinishRow | undefined
+            const steps = querySteps(db, row.id, v2, 'DESC', 1)
+            const stepFinish = steps[0]
 
             if (stepFinish && stepFinish.total_tokens) {
               contextUsed = stepFinish.total_tokens
@@ -343,16 +427,11 @@ export async function getAllStepFinishBlocksForSession(sessionId: string): Promi
   let db: ReturnType<typeof openDb> | null = null
   try {
     db = openDb()
-    const sessionRow = db.prepare(`SELECT model FROM session WHERE id = ?`).get(sessionId) as { model: string | null } | undefined
+    const v2 = hasOcV2(db)
+    const sessionRow = db.prepare(`SELECT model FROM ${ocSessionTable(db)} WHERE id = ?`).get(sessionId) as { model: string | null } | undefined
     const modelId = parseModel(sessionRow?.model ?? null)
 
-    const rows = db.prepare(
-      `SELECT ${STEP_FINISH_COLUMNS}
-       FROM part
-       WHERE session_id = ?
-       AND json_extract(data, '$.type') = 'step-finish'
-       ORDER BY time_created ASC`
-    ).all(sessionId) as StepFinishRow[]
+    const rows = querySteps(db, sessionId, v2, 'ASC')
 
     const blocks = rows
       .filter(r => r.total_tokens)
@@ -371,7 +450,7 @@ export async function getAllStepFinishBlocksForSession(sessionId: string): Promi
 export function isSessionArchived(sessionId: string): boolean {
   try {
     const db = openDb()
-    const row = db.prepare('SELECT time_archived FROM session WHERE id = ?').get(sessionId) as { time_archived: number | null } | undefined
+    const row = db.prepare(`SELECT time_archived FROM ${ocSessionTable(db)} WHERE id = ?`).get(sessionId) as { time_archived: number | null } | undefined
     db.close()
     return row === undefined || row.time_archived !== null
   } catch {

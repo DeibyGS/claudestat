@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { dbOps } from '../db'
 import { Router, type Request, type Response } from 'express'
 import { getOpencodeDir, getOpencodeDb } from '../paths'
+import { ocSessionTable } from '../watchers/oc-schema'
 import { estimateTokensFromToolCounts, estimateCost, findPricing } from '../model-pricing'
 
 export const orchestrationRouter = Router()
@@ -846,7 +847,7 @@ function buildCycles(cc: OrchEvent[], oc: OrchEvent[], projectPath: string, spec
 function readOcTokensFromDb(sessionId: string): { input: number; output: number } | null {
   try {
     const db = new DatabaseSync(getOpencodeDb(), { readOnly: true })
-    const row = db.prepare('SELECT tokens_input, tokens_output FROM session WHERE id = ?').get(sessionId) as { tokens_input: number; tokens_output: number } | undefined
+    const row = db.prepare(`SELECT tokens_input, tokens_output FROM ${ocSessionTable(db)} WHERE id = ?`).get(sessionId) as { tokens_input: number; tokens_output: number } | undefined
     db.close()
     if (!row || (row.tokens_input === 0 && row.tokens_output === 0)) return null
     return { input: row.tokens_input ?? 0, output: row.tokens_output ?? 0 }
@@ -856,7 +857,7 @@ function readOcTokensFromDb(sessionId: string): { input: number; output: number 
 function readOcModelFromDb(sessionId: string): string | null {
   try {
     const db = new DatabaseSync(getOpencodeDb(), { readOnly: true })
-    const row = db.prepare('SELECT model FROM session WHERE id = ?').get(sessionId) as { model: string } | undefined
+    const row = db.prepare(`SELECT model FROM ${ocSessionTable(db)} WHERE id = ?`).get(sessionId) as { model: string } | undefined
     db.close()
     return row?.model ?? null
   } catch { return null }

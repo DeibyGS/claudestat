@@ -1,4 +1,5 @@
 import type { CostInfo, QuotaData, TraceEvent } from '../../types'
+import { modelLabel } from '../../lib/modelLabel'
 
 // ─── Precios por millón de tokens ─────────────────────────────────────────────
 export const PRICE_PER_M = {
@@ -21,9 +22,7 @@ export function getModelPrice(model: string): number {
 }
 
 export function getModelShortName(model: string): string {
-  if (model.includes('opus'))  return 'Opus'
-  if (model.includes('haiku')) return 'Haiku'
-  return 'Sonnet'
+  return modelLabel(model)
 }
 
 // ─── Interfaces ────────────────────────────────────────────────────────────────

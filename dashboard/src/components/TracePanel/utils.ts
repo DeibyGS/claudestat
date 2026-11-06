@@ -1,4 +1,5 @@
 import type { TraceEvent } from '../../types'
+import { modelLabel, modelColor } from '../../lib/modelLabel'
 import {
   FileText, FilePlus, Pencil, Terminal, FolderSearch, Search,
   Globe, Bot, Zap, ListTodo, ClipboardList, Wrench,
@@ -269,11 +270,7 @@ export function summaryText(stats: ToolStats): string {
 }
 
 export function fmtModelBlock(model: string): { name: string; color: string } {
-  if (model.includes('opus'))   return { name: 'Opus 4.6',   color: '#d29922' }
-  if (model.includes('haiku'))  return { name: 'Haiku 4.5',  color: '#3fb950' }
-  if (model.includes('sonnet')) return { name: 'Sonnet 4.6', color: '#58a6ff' }
-  const raw = model.replace('claude-', '').split('-').slice(0, 2).join(' ')
-  return { name: raw.charAt(0).toUpperCase() + raw.slice(1), color: '#8b949e' }
+  return { name: modelLabel(model), color: modelColor(model) }
 }
 
 export function getSkillName(ev: TraceEvent): string {

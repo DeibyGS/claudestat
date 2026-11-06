@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { SessionMode } from '../types'
+import { modelLabel } from '../lib/modelLabel'
 
 // ── Formatters ──
 
@@ -34,7 +35,7 @@ export function fmtCost(usd: number): string {
 // ── Model helpers ──
 
 export function shortModel(m: string): string {
-  return m.replace(/^claude-/, '').replace(/-\d{8}$/, '').replace(/^opencode-go\//, '')
+  return modelLabel(m)
 }
 
 // ── Source helpers ──

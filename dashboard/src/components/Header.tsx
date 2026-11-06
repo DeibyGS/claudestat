@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Radio, History, FolderGit2, FolderOpen, Zap, Settings2, Wrench, Layers, TrendingUp, Trophy, Workflow, type LucideIcon } from 'lucide-react'
 import type { AppState, TraceEvent, QuotaData, ActiveSource } from '../types'
+import { modelStyle } from '../lib/modelLabel'
 import { Tip } from './Tip'
 
 // Inject keyframes once (tooltip fade-in + tool pulse)
@@ -497,19 +498,7 @@ function UptimeBadge({ startedAt }: { startedAt: number }) {
 }
 
 function fmtModel(model?: string): { name: string; color: string; bg: string } | null {
-  if (!model) return null
-  const m = model.includes('/') ? (model.split('/').pop() ?? model) : model
-  if (m.includes('opus'))     return { name: 'Opus 4.6',    color: '#d29922', bg: '#d2992212' }
-  if (m.includes('haiku'))    return { name: 'Haiku 4.5',   color: '#3fb950', bg: '#3fb95012' }
-  if (m.includes('sonnet'))   return { name: 'Sonnet 4.6',  color: '#58a6ff', bg: '#58a6ff12' }
-  if (m.includes('deepseek')) return { name: 'DeepSeek',    color: '#c9a0ff', bg: '#c9a0ff12' }
-  if (m.includes('gpt'))      return { name: 'GPT',         color: '#74aa9c', bg: '#74aa9c12' }
-  if (m.includes('qwen'))     return { name: 'Qwen',        color: '#f0883e', bg: '#f0883e12' }
-  if (m.includes('gemini'))   return { name: 'Gemini',      color: '#4285f4', bg: '#4285f412' }
-  if (m.includes('llama'))    return { name: 'Llama',       color: '#b39ddb', bg: '#b39ddb12' }
-  if (m.includes('glm'))      return { name: 'GLM',         color: '#00bcd4', bg: '#00bcd412' }
-  const parts = m.replace('claude-', '').split('-').slice(0, 2).join(' ')
-  return { name: parts || m, color: '#8b949e', bg: '#8b949e12' }
+  return modelStyle(model)
 }
 
 function ContextBar({ pct, color }: { pct: number; color: string }) {

@@ -3,6 +3,7 @@ import type { QuotaData } from '../../../types'
 import { Tip } from '../../Tip'
 import { PRICE_PER_M, fmtTok, fmtUsd } from '../utils'
 import { Card, CardHeader } from './StatusCard'
+import { modelLabel } from '../../../lib/modelLabel'
 
 const MODEL_PALETTE = [
   '#58a6ff', '#3fb950', '#d29922', '#c9a0ff', '#f0883e',
@@ -17,7 +18,7 @@ function modelColor(key: string): string {
 }
 
 function shortModel(m: string): string {
-  return m.replace(/^claude-/, '').replace(/-\d{8}$/, '').replace(/^opencode-go\//, '')
+  return modelLabel(m)
 }
 
 function ccModelKey(m: string): string | undefined {

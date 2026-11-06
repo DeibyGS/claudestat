@@ -3,6 +3,7 @@ import { Bot, Flame, Activity } from 'lucide-react'
 import type { CostInfo, DayStats, SubAgentSession } from '../../types'
 import type { TraceEvent } from '../../types'
 import { Tip } from '../Tip'
+import { modelLabel, modelColor } from '../../lib/modelLabel'
 import {
   fmtUsd, fmtTok, estimateCacheSavings,
   EFFICIENCY_ALERT_COLOR,
@@ -219,8 +220,8 @@ export function SidebarStats({ cost, weeklyData, events, hiddenCost, prompts = [
           </div>
           {subAgentSessions.map(s => {
             const m = s.dominant_model
-            const mColor = m?.includes('opus') ? '#d29922' : m?.includes('haiku') ? '#3fb950' : '#58a6ff'
-            const mLabel = m?.includes('opus') ? 'Opus' : m?.includes('haiku') ? 'Haiku' : 'Sonnet'
+            const mColor = modelColor(m)
+            const mLabel = modelLabel(m)
             return (
               <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                 <span style={{ fontSize: 9, color: mColor, background: mColor + '18', border: `1px solid ${mColor}30`, borderRadius: 3, padding: '1px 5px', flexShrink: 0 }}>

@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { Tip } from './Tip'
 import type { QuotaData, CostInfo, TraceEvent, ClaudeStatsData, DailyActivity } from '../types'
+import { modelLabel } from '../lib/modelLabel'
 import { UsageView } from './UsageView'
 import { YearHeatmap } from './YearHeatmap'
 import { fmtCost, fmtTok, fmtHours } from './shared'
@@ -58,7 +59,7 @@ function modelColor(key: string): string {
 }
 
 function shortModel(m: string): string {
-  return m.replace(/^claude-/, '').replace(/-\d{8}$/, '').replace(/^opencode-go\//, '')
+  return modelLabel(m)
 }
 
 

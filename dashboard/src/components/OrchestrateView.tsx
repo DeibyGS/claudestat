@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { LineChart as RechartLine, Line, XAxis, YAxis, Tooltip as RechartTooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
 import type { OrchTimeline, OrchCycle, OrchCycleTrace, OrchRunSummary, OrchAggregates, GanttBar, SessionTableRow, CycleToolTrend, DiffResult, CycleDiff, CommandLogEntry, FileChangeEntry, OrchEvent } from '../types'
+import { modelLabel } from '../lib/modelLabel'
 
 const CC_COLOR  = '#58a6ff'
 const OC_COLOR  = '#3fb950'
@@ -36,8 +37,7 @@ function fmtTokens(n: number | null): string {
 
 function fmtModel(m: string | null): string {
   if (!m) return ''
-  const name = m.split('/').pop() ?? m
-  return name.replace(/^claude-|-\d{8}$|-latest$/g, '')
+  return modelLabel(m)
 }
 
 function fmtDuration(secs: number | null): string {

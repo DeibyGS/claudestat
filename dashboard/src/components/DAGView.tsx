@@ -6,6 +6,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import type { CostInfo, SubAgentSession, SessionState, TraceEvent } from '../types'
 import { shortModel } from './shared'
+import { modelColor as modelColorFor } from '../lib/modelLabel'
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -21,11 +22,7 @@ interface Props {
 
 function modelColor(model?: string): string {
   if (!model) return '#7d8590'
-  if (model.includes('opus'))     return '#d29922'
-  if (model.includes('haiku'))    return '#3fb950'
-  if (model.includes('sonnet'))   return '#58a6ff'
-  if (model.includes('deepseek')) return '#c9a0ff'
-  return '#8b949e'
+  return modelColorFor(model)
 }
 
 function fmtCostNode(usd?: number): string {

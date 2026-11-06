@@ -5,6 +5,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import type { CostInfo, MetaStats, MetaAlert, QuotaData, SessionState } from '../../types'
+import { modelLabel, modelColor } from '../../lib/modelLabel'
 
 export interface OcModelUsage {
   model:    string
@@ -285,15 +286,8 @@ export function SidebarKPI({ cost, quota, sessionState = 'idle', meta, ocModelUs
           <div style={{ fontSize: 10, color: '#484f58', marginBottom: 5 }}>Models (7d)</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {ocModelUsage!.slice(0, 4).map(m => {
-              const mc = m.model.includes('opus') ? '#d29922'
-                : m.model.includes('haiku') ? '#3fb950'
-                : m.model.includes('deepseek') ? '#bc8cff'
-                : '#58a6ff'
-              const ml = m.model.includes('opus') ? 'Opus'
-                : m.model.includes('haiku') ? 'Haiku'
-                : m.model.includes('deepseek') ? 'DeepSeek'
-                : m.model.includes('mimo') ? 'Mimo'
-                : m.model.length > 12 ? m.model.slice(0, 12) + '…' : m.model
+              const mc = modelColor(m.model)
+              const ml = modelLabel(m.model)
               return (
                 <div key={m.model} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                   <span style={{ color: mc, fontSize: 9, fontWeight: 700, width: 52, flexShrink: 0 }}>{ml}</span>

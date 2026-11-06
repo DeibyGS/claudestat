@@ -2,6 +2,7 @@ import { Activity, BrainCircuit, Cpu, Flame, Info, Clock, GitBranch } from 'luci
 import type { QuotaData, CostInfo } from '../../../types'
 import { Tip } from '../../Tip'
 import { fmtTok, fmtUsd } from '../utils'
+import { modelLabel } from '../../../lib/modelLabel'
 
 const SOURCE_LABELS: Record<string, string> = {
   'claude-code': 'Claude Code',
@@ -84,9 +85,7 @@ export function StatusCard({ quota, cost }: { quota: QuotaData; cost?: CostInfo 
   const defaultModel = source === 'opencode' ? 'deepseek-v4-flash-free' : 'claude-sonnet-4-6'
   const model    = rawModel || defaultModel
   const burnRate = quota.burnRateTokensPerMin ?? 0
-  const shortModel = model
-    ? model.replace(/^claude-/, '').replace(/-\d{8}$/, '').replace(/^opencode-go\//, '')
-    : null
+  const shortModel = model ? modelLabel(model) : null
 
   // Context is estimated for OpenCode
   const isContextEstimated = source === 'opencode'

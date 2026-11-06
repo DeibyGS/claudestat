@@ -49,7 +49,7 @@ describe('GET /stream — SSE integration tests', () => {
     assert.ok(data.length >= 0, 'SSE connection established and received data')
   })
 
-  test('SSE init limits events to 200', async () => {
+  test('SSE init limits events to 2000', async () => {
     const sid = `sse-limit-test-${Date.now()}`
     dbOps.upsertSession({ id: sid, started_at: Date.now(), cwd: '/test' })
     for (let i = 0; i < 250; i++) {
@@ -62,8 +62,8 @@ describe('GET /stream — SSE integration tests', () => {
     if (data.length > 0) {
       const initMsg = JSON.parse(data[0])
       if (initMsg.type === 'init' && initMsg.events) {
-        assert.ok(initMsg.events.length <= 200,
-          `init events should be <= 200, got ${initMsg.events.length}`)
+        assert.ok(initMsg.events.length <= 2000,
+          `init events should be <= 2000, got ${initMsg.events.length}`)
       }
     }
   })

@@ -9,8 +9,78 @@ permissions:
   contents: write
 
 jobs:
+  gate:
+    name: Release gate (version, changelog, tests, build)
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: package.json matches the tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          echo "tag=$VERSION  package.json=$PKG"
+          if [ "$PKG" != "$VERSION" ]; then
+            echo "::error::package.json ($PKG) does not match the tag ($VERSION)"
+            exit 1
+          fi
+
+      - name: package-lock.json is in sync
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          LOCK="$(node -p "require('./package-lock.json').version")"
+          LOCK_PKG="$(node -p "require('./package-lock.json').packages[''].version")"
+          echo "package.json=$VERSION  lock=$LOCK  lock.packages['']=$LOCK_PKG"
+          if [ "$LOCK" != "$VERSION" ] || [ "$LOCK_PKG" != "$VERSION" ]; then
+            echo "::error::package-lock.json ($LOCK / $LOCK_PKG) does not match package.json ($VERSION)"
+            exit 1
+          fi
+
+      - name: CHANGELOG has an entry for the version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! grep -q "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$VERSION]' section"
+            exit 1
+          fi
+
+      - name: Version is not already on npm
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if npm view "@statforge/claudestat@$VERSION" version >/dev/null 2>&1; then
+            echo "::error::$VERSION is already published on npm — bump package.json first"
+            exit 1
+          fi
+          echo "$VERSION is free to publish"
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack the artifact
+        run: |
+          npm pack --json > npm-pack.json
+          node -e "const p=require('./npm-pack.json')[0];console.log('filename='+p.filename);console.log('integrity='+p.integrity)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-pack-manifest
+          path: npm-pack.json
+
   npm:
     name: Publish to npm
+    needs: gate
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
@@ -38,6 +108,7 @@ jobs:
 
   binary:
     name: Build binary (${{ matrix.target.name }})
+    needs: gate
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -106,9 +177,36 @@ jobs:
           name: claudestat-${{ matrix.target.name }}
           path: ./bin/claudestat-${{ matrix.target.name }}*
 
+  verify:
+    name: Verify npm version matches the tag
+    needs: [gate, npm]
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: npm latest equals the tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PUBLISHED=""
+          for i in 1 2 3 4 5 6; do
+            PUBLISHED="$(npm view @statforge/claudestat version 2>/dev/null || true)"
+            if [ "$PUBLISHED" = "$VERSION" ]; then
+              echo "npm latest=$PUBLISHED matches tag=$VERSION"
+              exit 0
+            fi
+            echo "attempt $i/6: npm latest='$PUBLISHED', expected '$VERSION' (waiting for registry)"
+            sleep 10
+          done
+          echo "::error::npm latest is '$PUBLISHED', expected $VERSION"
+          exit 1
+
   release:
     name: Create GitHub Release
-    needs: [binary]
+    needs: [binary, verify]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -118,8 +216,18 @@ jobs:
         with:
           path: ./artifacts
 
+      - name: Extract release notes from CHANGELOG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v hdr="## [$VERSION]" 'index($0,hdr)==1{f=1;next} f && /^## \[/{exit} f' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $VERSION"
+            exit 1
+          fi
+          cat release-notes.md
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           files: ./artifacts/**/*
-          generate_release_notes: true
+          body_path: ./release-notes.md

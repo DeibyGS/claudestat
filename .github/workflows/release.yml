@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   gate:
@@ -88,9 +89,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-          cache: 'npm'
 
       - run: npm ci
 
@@ -100,6 +100,16 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@latest
+          NPM_VERSION="$(npm --version)"
+          echo "npm $NPM_VERSION"
+          if [ "$(printf '%s\n' 11.5.1 "$NPM_VERSION" | sort -V | head -1)" != "11.5.1" ]; then
+            echo "::error::trusted publishing requires npm >= 11.5.1, found $NPM_VERSION"
+            exit 1
+          fi
 
       - name: Publish
         run: npm publish --access public

@@ -202,16 +202,18 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           PUBLISHED=""
-          for i in 1 2 3 4 5 6; do
-            PUBLISHED="$(npm view @statforge/claudestat version 2>/dev/null || true)"
-            if [ "$PUBLISHED" = "$VERSION" ]; then
-              echo "npm latest=$PUBLISHED matches tag=$VERSION"
+          LATEST=""
+          for i in $(seq 1 12); do
+            PUBLISHED="$(npm view "@statforge/claudestat@${VERSION}" version --prefer-online 2>/dev/null || true)"
+            LATEST="$(npm view @statforge/claudestat version --prefer-online 2>/dev/null || true)"
+            if [ "$PUBLISHED" = "$VERSION" ] && [ "$LATEST" = "$VERSION" ]; then
+              echo "npm $VERSION is published and latest=$LATEST"
               exit 0
             fi
-            echo "attempt $i/6: npm latest='$PUBLISHED', expected '$VERSION' (waiting for registry)"
-            sleep 10
+            echo "attempt $i/12: $VERSION exists='$PUBLISHED' latest='$LATEST' (waiting up to 3 min for the registry)"
+            sleep 15
           done
-          echo "::error::npm latest is '$PUBLISHED', expected $VERSION"
+          echo "::error::npm latest is '$LATEST', expected $VERSION"
           exit 1
 
   release:
@@ -221,10 +223,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download binary artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
+          pattern: claudestat-*
 
       - name: Extract release notes from CHANGELOG
         run: |

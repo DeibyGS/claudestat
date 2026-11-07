@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.0] - 2026-11-07
+
+### Fixed
+
+- **OpenCode sessions missing from Live** — the watcher only understood the OpenCode v1 event schema and silently skipped everything on OpenCode ≥ 2.0; it now falls back to the v2 schema (#85)
+- **Session costs overstated by about 2.4x** — Claude Code writes one JSONL line per content block of the same API call (`thinking`, `text`, `tool_use`), and every line repeats `message.id` plus the full `usage`; all five JSONL consumers summed each line, so one API call logged as three blocks was billed three times. Each `message.id` is now counted exactly once (#87)
+- **`cost-state` totals ignored** — the `totalCostUSD` line Claude Code writes is now the authoritative session total instead of the local estimate (#87)
+- **Wrong model prices** — `claude-opus-4-6` billed at 15/75 (retired Opus 4.1 pricing; actual 5/25) and `claude-haiku-4-5` at 0.80/4 (Haiku 3.5 pricing; actual 1/5), while `claude-opus-5-5` and `claude-sonnet-5` had no entry at all and fell back to Sonnet defaults (#87)
+- **Context KPI rendered 483%** — `claude-opus-5-5` was missing from `KNOWN_CONTEXT_WINDOWS` and fell back to 200K; added at 967K, Claude Code's auto-compact window (#87)
+- **Duplicated assistant fragments in the trace** — content-block lines belonging to one API call are now merged into a single turn (#87)
+- **Model labels derived in 11 separate places** — name and color logic consolidated into one source, so a new model ID shows up everywhere at once (#86)
+
+### Changed
+
+- **One pricing source** — pricing moved to `src/model-pricing.ts`, a pure module shared by the daemon and the dashboard, replacing the hardcoded price tables in `UsageView/utils`, `StatsFooter`, `TracePanel/utils` and `KPIBar` (#87)
+- **Unknown model versions resolve by family** — a future `claude-opus-*` now bills at Opus prices instead of silently falling back to Sonnet (#87)
+
 ## [1.21.2] - 2026-08-25
 
 ### Fixed

@@ -157,6 +157,7 @@ Then just ask:
 ## Features
 
 - **Live tool trace** — every call with duration and token cost as it runs
+- **Trustworthy cost** — every API call counted once (Claude Code writes one JSONL line per content block with the same usage), priced from Anthropic's official rates and reconciled against Claude Code's own `cost-state` total
 - **OpenCode support** — same live dashboard for OpenCode sessions (tool calls, prompts, model, intent)
 - **Quota guard** — alerts at 70%, 85%, 95%; optional kill switch blocks new sessions at X%
 - **Loop detector** — flags context thrashing with estimated waste cost
@@ -323,7 +324,7 @@ Click between **Claude Code** and **OpenCode** to see each session's real-time v
 | Per-block cost breakdown | ✅ | ✅ |
 | Quota / context window | ✅ | — |
 
-OpenCode data is read directly from its local SQLite database — no configuration required.
+OpenCode data is read directly from its local SQLite database — no configuration required. Both the v1 and v2 (OpenCode ≥ 2.0) schemas are read, so sessions keep appearing after an OpenCode upgrade.
 
 ---
 

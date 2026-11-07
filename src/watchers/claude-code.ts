@@ -10,7 +10,8 @@ import fs   from 'fs/promises'
 import fsSync from 'fs'
 import { type WatcherAdapter, type ParsedEvent, registerAdapter } from './adapter'
 import { getClaudeDir } from '../paths'
-import { calcCost, getContextWindow, PRICING, DEFAULT_PRICING, DEFAULT_MODEL } from '../pricing'
+import { calcCost, getContextWindow, pricingFor, DEFAULT_MODEL } from '../pricing'
+import { isDuplicateMessageId, readCostStateUsd } from '../jsonl'
 import type { CostUpdate } from '../db'
 import type { BlockCostEntry } from '../db'
 
@@ -24,9 +25,11 @@ interface UsageEntry {
 }
 
 interface FileState {
-  offset:     number
-  lastAccess: number
-  totals:     CostUpdate
+  offset:       number
+  lastAccess:   number
+  totals:       CostUpdate
+  seenIds:      Set<string>
+  costStateUsd?: number
 }
 
 const fileOffsets = new Map<string, FileState>()
@@ -39,7 +42,7 @@ function cleanupStaleOffsets() {
   }
 }
 
-async function processJSONL(filePath: string): Promise<CostUpdate | null> {
+export async function processJSONL(filePath: string): Promise<CostUpdate | null> {
   let fd: Awaited<ReturnType<typeof fs.open>> | undefined
   try {
     fd = await fs.open(filePath, 'r')
@@ -64,6 +67,8 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
 
     // Accumulate on top of previous totals (or start from zero on first read)
     const prevTotals = state?.totals
+    const seenIds = state?.seenIds ?? new Set<string>()
+    let costStateUsd = state?.costStateUsd
     const totals: CostUpdate = {
       input_tokens:   prevTotals?.input_tokens   ?? 0,
       output_tokens:  prevTotals?.output_tokens  ?? 0,
@@ -89,9 +94,14 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
       if (!line) continue
       try {
         const obj = JSON.parse(line)
+        const costState = readCostStateUsd(obj)
+        if (costState !== undefined) { costStateUsd = costState; continue }
         if (obj.type !== 'assistant') continue
         const msg = obj.message
         if (!msg?.usage) continue
+
+        // Same API call is logged once per content block (repeated id + usage)
+        if (isDuplicateMessageId(msg.id, seenIds)) continue
 
         const usage = msg.usage as UsageEntry
         const model = msg.model ?? DEFAULT_MODEL
@@ -115,7 +125,7 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
                                + (usage.cache_creation_input_tokens ?? 0)
         totals.context_window  = getContextWindow(model)
 
-        const price = PRICING[model] ?? DEFAULT_PRICING
+        const price = pricingFor(model)
         const M     = 1_000_000
         const inp   = usage.input_tokens ?? 0
         const cacheRead = usage.cache_read_input_tokens ?? 0
@@ -144,7 +154,10 @@ async function processJSONL(filePath: string): Promise<CostUpdate | null> {
       }
     }
 
-    fileOffsets.set(filePath, { offset: currentSize, lastAccess: Date.now(), totals })
+    // Claude Code's own cost-state line is the authoritative session total
+    if (costStateUsd !== undefined) totals.cost_usd = costStateUsd
+
+    fileOffsets.set(filePath, { offset: currentSize, lastAccess: Date.now(), totals, seenIds, costStateUsd })
     return totals
   } catch {
     return null
@@ -232,11 +245,27 @@ export async function findJSONLForSession(sessionId: string): Promise<string | n
   return null
 }
 
+/** Extract text/tool_use info from a message content array (any shape). */
+function collectBlocks(content: unknown): { outputChars: number; textParts: string[]; toolCalls: string[] } {
+  const out = { outputChars: 0, textParts: [] as string[], toolCalls: [] as string[] }
+  if (!Array.isArray(content)) return out
+  for (const block of content as any[]) {
+    if (block?.type === 'text' && typeof block.text === 'string') {
+      out.outputChars += block.text.length
+      out.textParts.push(block.text)
+    } else if (block?.type === 'tool_use' && typeof block.name === 'string') {
+      out.toolCalls.push(block.name)
+    }
+  }
+  return out
+}
+
 export async function extractSemanticData(filePath: string): Promise<SemanticData | null> {
   try {
     const content = await fs.readFile(filePath, 'utf8')
     const turns: AssistantTurn[] = []
     let pendingTurn: AssistantTurn | null = null
+    let lastAssistantId: string | undefined
     let totalErrorBlocks = 0
     let turnIndex = 0
 
@@ -247,23 +276,26 @@ export async function extractSemanticData(filePath: string): Promise<SemanticDat
         const obj = JSON.parse(line)
 
         if (obj.type === 'assistant') {
+          const msgId = obj.message?.id
+          // Same API call logged once per content block → merge into current turn
+          if (typeof msgId === 'string' && msgId === lastAssistantId && pendingTurn) {
+            const { outputChars, textParts, toolCalls } = collectBlocks(obj.message?.content)
+            pendingTurn.output_chars += outputChars
+            if (textParts.length > 0) {
+              const merged = (pendingTurn.text_preview ? pendingTurn.text_preview + '\n' : '') + textParts.join('\n')
+              pendingTurn.text_preview = merged.slice(0, 500)
+            }
+            pendingTurn.tool_calls.push(...toolCalls)
+            continue
+          }
+          lastAssistantId = typeof msgId === 'string' ? msgId : undefined
+
           if (pendingTurn) turns.push(pendingTurn)
 
           const msgContent = obj.message?.content
           if (!Array.isArray(msgContent)) { pendingTurn = null; continue }
 
-          let outputChars = 0
-          const textParts: string[] = []
-          const toolCalls: string[] = []
-
-          for (const block of msgContent as any[]) {
-            if (block?.type === 'text' && typeof block.text === 'string') {
-              outputChars += block.text.length
-              textParts.push(block.text)
-            } else if (block?.type === 'tool_use' && typeof block.name === 'string') {
-              toolCalls.push(block.name)
-            }
-          }
+          const { outputChars, textParts, toolCalls } = collectBlocks(msgContent)
 
           let ts: number | undefined
           if (obj.timestamp) {
@@ -347,6 +379,7 @@ export async function getAllBlockCostsForSession(sessionId: string): Promise<Blo
       try { await fs.access(filePath) } catch { continue }
       const result: BlockCostEntry[] = []
       let current: BlockCostEntry | null = null
+      const seenIds = new Set<string>()
       const content = await fs.readFile(filePath, 'utf8')
       for (const raw of content.split('\n')) {
         const line = raw.trim()
@@ -368,7 +401,9 @@ export async function getAllBlockCostsForSession(sessionId: string): Promise<Blo
             const usage = obj.message?.usage
             const model = (obj.message?.model as string) ?? DEFAULT_MODEL
             if (!usage) continue
-            const price = PRICING[model] ?? DEFAULT_PRICING
+            // Same API call logged once per content block — usage already counted
+            if (isDuplicateMessageId(obj.message?.id, seenIds)) continue
+            const price = pricingFor(model)
             const M = 1_000_000
             const inUsd = ((usage.input_tokens ?? 0) * price.input + (usage.cache_read_input_tokens ?? 0) * price.cacheRead + (usage.cache_creation_input_tokens ?? 0) * price.cacheCreate) / M
             const outUsd = ((usage.output_tokens ?? 0) * price.output) / M

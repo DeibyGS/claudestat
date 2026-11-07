@@ -10,6 +10,7 @@ import path from 'path'
 import os   from 'os'
 import { getClaudeDir, encodeClaudePath, isWindows } from './paths'
 import { calcCost, DEFAULT_MODEL } from './pricing'
+import { isDuplicateMessageId, readCostStateUsd } from './jsonl'
 
 export interface HandoffProgress {
   done:     number
@@ -191,20 +192,26 @@ export function getJSONLStats(encodedDir: string): JSONLStats {
 
         const content = fs.readFileSync(filePath, 'utf8')
         let hasAssistant = false
+        const seenIds = new Set<string>()
+        let fileCost = 0
+        let costStateUsd: number | undefined
 
         for (const raw of content.split('\n')) {
           const line = raw.trim()
           if (!line) continue
           try {
             const obj = JSON.parse(line)
+            const costState = readCostStateUsd(obj)
+            if (costState !== undefined) { costStateUsd = costState; continue }
             if (obj.type !== 'assistant') continue
             const usage = obj.message?.usage
             const model = (obj.message?.model as string) ?? DEFAULT_MODEL
             if (!usage) continue
+            if (isDuplicateMessageId(obj.message?.id, seenIds)) continue
 
             hasAssistant = true
             const tokens = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0)
-            totalCost   += calcCost(model, usage)
+            fileCost    += calcCost(model, usage)
             totalTokens += tokens
             if      (model.includes('opus'))  modelUsage.opusTokens   += tokens
             else if (model.includes('haiku')) modelUsage.haikuTokens  += tokens
@@ -212,7 +219,10 @@ export function getJSONLStats(encodedDir: string): JSONLStats {
           } catch { /* línea malformada */ }
         }
 
-        if (hasAssistant) sessionCount++
+        if (hasAssistant) {
+          sessionCount++
+          totalCost += costStateUsd ?? fileCost
+        }
       } catch { /* archivo inaccesible */ }
     }
   } catch { /* directorio no encontrado */ }
@@ -302,13 +312,18 @@ function getJSONLStatsByProject(dirPath: string): Map<string, JSONLStats> {
       // ── Calcular coste y tokens de este JSONL completo ───────────────────
       let cost = 0, tokens = 0, hasAssistant = false
       const mu: ModelUsage = { opusTokens: 0, sonnetTokens: 0, haikuTokens: 0 }
+      const seenIds = new Set<string>()
+      let costStateUsd: number | undefined
       for (const raw of lines) {
         try {
           const obj = JSON.parse(raw.trim())
+          const costState = readCostStateUsd(obj)
+          if (costState !== undefined) { costStateUsd = costState; continue }
           if (obj.type !== 'assistant') continue
           const usage = obj.message?.usage
           const model = obj.message?.model ?? DEFAULT_MODEL
           if (!usage) continue
+          if (isDuplicateMessageId(obj.message?.id, seenIds)) continue
           hasAssistant = true
           const t = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0)
           cost   += calcCost(model, usage)
@@ -319,6 +334,7 @@ function getJSONLStatsByProject(dirPath: string): Map<string, JSONLStats> {
         } catch { /* ignorar */ }
       }
       if (!hasAssistant) continue
+      if (costStateUsd !== undefined) cost = costStateUsd
 
       // ── Acumular en el mapa de resultados ────────────────────────────────
       const existing = result.get(projectRoot)

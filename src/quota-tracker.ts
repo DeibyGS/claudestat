@@ -20,6 +20,7 @@ import path from 'path'
 import { readClaudeAuth, subscriptionTypeToPlan, getOAuthAccessToken } from './claude-auth'
 import { getClaudeDir, getClaudestatDir } from './paths'
 import { DEFAULT_MODEL } from './pricing'
+import { isDuplicateMessageId } from './jsonl'
 
 // ─── Planes y límites ─────────────────────────────────────────────────────────
 
@@ -98,6 +99,7 @@ interface ParsedEntry {
 
 function parseJSONLFile(filePath: string): ParsedEntry[] {
   const entries: ParsedEntry[] = []
+  const seenIds = new Set<string>()
   let content: string
   try { content = fs.readFileSync(filePath, 'utf8') }
   catch { return entries }
@@ -133,6 +135,8 @@ function parseJSONLFile(filePath: string): ParsedEntry[] {
 
       // Respuestas del asistente: tienen datos de uso de tokens
       if (obj.type === 'assistant') {
+        // Misma llamada API repetida por content block → contar una sola vez
+        if (isDuplicateMessageId(obj.message?.id, seenIds)) continue
         const usage = obj.message?.usage
         const model = (obj.message?.model as string | undefined) ?? DEFAULT_MODEL
         entries.push({

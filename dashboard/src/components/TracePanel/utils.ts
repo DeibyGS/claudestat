@@ -1,5 +1,6 @@
 import type { TraceEvent } from '../../types'
 import { modelLabel, modelColor } from '../../lib/modelLabel'
+import { cacheSavingsPerM } from '../../lib/pricing'
 import {
   FileText, FilePlus, Pencil, Terminal, FolderSearch, Search,
   Globe, Bot, Zap, ListTodo, ClipboardList, Wrench,
@@ -178,9 +179,7 @@ export function fmtTok(n: number): string {
 
 export function estimateCacheSavings(cacheRead: number, model?: string): number {
   if (cacheRead === 0) return 0
-  if (model?.includes('opus'))  return cacheRead * 13.50 / 1_000_000
-  if (model?.includes('haiku')) return cacheRead *  0.72 / 1_000_000
-  return cacheRead * 2.70 / 1_000_000
+  return cacheRead * cacheSavingsPerM(model) / 1_000_000
 }
 
 export function relTs(base: number, ts: number): string {

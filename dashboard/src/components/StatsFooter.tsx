@@ -5,6 +5,7 @@ import {
   Globe, Bot, Zap, ListTodo, ClipboardList, Wrench, type LucideIcon,
 } from 'lucide-react'
 import type { CostInfo, DayStats, TraceEvent } from '../types'
+import { cacheSavingsPerM, pricingFor } from '../lib/pricing'
 
 interface Props {
   cost?:      CostInfo
@@ -43,9 +44,7 @@ function fmtCost(usd: number): string {
  */
 function estimateCacheSavings(cacheRead: number, model?: string): number {
   if (cacheRead === 0) return 0
-  if (model?.includes('opus'))  return cacheRead * 13.50 / 1_000_000
-  if (model?.includes('haiku')) return cacheRead *  0.72 / 1_000_000
-  return cacheRead * 2.70 / 1_000_000   // sonnet default
+  return cacheRead * cacheSavingsPerM(model) / 1_000_000
 }
 
 function computeToolCounts(events: TraceEvent[]): { name: string; count: number; color: string }[] {
@@ -156,7 +155,7 @@ function TokenBlock({ cost }: { cost: CostInfo }) {
             padding: '0 8px', height: '100%',
             background: '#3fb95012', borderLeft: '1px solid #3fb95030',
           }}
-          title={`Without cache, those ${fmtTok(cost.cache_read)} context tokens would have cost ${fmtCost(savings + (cost.cache_read * (cost.model?.includes('opus') ? 15 : cost.model?.includes('haiku') ? 0.80 : 3) / 1_000_000))} instead`}
+          title={`Without cache, those ${fmtTok(cost.cache_read)} context tokens would have cost ${fmtCost(savings + (cost.cache_read * pricingFor(cost.model).input / 1_000_000))} instead`}
         >
           <span style={{ color: '#3fb950', fontSize: 10, fontWeight: 700 }}>
             ~{fmtCost(savings)} saved

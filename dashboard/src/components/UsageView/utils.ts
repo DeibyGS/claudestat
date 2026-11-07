@@ -1,24 +1,18 @@
 import type { CostInfo, QuotaData, TraceEvent } from '../../types'
 import { modelLabel } from '../../lib/modelLabel'
+import { blendedPerM, cacheSavingsPerM } from '../../lib/pricing'
 
-// ─── Precios por millón de tokens ─────────────────────────────────────────────
+// ─── Precios por millón de tokens (derivados de src/model-pricing.ts) ─────────
 export const PRICE_PER_M = {
-  sonnet: 6.6,   // blended ~70% input / 30% output
-  haiku:  1.76,
-  opus:   33.0,
+  sonnet: blendedPerM('sonnet'),   // ~70% input / 30% output
+  haiku:  blendedPerM('haiku'),
+  opus:   blendedPerM('opus'),
 }
 
-// Cache savings per million tokens (full input price - cached price)
-export function cacheSavingsPerM(model?: string): number {
-  if (model?.includes('opus'))  return 13.50  // $15/M → $1.50/M cached
-  if (model?.includes('haiku')) return 0.22   // $0.25/M → $0.03/M cached
-  return 2.70                                  // Sonnet: $3/M → $0.30/M cached
-}
+export { cacheSavingsPerM }
 
 export function getModelPrice(model: string): number {
-  if (model.includes('opus'))  return PRICE_PER_M.opus
-  if (model.includes('haiku')) return PRICE_PER_M.haiku
-  return PRICE_PER_M.sonnet
+  return blendedPerM(model)
 }
 
 export function getModelShortName(model: string): string {

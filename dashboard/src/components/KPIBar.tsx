@@ -6,6 +6,10 @@ import {
   CheckCircle2, type LucideIcon,
 } from 'lucide-react'
 import type { MetaStats, MetaSnapshot, MetaAlert, CostInfo, QuotaData, SessionState } from '../types'
+import { pricingFor } from '../lib/pricing'
+
+// Example prices shown in the burn-rate tooltip (derived, never hardcoded)
+const SONNET_PRICE = pricingFor('sonnet')
 
 interface Props {
   meta?:         MetaStats
@@ -303,7 +307,7 @@ function KPIBarInner({ meta, history, cost, quota, sessionState = 'idle' }: Prop
 
       {/* KPI: Consumo tok/min (burn rate) */}
       {quota && quota.burnRateTokensPerMin > 0 && (
-        <div style={S.card} title="Tokens consumed per minute in the last 30 min (input + output).\nSonnet 4.6: ~$3/M input · ~$15/M output. A high value indicates intensive sessions or loops.">
+        <div style={S.card} title={`Tokens consumed per minute in the last 30 min (input + output).\nSonnet: ~$${SONNET_PRICE.input}/M input · ~$${SONNET_PRICE.output}/M output. A high value indicates intensive sessions or loops.`}>
           <div>
             <div style={S.labelRow}>
               <Flame size={10} />

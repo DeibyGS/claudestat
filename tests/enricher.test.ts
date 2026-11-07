@@ -22,8 +22,8 @@ interface ParsedCost {
 
 const PRICING: Record<string, { input: number; output: number; cacheRead: number; cacheCreate: number }> = {
   'claude-sonnet-4-6': { input: 3, output: 15, cacheRead: 0.30, cacheCreate: 3.75 },
-  'claude-opus-4-6':   { input: 15, output: 75, cacheRead: 1.50, cacheCreate: 18.75 },
-  'claude-haiku-4-5':  { input: 0.80, output: 4, cacheRead: 0.08, cacheCreate: 1.00 },
+  'claude-opus-4-6':   { input: 5, output: 25, cacheRead: 0.50, cacheCreate: 6.25 },
+  'claude-haiku-4-5':  { input: 1, output: 5,  cacheRead: 0.10, cacheCreate: 1.25 },
 }
 const DEFAULT_PRICING = PRICING['claude-sonnet-4-6']
 

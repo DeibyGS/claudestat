@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.23.1] - 2026-11-07
+
+### Fixed
+
+- **Release pipeline could publish code that did not match the tag** — the `v1.23.0` tag was cut from a stale checkout, so the GitHub Release and its binaries shipped without the pricing fixes while npm received them from a manual publish. A new `gate` job now blocks any release where `package.json`, `package-lock.json`, the tag or the `CHANGELOG` section disagree, where tests or the build fail, or where the version already exists on npm (#90)
+- **GitHub Release was created before npm was published** — the release now waits for a `verify` job that confirms npm reports the tagged version, and its notes come from the `CHANGELOG` section instead of the auto-generated commit range, which had listed only one of the four PRs in 1.23.0 (#90)
+
+### Changed
+
+- **npm publishes with OIDC trusted publishing** — `id-token: write` and an explicit `npm >= 11.5.1` check replace the long-lived `NPM_TOKEN` as the primary credential (the secret stays as fallback), and provenance attestations are now generated automatically (#91)
+- **README documents the 1.23.0 cost accuracy work**, and the dashboard browser tab no longer says `claudetrace`, the project's old name (#89)
+
 ## [1.23.0] - 2026-11-07
 
 ### Fixed

@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { refreshFromApi, computeQuota, invalidateQuotaCache } from '../src/quota-tracker'
+import { refreshFromApi, computeQuota, invalidateQuotaCache, exceedsPromptLimit } from '../src/quota-tracker'
+import { subscriptionTypeToPlan } from '../src/claude-auth'
 
 // refreshFromApi() se integra con el keychain y la red — en entorno de test
 // no hay token disponible, así que debe terminar silenciosamente sin lanzar.
@@ -37,5 +38,39 @@ describe('computeQuota — integración con apiCache', () => {
     assert.ok(typeof q.weeklyHoursSonnet === 'number',    'weeklyHoursSonnet presente')
     assert.ok(typeof q.cyclePrompts === 'number',         'cyclePrompts presente')
     assert.ok(typeof q.detectedPlan === 'string',         'detectedPlan presente')
+  })
+})
+
+// ─── S8: Team / Enterprise plans ─────────────────────────────────────────────
+
+describe('S8 plan detection — Team / Enterprise', () => {
+  test('subscriptionType team/enterprise maps to its own plan, even with a max rate tier', () => {
+    assert.equal(subscriptionTypeToPlan('team', 'default_claude_max_5x'), 'team')
+    assert.equal(subscriptionTypeToPlan('enterprise', 'unknown'), 'enterprise')
+    assert.equal(subscriptionTypeToPlan('max', 'default_claude_max_20x'), 'max20')  // regression: unchanged
+  })
+
+  test('team/enterprise have no invented local limits: % comes only from the API', () => {
+    for (const plan of ['team', 'enterprise'] as const) {
+      invalidateQuotaCache()
+      const q = computeQuota(plan)
+      assert.equal(q.detectedPlan, plan)
+      assert.equal(q.cycleLimitTokens, 0)
+      assert.equal(q.weeklyLimitSonnet, 0)
+      assert.ok(Number.isFinite(q.cyclePct) && q.cyclePct >= 0 && q.cyclePct <= 100, String(q.cyclePct))
+    }
+  })
+})
+
+describe('S8 — plans without a local prompt limit', () => {
+  test('a 0 limit (team/enterprise) is never "over limit"', () => {
+    assert.equal(exceedsPromptLimit(5, 0), false)
+    assert.equal(exceedsPromptLimit(46, 45), true)   // regression: pro still flags
+  })
+
+  test('team and enterprise can be forced from config', () => {
+    const { validateConfig } = require('../src/config')
+    assert.equal(validateConfig({ plan: 'team' }), null)
+    assert.equal(validateConfig({ plan: 'enterprise' }), null)
   })
 })

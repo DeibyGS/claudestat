@@ -6,7 +6,7 @@ import { Router, type Request, type Response } from 'express'
 import { dbOps }                               from '../db'
 import { analyzeSession, analyzeSemanticLoops, predictSaturation } from '../intelligence'
 import { summarizeSession }                    from '../summarizer'
-import { deriveSessionState, STATE_META }      from '../session-state'
+import { deriveSessionState, STATE_META, setOcLiveState } from '../session-state'
 import { computeQuota, invalidateQuotaCache }  from '../quota-tracker'
 import { CONTEXT_THRESHOLDS }                  from '../pricing'
 import { readConfig, getWarnLevel }            from '../config'
@@ -348,6 +348,8 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
     }
   }
 
+  if (cost.ocState) setOcLiveState(sessionId, cost.ocState, cost.lastTs ?? Date.now())
+
   // S6 — project, branch and tool calls straight from the JSONL (hooks may be off)
   if (cost.cwd || cost.gitBranch) dbOps.updateSessionLocation(sessionId, cost.cwd, cost.gitBranch)
   if (cost.toolUses?.length) {
@@ -361,7 +363,8 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
   }
 
   const events  = dbOps.getSessionEvents(sessionId)
-  const report  = analyzeSession(events, cost.cost_usd)
+  const loopCfg = readConfig()
+  const report  = analyzeSession(events, cost.cost_usd, loopCfg.loopThreshold, loopCfg.loopWindowSecs * 1000, loopCfg.errorRunThreshold)
 
   dbOps.updateSessionCost(
     sessionId, cost,

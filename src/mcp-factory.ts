@@ -4,7 +4,7 @@ import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { dbOps } from './db'
-import { computeQuota, refreshFromApi } from './quota-tracker'
+import { computeQuota, refreshFromApi, exceedsPromptLimit } from './quota-tracker'
 import { getWeeklyInsightData, generateTip, getUsageInsights } from './insights'
 import { readConfig, getWarnLevel } from './config'
 import { getPidFile } from './paths'
@@ -121,7 +121,7 @@ function toolGetQuotaStatus(): string {
   const parts: string[] = [
     `Quota status — ${planLabel}`,
     ``,
-    `5h cycle:    ${q.cyclePct}%  ·  ${q.cyclePrompts > q.cycleLimit ? `${q.cyclePrompts}/${q.cycleLimit} prompts (OVER LIMIT)` : `${q.cyclePrompts}/${q.cycleLimit} prompts`}  ·  resets in ${resetLabel}`,
+    `5h cycle:    ${q.cyclePct}%  ·  ${exceedsPromptLimit(q.cyclePrompts, q.cycleLimit) ? `${q.cyclePrompts}/${q.cycleLimit} prompts (OVER LIMIT)` : `${q.cyclePrompts}/${q.cycleLimit} prompts`}  ·  resets in ${resetLabel}`,
     `Weekly:      ${weeklyTotalHours}h / ${weeklyLimitTotal}h (${q.weeklyPctAll}%)`,
   ]
   if (q.weeklyLimitOpus > 0) {
@@ -144,7 +144,7 @@ function toolGetQuotaStatus(): string {
     if (weeklyLevel === 'red')   alerts.push(`Weekly at ${q.weeklyPctAll}% — critical`)
     else if (weeklyLevel)        alerts.push(`Weekly at ${q.weeklyPctAll}% — approaching weekly limit`)
 
-    if (q.cyclePrompts > q.cycleLimit) {
+    if (exceedsPromptLimit(q.cyclePrompts, q.cycleLimit)) {
       alerts.push(`Prompt count (${q.cyclePrompts}) exceeds plan limit (${q.cycleLimit}) — plan may be mis-detected`)
     }
 

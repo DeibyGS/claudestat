@@ -485,7 +485,7 @@ If no sessions appear, the daemon may not have been running during your Claude C
 **Loop detector fires too often / not enough**
 Adjust the threshold and window:
 ```bash
-claudestat config --loop-threshold 5   # default: 8 calls
+claudestat config --loop-threshold 5   # default: 3 identical calls in 600s
 claudestat config --loop-window 90     # default: 120 seconds
 ```
 

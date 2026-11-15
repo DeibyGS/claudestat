@@ -16,7 +16,7 @@ import { findJSONLForSession, extractSemanticData, syntheticStopsFor } from '../
 import { readClaudeStats }      from '../claude-stats'
 import { getCachedGitInfo, getCachedPRStatus } from '../cache/projects-cache'
 import { inferProjectCwd }      from './projects'
-import { deriveSessionState }   from '../session-state'
+import { deriveSessionState, ocLiveState } from '../session-state'
 import { sessionLastEvent, broadcast } from './stream'
 import { getClaudeDir, getClaudestatDir, getOpencodeDir, getHomeSlug, getDaemonLogFile } from '../paths'
 import { isSessionArchived } from '../watchers/opencode'
@@ -64,7 +64,7 @@ miscRouter.get('/intelligence/:sessionId', (req: Request, res: Response) => {
 
   const events = dbOps.getSessionEvents(sessionId)
   const cfg    = readConfig()
-  const report = analyzeSession(events, session.total_cost_usd ?? 0, cfg.loopThreshold, cfg.loopWindowSecs * 1000)
+  const report = analyzeSession(events, session.total_cost_usd ?? 0, cfg.loopThreshold, cfg.loopWindowSecs * 1000, cfg.errorRunThreshold)
   res.json({ sessionId, ...report })
 })
 
@@ -115,7 +115,7 @@ miscRouter.get('/sessions', (_req: Request, res: Response) => {
   const enriched = sessions.map(s => {
     const lastEvt = sessionLastEvent.get(s.id)
     const ts      = lastEvt?.ts ?? s.last_event_at ?? s.started_at
-    const state   = deriveSessionState(lastEvt?.type, ts)
+    const state   = (s.source === 'opencode' && ocLiveState(s.id)) || deriveSessionState(lastEvt?.type, ts)
     return { ...s, state }
   })
   res.json(enriched)
@@ -238,7 +238,7 @@ miscRouter.get('/api/active-sessions', (req: Request, res: Response) => {
           project:      s.project_path ?? s.cwd ?? null,
           branch:       s.git_branch ?? null,
           model:        s.dominant_model ?? 'unknown',
-          state:        deriveSessionState(last.type, last.ts),
+          state:        (s.source === 'opencode' && ocLiveState(s.id)) || deriveSessionState(last.type, last.ts),
           cost_usd:     s.total_cost_usd ?? 0,
           last_seen_ms: realTs,
         }

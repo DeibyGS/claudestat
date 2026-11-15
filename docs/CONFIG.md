@@ -23,8 +23,9 @@ Config is stored at `~/.claudestat/config.json`. You can view or edit it with `c
 | `reportTime` | string | `"09:00"` | Time to generate report (HH:MM) |
 | `logLevel` | string | `"info"` | Log level: `"debug"`, `"info"`, `"warn"`, `"error"` |
 | `port` | number | `7337` | Daemon HTTP port |
-| `loopThreshold` | number | `8` | Tool calls in window to consider a loop |
-| `loopWindowSecs` | number | `120` | Detection window in seconds |
+| `loopThreshold` | number | `3` | Identical calls (same tool + normalized input) in window to consider a loop |
+| `loopWindowSecs` | number | `600` | Detection window in seconds |
+| `errorRunThreshold` | number | `3` | Consecutive identical tool errors that raise an `error_persistence` alert |
 | `projectAliases` | object | `{}` | `{"/path/to/repo": "MyApp"}` |
 | `webhookUrl` | string\|null | `null` | Webhook URL for external alerts (`null` = disabled) |
 

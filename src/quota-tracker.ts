@@ -24,7 +24,7 @@ import { isDuplicateMessageId } from './jsonl'
 
 // ─── Planes y límites ─────────────────────────────────────────────────────────
 
-export type ClaudePlan = 'free' | 'pro' | 'max5' | 'max20'
+export type ClaudePlan = 'free' | 'pro' | 'max5' | 'max20' | 'team' | 'enterprise'
 
 const PLAN_LIMITS: Record<ClaudePlan, {
   prompts5h:         number
@@ -36,6 +36,15 @@ const PLAN_LIMITS: Record<ClaudePlan, {
   pro:   { prompts5h: 45,  tokens5h: 382000,    weeklyHoursSonnet: 80,  weeklyHoursOpus: 0  },
   max5:  { prompts5h: 225, tokens5h: 2000000,  weeklyHoursSonnet: 280, weeklyHoursOpus: 35 },
   max20: { prompts5h: 900, tokens5h: 8000000,  weeklyHoursSonnet: 480, weeklyHoursOpus: 40 },
+  // Team/Enterprise limits depend on the seat and the org's admin settings — no
+  // public numbers to estimate against, so % comes only from the usage API.
+  team:       { prompts5h: 0, tokens5h: 0, weeklyHoursSonnet: 0, weeklyHoursOpus: 0 },
+  enterprise: { prompts5h: 0, tokens5h: 0, weeklyHoursSonnet: 0, weeklyHoursOpus: 0 },
+}
+
+/** Team/Enterprise have no local prompt limit (0): they are never "over" it. */
+export function exceedsPromptLimit(prompts: number, limit: number): boolean {
+  return limit > 0 && prompts > limit
 }
 
 // ─── Tipos públicos ───────────────────────────────────────────────────────────
@@ -357,7 +366,7 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
   const cycleTokens = cycleEntries.reduce(
     (sum, e) => sum + (e.inputTokens ?? 0) + (e.outputTokens ?? 0), 0
   )
-  const cyclePct = Math.min(100, Math.round(cycleTokens / limits.tokens5h * 100))
+  const cyclePct = limits.tokens5h > 0 ? Math.min(100, Math.round(cycleTokens / limits.tokens5h * 100)) : 0
 
   // ─ Semanal por modelo: ventanas de 5 min con actividad ─
   // Contamos ventanas de 5 min distintas con al menos 1 respuesta por modelo

@@ -118,7 +118,7 @@ claudestat config --plan max5
 | `--session-limit <usd>` | Alert when session exceeds this cost (0 = disabled) |
 | `--kill-switch-force <bool>` | Hard-block on kill switch instead of warning |
 | `--log-level <level>` | Set log level: `debug`, `info`, `warn`, `error` |
-| `--loop-threshold <number>` | Tool calls in window to trigger loop detection |
+| `--loop-threshold <number>` | Identical tool calls (same tool + input) in window to trigger loop detection |
 | `--loop-window <seconds>` | Detection window in seconds |
 | `--alias <path=name>` | Set a project alias: `--alias "/path/to/repo=MyApp"` |
 | `--remove-alias <path>` | Remove a project alias |

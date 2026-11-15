@@ -174,6 +174,11 @@ describe('validateConfig', () => {
     assert.equal(validateConfig({ loopWindowSecs: 120 }), null)
   })
 
+  test('errorRunThreshold validates range 2-50', () => {
+    assert.equal(validateConfig({ errorRunThreshold: 1 }), 'errorRunThreshold must be an integer between 2 and 50')
+    assert.equal(validateConfig({ errorRunThreshold: 3 }), null)
+  })
+
   test('webhookUrl validates http/https or null', () => {
     assert.ok(validateConfig({ webhookUrl: 'ftp://bad' }) !== null, 'should reject non-http URL')
     assert.equal(validateConfig({ webhookUrl: null }), null)

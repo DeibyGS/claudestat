@@ -12,10 +12,20 @@ import type { EventRow } from './db'
 
 export interface LoopAlert {
   toolName: string
-  count: number       // cuántas veces se llamó en la ventana
-  windowMs: number    // tamaño de la ventana temporal
-  ts: number          // timestamp del último call del loop
-  context: LoopContext
+  input:    string    // normalized input shared by every call of the loop (truncated)
+  count:    number    // identical calls in the loop episode
+  windowMs: number    // window size used for detection
+  ts:       number    // timestamp of the last call of the loop
+  context:  LoopContext
+}
+
+/** ≥N consecutive tool results that fail with the same error. */
+export interface ErrorPersistenceAlert {
+  type:     'error_persistence'
+  toolName: string    // tool of the last failing call
+  error:    string    // normalized error signature
+  count:    number
+  ts:       number    // timestamp of the last failing call
 }
 
 export interface LoopContext {
@@ -25,7 +35,8 @@ export interface LoopContext {
 }
 
 export interface IntelligenceReport {
-  loops:           LoopAlert[]
+  loops:            LoopAlert[]
+  errorPersistence: ErrorPersistenceAlert[]
   efficiencyScore: number   // 0-100
   summary:         string
   exactRetries:    number   // duplicate tool calls (same name + input)
@@ -38,72 +49,104 @@ export interface IntelligenceReport {
 
 const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'Glob', 'Grep'])
 
+// Keys that describe a call but don't change what it does: two calls that
+// differ only here are still the same call.
+const VOLATILE_INPUT_KEYS = new Set(['description', 'timeout', 'run_in_background'])
+const INPUT_PREVIEW_CHARS = 200
+
+/** Recursively sorts keys and collapses whitespace so equivalent inputs compare equal. */
+function canonical(value: unknown): unknown {
+  if (typeof value === 'string') return value.trim().replace(/\s+/g, ' ')
+  if (Array.isArray(value)) return value.map(canonical)
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const k of Object.keys(value).sort()) {
+      if (!VOLATILE_INPUT_KEYS.has(k)) out[k] = canonical((value as Record<string, unknown>)[k])
+    }
+    return out
+  }
+  return value
+}
+
+/** Stable string for a tool_input: same meaning → same string. Unparseable input is kept as-is. */
+export function normalizeToolInput(raw: string | undefined): string {
+  if (!raw) return ''
+  try { return JSON.stringify(canonical(JSON.parse(raw))) }
+  catch { return raw.trim().replace(/\s+/g, ' ') }
+}
+
 /**
- * Detecta loops: cuando el mismo tool se llama ≥ threshold veces
- * dentro de windowMs. Evita alertas duplicadas con COOLDOWN_MS = windowMs.
+ * Detects loops: the same tool called with the same normalized input
+ * ≥ threshold times within windowMs. A burst of *different* calls to one
+ * tool (8 distinct Bash commands) is normal work, not a loop.
  *
- * Algoritmo: ventana deslizante sobre eventos ordenados por timestamp.
- * Captura contexto (archivos repetidos, comandos Bash repetidos) para cada alerta.
+ * Only completed calls (`Done`) with a recorded input count — the hook also
+ * stores a `PreToolUse` for each call, which would double the count.
+ *
+ * One alert per episode: further identical calls within windowMs of the
+ * alert's last call extend it (count, ts) instead of raising a new one.
  */
 export function detectLoops(
   events: EventRow[],
-  threshold = 8,
-  windowMs  = 120_000,
+  threshold = 3,
+  windowMs  = 600_000,
 ): LoopAlert[] {
-  const COOLDOWN_MS = windowMs   // cooldown = mismo tamaño que la ventana
-
-  const alerts: LoopAlert[]            = []
-  const windowsByTool = new Map<string, number[]>()
+  const alerts: LoopAlert[]         = []
+  const hitsByKey   = new Map<string, number[]>()
+  const activeByKey = new Map<string, LoopAlert>()
 
   for (const ev of events) {
-    if (ev.type !== 'Done' && ev.type !== 'PreToolUse') continue
-    if (!ev.tool_name) continue
+    if (ev.type !== 'Done' || !ev.tool_name) continue
+    // No recorded input (OpenCode events) → can't tell repetition from normal work
+    if (!ev.tool_input) continue
 
-    const toolName = ev.tool_name
-    const ts       = ev.ts
-    const window   = (windowsByTool.get(toolName) || []).filter(t => t >= ts - windowMs)
-    window.push(ts)
-    windowsByTool.set(toolName, window)
+    const input = normalizeToolInput(ev.tool_input)
+    const key   = `${ev.tool_name}\u0000${input}`
+    const ts    = ev.ts
 
-    if (window.length >= threshold) {
-      const lastAlert = [...alerts].reverse().find(a => a.toolName === toolName)
-      if (!lastAlert || ts - lastAlert.ts >= COOLDOWN_MS) {
-        const windowStart = ts - windowMs
-        const loopEvents  = events.filter(e => e.ts >= windowStart && e.ts <= ts && e.type === 'Done')
-
-        const repeatedFiles    = new Set<string>()
-        const repeatedCommands = new Set<string>()
-
-        for (const le of loopEvents) {
-          if (!le.tool_input) continue
-          try {
-            const inp = JSON.parse(le.tool_input)
-            if (FILE_TOOLS.has(le.tool_name ?? '')) {
-              const fp = inp.file_path ?? inp.path ?? inp.pattern
-              if (typeof fp === 'string') repeatedFiles.add(fp)
-            }
-            if (le.tool_name === 'Bash' && typeof inp.command === 'string') {
-              repeatedCommands.add(inp.command.slice(0, 80))
-            }
-          } catch {}
-        }
-
-        alerts.push({
-          toolName,
-          count:   window.length,
-          windowMs,
-          ts,
-          context: {
-            repeatedFiles:    [...repeatedFiles].slice(0, 10),
-            repeatedCommands: [...repeatedCommands].slice(0, 5),
-            estimatedCostUsd: 0,
-          },
-        })
-      }
+    const active = activeByKey.get(key)
+    if (active && ts - active.ts <= windowMs) {
+      active.count++
+      active.ts = ts
+      continue
     }
+
+    const hits = (hitsByKey.get(key) ?? []).filter(t => t >= ts - windowMs)
+    hits.push(ts)
+    hitsByKey.set(key, hits)
+    if (hits.length < threshold) continue
+
+    const alert: LoopAlert = {
+      toolName: ev.tool_name,
+      input:    input.slice(0, INPUT_PREVIEW_CHARS),
+      count:    hits.length,
+      windowMs,
+      ts,
+      context:  loopContext(ev.tool_name, ev.tool_input),
+    }
+    alerts.push(alert)
+    activeByKey.set(key, alert)
+    hitsByKey.delete(key)
   }
 
   return alerts
+}
+
+/** The repeated file or Bash command of a loop, for the alert's context. */
+function loopContext(toolName: string, rawInput: string | undefined): LoopContext {
+  const ctx: LoopContext = { repeatedFiles: [], repeatedCommands: [], estimatedCostUsd: 0 }
+  if (!rawInput) return ctx
+  try {
+    const inp = JSON.parse(rawInput)
+    if (FILE_TOOLS.has(toolName)) {
+      const fp = inp.file_path ?? inp.path ?? inp.pattern
+      if (typeof fp === 'string') ctx.repeatedFiles.push(fp)
+    }
+    if (toolName === 'Bash' && typeof inp.command === 'string') {
+      ctx.repeatedCommands.push(inp.command.slice(0, 80))
+    }
+  } catch { /* malformed input */ }
+  return ctx
 }
 
 // ─── Scoring de eficiencia ────────────────────────────────────────────────────
@@ -177,6 +220,42 @@ export function computeErrorRate(events: EventRow[]): number {
   if (done.length === 0) return 0
   const errored = done.filter(e => ERROR_PATTERN.test(e.tool_response!))
   return errored.length / done.length
+}
+
+/** First error line with numbers blurred (line:col, durations, pids), so retries of one failure match. */
+function errorSignature(response: string): string {
+  const line = response.split('\n').find(l => ERROR_PATTERN.test(l)) ?? response
+  return line.trim().replace(/\s+/g, ' ').replace(/\d+/g, '#').slice(0, 160)
+}
+
+/**
+ * error_persistence: ≥ minRun consecutive completed calls whose results are the
+ * same error. Any non-error result (or a different error) breaks the run.
+ * One alert per run, reporting its final length.
+ */
+export function detectErrorPersistence(events: EventRow[], minRun = 3): ErrorPersistenceAlert[] {
+  const alerts: ErrorPersistenceAlert[] = []
+  let sig: string | null = null
+  let run: ErrorPersistenceAlert | null = null
+  let count = 0
+
+  for (const e of events) {
+    if (e.type !== 'Done' || !e.tool_name || e.tool_response == null) continue
+    const isError = ERROR_PATTERN.test(e.tool_response)
+    const next    = isError ? errorSignature(e.tool_response) : null
+
+    if (next === null || next !== sig) {
+      sig = next; count = next === null ? 0 : 1; run = null
+      continue
+    }
+    count++
+    if (run) { run.count = count; run.ts = e.ts; run.toolName = e.tool_name }
+    else if (count >= minRun) {
+      run = { type: 'error_persistence', toolName: e.tool_name, error: sig, count, ts: e.ts }
+      alerts.push(run)
+    }
+  }
+  return alerts
 }
 
 /**
@@ -339,8 +418,10 @@ export function analyzeSession(
   costUsd:   number,
   threshold?: number,
   windowMs?:  number,
+  errorRun?:  number,
 ): IntelligenceReport {
-  const loops           = detectLoops(events, threshold, windowMs)
+  const loops            = detectLoops(events, threshold, windowMs)
+  const errorPersistence = detectErrorPersistence(events, errorRun)
   const efficiencyScore = calcEfficiencyScore(events, loops, costUsd)
   const exactRetries    = detectExactRetries(events)
   const errorRate       = computeErrorRate(events)
@@ -348,7 +429,7 @@ export function analyzeSession(
   const seqCycleCount   = detectSeqCycles(events)
   const summary         = buildSummary(loops, efficiencyScore, costUsd, events)
 
-  return { loops, efficiencyScore, summary, exactRetries, errorRate, fileChurnScore, seqCycleCount }
+  return { loops, errorPersistence, efficiencyScore, summary, exactRetries, errorRate, fileChurnScore, seqCycleCount }
 }
 
 function buildSummary(

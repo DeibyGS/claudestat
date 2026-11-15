@@ -10,7 +10,7 @@
  *   "killSwitchEnabled": true,     // activar/desactivar el hook bloqueante
  *   "killSwitchThreshold": 95,     // % de cuota para bloquear (1-100)
  *   "warnThresholds": [70, 85, 95],// niveles de aviso: amarillo, naranja, rojo
- *   "plan": null,                  // forzar plan: "pro"|"max5"|"max20"|null (auto)
+ *   "plan": null,                  // forzar plan: "pro"|"max5"|"max20"|"team"|"enterprise"|null (auto)
  *   "reportsEnabled": false,       // activar/desactivar informes automáticos
  *   "reportFrequency": "weekly",   // "weekly"|"biweekly"|"monthly"
  *   "reportDay": 1,                // día de la semana: 0=Dom, 1=Lun … 6=Sáb
@@ -41,8 +41,9 @@ export interface ClaudestatConfig {
   killSwitchForce:      boolean         // if true, blocks instead of just warning (default: false)
   logLevel:             'debug' | 'info' | 'warn' | 'error'
   port:                 number          // puerto del daemon (default: 7337)
-  loopThreshold:        number          // calls del mismo tool en ventana para considerar loop
-  loopWindowSecs:       number          // tamaño de la ventana en segundos
+  loopThreshold:        number          // identical calls (same tool + normalized input) in the window that count as a loop
+  loopWindowSecs:       number          // window size in seconds
+  errorRunThreshold:    number          // consecutive identical tool errors that raise error_persistence
   projectAliases:       Record<string, string>   // { "/path/to/repo": "MyApp" }
   webhookUrl:           string | null   // URL para alertas externas (null = desactivado)
   contextWindowOverrides: Record<string, number>  // { "model-name": 500000 } — per-model context window override
@@ -50,7 +51,7 @@ export interface ClaudestatConfig {
 
 const CONFIG_PATH = path.join(getClaudestatDir(), 'config.json')
 
-const DEFAULTS: ClaudestatConfig = {
+export const DEFAULTS: ClaudestatConfig = {
   killSwitchEnabled:    false,
   killSwitchThreshold:  95,
   warnThresholds:       [70, 85, 95],
@@ -66,8 +67,9 @@ const DEFAULTS: ClaudestatConfig = {
   killSwitchForce:      false,
   logLevel:             'info',
   port:                 7337,
-  loopThreshold:        8,
-  loopWindowSecs:       120,
+  loopThreshold:        3,
+  loopWindowSecs:       600,
+  errorRunThreshold:    3,
   projectAliases:       {},
   webhookUrl:           null,
   contextWindowOverrides: {},
@@ -90,7 +92,7 @@ export function writeConfig(cfg: ClaudestatConfig): void {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n')
 }
 
-const VALID_PLANS = new Set(['free', 'pro', 'max5', 'max20', null])
+const VALID_PLANS = new Set(['free', 'pro', 'max5', 'max20', 'team', 'enterprise', null])
 
 /**
  * Valida y sanitiza los campos de una config recibida por la API.
@@ -116,7 +118,7 @@ export function validateConfig(raw: unknown): string | null {
   }
 
   if ('plan' in cfg && !VALID_PLANS.has(cfg.plan as string | null))
-    return `plan must be one of: free, pro, max5, max20, or null`
+    return `plan must be one of: free, pro, max5, max20, team, enterprise, or null`
 
   if ('weeklyWarnThresholds' in cfg) {
     const v = cfg.weeklyWarnThresholds
@@ -154,6 +156,11 @@ export function validateConfig(raw: unknown): string | null {
     const v = cfg.loopWindowSecs
     if (typeof v !== 'number' || !Number.isInteger(v) || v < 10 || v > 600)
       return 'loopWindowSecs must be an integer between 10 and 600'
+  }
+  if ('errorRunThreshold' in cfg) {
+    const v = cfg.errorRunThreshold
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 2 || v > 50)
+      return 'errorRunThreshold must be an integer between 2 and 50'
   }
   if ('projectAliases' in cfg) {
     const v = cfg.projectAliases

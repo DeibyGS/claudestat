@@ -10,7 +10,7 @@ import fs   from 'fs/promises'
 import fsSync from 'fs'
 import { type WatcherAdapter, type ParsedEvent, registerAdapter } from './adapter'
 import { getClaudeDir } from '../paths'
-import { calcCost, getContextWindow, pricingForUsage, DEFAULT_MODEL } from '../pricing'
+import { costFromPricing, getContextWindow, pricingForUsage, DEFAULT_MODEL } from '../pricing'
 import { isDuplicateMessageId, readCostStateUsd, parentSessionIdFromPath } from '../jsonl'
 import type { CostUpdate } from '../db'
 import type { BlockCostEntry } from '../db'
@@ -119,13 +119,13 @@ export async function processJSONL(filePath: string): Promise<CostUpdate | null>
         totals.output_tokens  += usage.output_tokens               ?? 0
         totals.cache_read     += usage.cache_read_input_tokens      ?? 0
         totals.cache_creation += usage.cache_creation_input_tokens  ?? 0
-        totals.cost_usd       += calcCost(model, usage)
+        const price = pricingForUsage(model, usage)  // resolved once per API call
+        totals.cost_usd       += costFromPricing(price, usage)
         totals.context_used    = (usage.input_tokens                ?? 0)
                                + (usage.cache_read_input_tokens     ?? 0)
                                + (usage.cache_creation_input_tokens ?? 0)
         totals.context_window  = getContextWindow(model)
 
-        const price = pricingForUsage(model, usage)
         const M     = 1_000_000
         const inp   = usage.input_tokens ?? 0
         const cacheRead = usage.cache_read_input_tokens ?? 0

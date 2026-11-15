@@ -23,6 +23,8 @@ interface SessionEntry {
   last_event_at:  number
   duration_ms:    number
   total_cost_usd: number
+  /** Share of total_cost_usd not already covered by a parent's cost-state — use for sums */
+  billable_cost_usd: number
   total_tokens:   number
   efficiency_score: number
   loops_detected: number
@@ -55,6 +57,7 @@ function buildSessionEntry(s: any, gitInfo: ReturnType<typeof getCachedGitInfo>)
     last_event_at:  s.last_event_at ?? s.started_at,
     duration_ms:    (s.last_event_at ?? s.started_at) - s.started_at,
     total_cost_usd: s.total_cost_usd    ?? 0,
+    billable_cost_usd: s.billable_cost_usd ?? s.total_cost_usd ?? 0,
     total_tokens:   (s.total_input_tokens ?? 0) + (s.total_output_tokens ?? 0) + (s.total_cache_read ?? 0),
     efficiency_score: s.efficiency_score ?? 100,
     loops_detected:   s.loops_detected  ?? 0,
@@ -187,7 +190,8 @@ function mergeSessionGroups(entries: SessionEntry[]): SessionEntry[] {
       started_at:     first.started_at,
       last_event_at:  last.last_event_at ?? last.started_at,
       duration_ms:    (last.last_event_at ?? last.started_at) - first.started_at,
-      total_cost_usd: group.reduce((sum, s) => sum + s.total_cost_usd, 0),
+      total_cost_usd: group.reduce((sum, s) => sum + s.billable_cost_usd, 0),
+      billable_cost_usd: group.reduce((sum, s) => sum + s.billable_cost_usd, 0),
       total_tokens:   group.reduce((sum, s) => sum + s.total_tokens,   0),
       efficiency_score: efficiency,
       loops_detected:   group.reduce((sum, s) => sum + s.loops_detected, 0),
@@ -233,7 +237,7 @@ historyRouter.get('/history', (req: Request, res: Response) => {
     .map(([date, sessions]) => ({
       date,
       sessions,
-      total_cost:    sessions.reduce((sum, x) => sum + x.total_cost_usd, 0),
+      total_cost:    sessions.reduce((sum, x) => sum + x.billable_cost_usd, 0),
       total_tokens:  sessions.reduce((sum, x) => sum + x.total_tokens,   0),
       total_duration_ms: sessions.reduce((sum, x) => sum + x.duration_ms, 0),
     }))

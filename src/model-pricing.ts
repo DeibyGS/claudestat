@@ -66,9 +66,6 @@ const LONG_CONTEXT_PRICING: Record<string, { thresholdTokens: number; pricing: M
   },
 }
 
-/** Kept for the public library API; no longer used as a lookup fallback. */
-export const DEFAULT_PRICING: ModelPricing = PRICING['claude-sonnet-4-6']
-
 /**
  * Returned for models with no known price. All-zero on purpose: an unknown
  * model costs $0 and is flagged unpriced instead of being estimated at
@@ -86,34 +83,24 @@ export const DEFAULT_MODEL = 'claude-sonnet-4-6'
  * Anthropic documents 1M for these models, but real logs never exceed ~966.5K
  * (965,904 max measured on opus-5-5). Usage % and the 50/75/90 thresholds are
  * computed against these values, so 100% is where Claude Code compacts.
- * 200K-window models (Opus 4.5, Sonnet 4.5, Haiku 4.5) keep 200K.
+ * 200K-window models keep 200K. Opus/Sonnet 4.6 also stay at 200K: Claude Code
+ * only gives them 1M through the '[1m]' variant.
  *
  * Claude models only: OpenCode reads each provider/model window from its own
  * models-dev catalog (src/watchers/oc-catalog.ts) and falls back to this table.
  * Unknown models: 200,000 tokens (see getContextWindow).
  */
 const CC_1M_WINDOW = 967_000
-export const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
-  'claude-fable-5-2':           CC_1M_WINDOW,
-  'claude-fable-5-1':           CC_1M_WINDOW,
-  'claude-fable-5':             CC_1M_WINDOW,
-  'claude-mythos-5-2':          CC_1M_WINDOW,
-  'claude-mythos-5-1':          CC_1M_WINDOW,
-  'claude-mythos-5':            CC_1M_WINDOW,
-  'claude-opus-5-5':            CC_1M_WINDOW,
-  'claude-opus-5':              CC_1M_WINDOW,
-  'claude-opus-4-8':            CC_1M_WINDOW,
-  'claude-opus-4-7':            CC_1M_WINDOW,
-  'claude-opus-4-6':            200_000,
-  'claude-opus-4-5':            200_000,
-  'claude-sonnet-5-5':          CC_1M_WINDOW,
-  'claude-sonnet-5':            CC_1M_WINDOW,
-  'claude-sonnet-4-6':          200_000,
-  'claude-sonnet-4-5':          200_000,
-  'claude-haiku-5-5':           CC_1M_WINDOW,
-  'claude-haiku-4-5':           200_000,
-  'claude-haiku-4-5-20251001':  200_000,
-}
+/** Models whose API window is 200K; every other priced Claude model has 1M. */
+const API_200K_MODELS = new Set([
+  'claude-opus-4-6', 'claude-opus-4-5', 'claude-opus-4-1', 'claude-opus-4-20250514',
+  'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-sonnet-4-20250514',
+  'claude-haiku-4-5', 'claude-haiku-4-5-20251001',
+])
+/** Derived from PRICING so a newly priced model can never miss its window. */
+export const KNOWN_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
+  Object.keys(PRICING).map(k => [k, API_200K_MODELS.has(k) ? 200_000 : CC_1M_WINDOW]),
+)
 
 // ─── Lookup ───────────────────────────────────────────────────────────────────
 
@@ -180,14 +167,8 @@ export interface TokenUsage {
   cache_creation_input_tokens: number
 }
 
-/**
- * Rates that apply to one request: the long-context tier when the model has
- * one and the prompt (input + cache reads + cache writes) exceeds it.
- * UNPRICED for unknown models.
- */
-export function pricingForUsage(model: string, usage: Partial<TokenUsage>): ModelPricing {
-  const key = resolvePricingKey(model)
-  if (!key) return UNPRICED
+/** Rates for one request under a resolved PRICING key (long-context tier aware). */
+function pricingForKey(key: string, usage: Partial<TokenUsage>): ModelPricing {
   const tier = LONG_CONTEXT_PRICING[key]
   if (tier) {
     const prompt = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
@@ -196,17 +177,31 @@ export function pricingForUsage(model: string, usage: Partial<TokenUsage>): Mode
   return PRICING[key]
 }
 
+/**
+ * Rates that apply to one request: the long-context tier when the model has
+ * one and the prompt (input + cache reads + cache writes) exceeds it.
+ * UNPRICED for unknown models.
+ */
+export function pricingForUsage(model: string, usage: Partial<TokenUsage>): ModelPricing {
+  const key = resolvePricingKey(model)
+  return key ? pricingForKey(key, usage) : UNPRICED
+}
+
+/** USD for a usage record at the given per-MTok rates. */
+export function costFromPricing(price: ModelPricing, usage: Partial<TokenUsage>): number {
+  return (
+    (usage.input_tokens                ?? 0) * price.input +
+    (usage.output_tokens               ?? 0) * price.output +
+    (usage.cache_read_input_tokens     ?? 0) * price.cacheRead +
+    (usage.cache_creation_input_tokens ?? 0) * price.cacheCreate
+  ) / 1_000_000
+}
+
 /** Cost of a usage record plus whether the model had a known price. */
 export function priceUsage(model: string, usage: TokenUsage): { cost_usd: number; priced: boolean } {
-  if (!isPriced(model)) return { cost_usd: 0, priced: false }
-  const price = pricingForUsage(model, usage)
-  const M = 1_000_000
-  const cost_usd =
-    (usage.input_tokens                * price.input)       / M +
-    (usage.output_tokens               * price.output)      / M +
-    (usage.cache_read_input_tokens     * price.cacheRead)   / M +
-    (usage.cache_creation_input_tokens * price.cacheCreate) / M
-  return { cost_usd, priced: true }
+  const key = resolvePricingKey(model)
+  if (!key) return { cost_usd: 0, priced: false }
+  return { cost_usd: costFromPricing(pricingForKey(key, usage), usage), priced: true }
 }
 
 /** Cost in USD; 0 for unpriced models (check isPriced/priceUsage to tell them apart). */

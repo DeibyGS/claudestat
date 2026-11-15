@@ -184,7 +184,7 @@ export function generateReport(dateLabel: string, cfg: ClaudestatConfig): string
 
   const sessions = dbOps.getAllSessions().filter(s => s.started_at >= startMs && s.started_at <= endMs)
 
-  const totalCost    = sessions.reduce((a, s) => a + (s.total_cost_usd        ?? 0), 0)
+  const totalCost    = sessions.reduce((a, s) => a + (s.billable_cost_usd     ?? 0), 0)
   const totalInput   = sessions.reduce((a, s) => a + (s.total_input_tokens    ?? 0), 0)
   const totalOutput  = sessions.reduce((a, s) => a + (s.total_output_tokens   ?? 0), 0)
   const totalLoops   = sessions.reduce((a, s) => a + (s.loops_detected        ?? 0), 0)
@@ -196,7 +196,7 @@ export function generateReport(dateLabel: string, cfg: ClaudestatConfig): string
   for (const s of sessions) {
     const key = s.project_path ? path.basename(s.project_path) : 'Sin proyecto'
     const cur = byProject.get(key) ?? { sessions: 0, cost: 0 }
-    byProject.set(key, { sessions: cur.sessions + 1, cost: cur.cost + (s.total_cost_usd ?? 0) })
+    byProject.set(key, { sessions: cur.sessions + 1, cost: cur.cost + (s.billable_cost_usd ?? 0) })
   }
   const topProjects = [...byProject.entries()]
     .sort((a, b) => b[1].cost - a[1].cost)

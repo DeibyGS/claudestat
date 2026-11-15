@@ -978,7 +978,7 @@ orchestrationRouter.get('/api/orchestration/timeline', (_req: Request, res: Resp
           const matched = ocSess.filter(x => !usedOc.has(x.id) && x.started_at >= ocFirst - SLACK && x.started_at <= (ocEnd ?? ocFirst) + SLACK)
           if (matched.length > 0) {
             matched.forEach(x => usedOc.add(x.id))
-            cycle.oc_cost = matched.reduce((sum, x) => sum + (x.total_cost_usd ?? 0), 0)
+            cycle.oc_cost = matched.reduce((sum, x) => sum + (x.billable_cost_usd ?? 0), 0)
             cycle.oc_input_tokens = matched.reduce((sum, x) => sum + (x.total_input_tokens ?? 0), 0)
             cycle.oc_output_tokens = matched.reduce((sum, x) => sum + (x.total_output_tokens ?? 0), 0)
             cycle.oc_cache_tokens = matched.reduce((sum, x) => sum + (x.total_cache_read ?? 0), 0)

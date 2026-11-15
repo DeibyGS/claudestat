@@ -69,14 +69,27 @@ test('S2: block and daily totals do not double count sub-agents covered by cost-
   insertSession('s2-parent-computed', at(11), 1.00, 10, 5, { costSource: 'computed' })
   insertSession('agent-s2-kid-computed', at(12), 0.25, 10, 5, { parentId: 's2-parent-computed' })
 
-  const expected = 19.56 + 0.50 + 1.00 + 0.25
+  // Edge: a top-level session (another terminal) mislinked by the cwd heuristic
+  // keeps its cost — only `agent-*` sub-agent sessions are covered by cost-state
+  insertSession('s2-other-terminal', at(13), 2.00, 10, 5, { parentId: 's2-parent' })
+
+  const expected = 19.56 + 0.50 + 1.00 + 0.25 + 2.00
   const block = dbOps.getBillingBlocks(100_000).find(b => b.block_start === blockStart)
   assert.ok(block, 'fixture block exists')
   assert.ok(Math.abs(block!.total_cost_usd - expected) < 1e-9, `block ${block!.total_cost_usd} vs ${expected}`)
-  assert.equal(block!.sessions, 10)                          // every session still listed
-  assert.equal(block!.total_tokens, 1500 + 6 * 150 + 3 * 15)  // sub-agent tokens still counted
+  assert.equal(block!.sessions, 11)                          // every session still listed
+  assert.equal(block!.total_tokens, 1500 + 6 * 150 + 4 * 15)  // sub-agent tokens still counted
 
   const day = new Date(at(1)).toISOString().slice(0, 10)
   const daily = dbOps.getDailyActivity(5000).find(d => d.date === day)
   assert.ok(daily && Math.abs(daily.cost_usd - expected) < 1e-6, `daily ${daily?.cost_usd} vs ${expected}`)
+
+  // Row readers feed JS-side sums (History day totals, reports): billable_cost_usd
+  // dedups, while total_cost_usd keeps each session's own cost for display.
+  const fixture = (dbOps.getRecentSessions(5000) as Array<{ id: string; billable_cost_usd: number; total_cost_usd: number }>)
+    .filter(r => r.id.startsWith('s2-') || r.id.startsWith('agent-s2-'))
+  assert.equal(fixture.length, 11)
+  const billable = fixture.reduce((a, r) => a + r.billable_cost_usd, 0)
+  assert.ok(Math.abs(billable - expected) < 1e-9, `rows ${billable} vs ${expected}`)
+  assert.equal(fixture.find(r => r.id === 'agent-s2-kid0')!.total_cost_usd, 1.20)
 })

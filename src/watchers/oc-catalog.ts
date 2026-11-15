@@ -94,23 +94,18 @@ function loadModels(db: SqliteDb): Map<string, OcModelInfo> | null {
 }
 
 /**
- * Context window for an OpenCode provider/model, or null when the catalog has
- * no entry. Uses `limit.input` when present: it is the real cap on the prompt
- * (e.g. 272K on a 400K-total model), and context_used measures prompt tokens.
+ * Catalog facts for an OpenCode provider/model (one catalog lookup per call):
+ * - contextWindow: `limit.input` when present — the real cap on the prompt
+ *   (e.g. 272K on a 400K-total model), which is what context_used measures —
+ *   else `limit.context`; null when the catalog has no entry.
+ * - pricing: API base prices, or null when the catalog lists none.
  */
-export function ocContextWindow(db: SqliteDb, providerId: string | undefined, modelId: string): number | null {
-  if (!providerId) return null
-  const limit = loadModels(db)?.get(`${providerId}/${modelId}`)?.limit
-  return limit?.input ?? limit?.context ?? null
-}
-
-/** API base prices for an OpenCode provider/model, or null when the catalog has none. */
-export function ocModelPricing(db: SqliteDb, providerId: string | undefined, modelId: string): ModelPricing | null {
-  if (!providerId) return null
-  return loadModels(db)?.get(`${providerId}/${modelId}`)?.pricing ?? null
-}
-
-/** Test hook: forget the parsed catalog. */
-export function resetOcCatalogCache(): void {
-  cache = null
+export function ocModelInfo(
+  db: SqliteDb, providerId: string | undefined, modelId: string,
+): { contextWindow: number | null; pricing: ModelPricing | null } {
+  const info = providerId ? loadModels(db)?.get(`${providerId}/${modelId}`) : undefined
+  return {
+    contextWindow: info?.limit?.input ?? info?.limit?.context ?? null,
+    pricing: info?.pricing ?? null,
+  }
 }

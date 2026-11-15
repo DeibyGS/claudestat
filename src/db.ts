@@ -84,6 +84,22 @@ try { db.exec(`CREATE INDEX IF NOT EXISTS idx_sessions_project  ON sessions(proj
 // Each migration runs exactly once, tracked by meta.schema_version.
 // try/catch per migration handles existing installs where columns already exist.
 
+/**
+ * Read model for cost aggregates: every session row, plus billable_cost_usd = 0
+ * for a Claude Code sub-agent (`agent-*`, parent taken from its JSONL path)
+ * whose parent's cost-state already covers it — no double count. Top-level
+ * sessions keep their cost even if the cwd heuristic linked them to a parent.
+ * Tokens and counts are untouched: sub-agent usage is real, only its $ is shared.
+ */
+const BILLABLE_SESSIONS_VIEW = `
+  CREATE VIEW IF NOT EXISTS billable_sessions AS
+  SELECT s.*,
+         CASE WHEN s.id LIKE 'agent-%' AND p.cost_source = 'cost-state' THEN 0
+              ELSE s.total_cost_usd END AS billable_cost_usd
+  FROM sessions s
+  LEFT JOIN sessions p ON p.id = s.parent_session_id
+`
+
 const MIGRATIONS: Array<{ version: number; sql: string }> = [
   { version: 1, sql: `ALTER TABLE sessions ADD COLUMN project_path TEXT` },
   { version: 2, sql: `ALTER TABLE sessions ADD COLUMN ai_summary TEXT` },
@@ -180,22 +196,15 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
   // 'cost-state' when total_cost_usd is Claude Code's own session total (which
   // already includes its sub-agents), 'computed' when summed from usage lines.
   { version: 27, sql: `ALTER TABLE sessions ADD COLUMN cost_source TEXT` },
-  // Read model for cost aggregates: every session row, plus billable_cost_usd = 0
-  // for a sub-agent whose parent's cost-state already covers it (no double count).
-  // Tokens and counts are untouched — sub-agent usage is real, only its $ is shared.
-  { version: 28, sql: `
-    CREATE VIEW IF NOT EXISTS billable_sessions AS
-    SELECT s.*,
-           CASE WHEN p.cost_source = 'cost-state' THEN 0 ELSE s.total_cost_usd END AS billable_cost_usd
-    FROM sessions s
-    LEFT JOIN sessions p ON p.id = s.parent_session_id
-  ` },
+  { version: 28, sql: BILLABLE_SESSIONS_VIEW },
   // OpenCode: 'subscription' | 'api' | 'free', plus what the same tokens would
   // cost at the provider's API price (NULL when the catalog has no price).
   { version: 29, sql: `
     ALTER TABLE sessions ADD COLUMN billing TEXT;
     ALTER TABLE sessions ADD COLUMN api_equivalent_usd REAL
   ` },
+  // v28's view also zeroed top-level sessions mislinked by the cwd heuristic
+  { version: 30, sql: `DROP VIEW IF EXISTS billable_sessions; ${BILLABLE_SESSIONS_VIEW}` },
 ]
 
 function runMigrations() {
@@ -232,6 +241,8 @@ export interface SessionRow {
   parent_session_id?: string
   billing?: BillingKind | null
   api_equivalent_usd?: number | null
+  /** Only on rows read from billable_sessions: 0 when the parent's cost-state covers this session. Use for sums. */
+  billable_cost_usd?: number
 
   source?: string
   exact_retries?: number
@@ -423,7 +434,7 @@ const stmts = {
   `),
 
   getAllSessions: db.prepare(`
-    SELECT * FROM sessions ORDER BY started_at DESC LIMIT 500
+    SELECT * FROM billable_sessions ORDER BY started_at DESC LIMIT 500
   `),
 
   getSessionEventsRecent: db.prepare(`
@@ -457,7 +468,7 @@ const stmts = {
       )) as top_tools_csv,
       (SELECT COUNT(*) FROM events WHERE session_id = s.id AND tool_name = 'Agent') as agent_count,
       (SELECT COUNT(*) FROM events WHERE session_id = s.id AND tool_name = 'Skill')  as skill_count
-    FROM sessions s
+    FROM billable_sessions s
     WHERE s.started_at >= ?
       AND s.id NOT LIKE 'test-%'
     ORDER BY s.started_at DESC
@@ -1045,11 +1056,11 @@ export const dbOps = {
   },
 
   getAllSessions(limit = 500): SessionRow[] {
-    return db.prepare(`SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?`).all(limit) as SessionRow[]
+    return db.prepare(`SELECT * FROM billable_sessions ORDER BY started_at DESC LIMIT ?`).all(limit) as SessionRow[]
   },
 
   getSessionsInRange(startMs: number, endMs: number): SessionRow[] {
-    return db.prepare(`SELECT id, started_at, total_cost_usd, total_input_tokens, total_output_tokens, total_cache_read, dominant_model FROM sessions WHERE started_at >= ? AND started_at <= ? ORDER BY started_at ASC`).all(startMs, endMs) as SessionRow[]
+    return db.prepare(`SELECT id, started_at, total_cost_usd, billable_cost_usd, total_input_tokens, total_output_tokens, total_cache_read, dominant_model FROM billable_sessions WHERE started_at >= ? AND started_at <= ? ORDER BY started_at ASC`).all(startMs, endMs) as SessionRow[]
   },
 
   getSessionEventsRecent(sessionId: string, limit = 200): EventRow[] {

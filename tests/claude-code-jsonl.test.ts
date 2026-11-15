@@ -102,3 +102,48 @@ describe('processJSONL — cost-state authority', () => {
     assert.ok(r!.cost_usd > 0)            // falls back to computed cost
   })
 })
+
+// S5 — Claude Code stores sub-agents at <project>/<parentId>/subagents/agent-<id>.jsonl
+describe('processJSONL — sub-agent parent link and cost source', () => {
+  test('a sub-agent JSONL carries its parent session id from the path', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-sub-'))
+    const parentId = '262c8fea-9824-4d1a-b1be-990e1f93c625'
+    const dir = path.join(root, parentId, 'subagents')
+    fs.mkdirSync(dir, { recursive: true })
+    const f = path.join(dir, 'agent-a6a7e9c02c7e87153.jsonl')
+    fs.writeFileSync(f, assistantLine('msg_s1', 100, 'text') + '\n')
+
+    const r = await processJSONL(f)
+    assert.equal(r!.parentSessionId, parentId)
+    assert.equal(r!.costSource, 'computed')
+  })
+
+  test('a top-level session has no parent; cost-state marks the cost source', async () => {
+    const f = tmpFile('top-level')
+    fs.writeFileSync(f, [
+      assistantLine('msg_t1', 100, 'text'),
+      JSON.stringify({ type: 'cost-state', totalCostUSD: 3.5 }),
+    ].join('\n') + '\n')
+
+    const r = await processJSONL(f)
+    assert.equal(r!.parentSessionId, undefined)
+    assert.equal(r!.costSource, 'cost-state')
+  })
+
+  test('onCostUpdate stores the path-derived parent, overriding a heuristic guess', () => {
+    // lazy require: the DB module must load after the test runner sets CLAUDESTAT_DB_PATH
+    const { dbOps } = require('../src/db')
+    const { onCostUpdate } = require('../src/routes/events')
+    const kid = 'agent-s5linktest0001'
+    dbOps.upsertSession({ id: kid, cwd: '/tmp/s5', started_at: Date.now(), source: 'claude-code' })
+    dbOps.updateSessionParent(kid, 'wrong-heuristic-parent')
+
+    onCostUpdate(kid, {
+      input_tokens: 1, output_tokens: 1, cache_read: 0, cache_creation: 0, cost_usd: 0.01,
+      context_used: 0, context_window: 0, firstTs: Date.now(),
+      parentSessionId: 'real-parent-from-path', costSource: 'computed',
+    }, 'claude-code')
+
+    assert.equal(dbOps.getSession(kid).parent_session_id, 'real-parent-from-path')
+  })
+})

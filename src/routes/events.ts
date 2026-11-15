@@ -318,6 +318,16 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
   dbOps.upsertSession({ id: sessionId, cwd: undefined, started_at: cost.firstTs ?? Date.now(), last_event_at: cost.lastTs ?? cost.firstTs ?? Date.now(), source })
   let sessionRow = dbOps.getSession(sessionId)
 
+  // Sub-agent link from the JSONL path (<parentId>/subagents/agent-*.jsonl) is
+  // authoritative; the cwd heuristic below only runs when the path says nothing.
+  if (cost.parentSessionId && cost.parentSessionId !== sessionId) {
+    if (sessionRow?.parent_session_id !== cost.parentSessionId) {
+      dbOps.setSessionParent(sessionId, cost.parentSessionId)
+      sessionRow = dbOps.getSession(sessionId)
+    }
+    taggedSessionParents.add(sessionId)
+  }
+
   // Sub-agent detection: first time we see a session, check if its firstTs falls after
   // a recent Agent PreToolUse from another session in the same CWD → tag as child.
   if (!taggedSessionParents.has(sessionId) && cost.firstTs) {

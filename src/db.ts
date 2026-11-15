@@ -177,6 +177,19 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
     ALTER TABLE assistant_turns ADD COLUMN stop_reason    TEXT;
     ALTER TABLE assistant_turns ADD COLUMN stop_sequence  TEXT
   ` },
+  // 'cost-state' when total_cost_usd is Claude Code's own session total (which
+  // already includes its sub-agents), 'computed' when summed from usage lines.
+  { version: 27, sql: `ALTER TABLE sessions ADD COLUMN cost_source TEXT` },
+  // Read model for cost aggregates: every session row, plus billable_cost_usd = 0
+  // for a sub-agent whose parent's cost-state already covers it (no double count).
+  // Tokens and counts are untouched — sub-agent usage is real, only its $ is shared.
+  { version: 28, sql: `
+    CREATE VIEW IF NOT EXISTS billable_sessions AS
+    SELECT s.*,
+           CASE WHEN p.cost_source = 'cost-state' THEN 0 ELSE s.total_cost_usd END AS billable_cost_usd
+    FROM sessions s
+    LEFT JOIN sessions p ON p.id = s.parent_session_id
+  ` },
 ]
 
 function runMigrations() {
@@ -275,6 +288,8 @@ export interface CostUpdate {
   lastModel?: string          // modelo del último request (para mostrar en header)
   firstTs?: number            // timestamp ms del primer mensaje assistant (para detectar sub-agentes)
   lastTs?: number             // timestamp ms del último mensaje assistant (para last_event_at de sub-agentes)
+  parentSessionId?: string    // CC sub-agent: parent id taken from <parentId>/subagents/agent-*.jsonl
+  costSource?: 'cost-state' | 'computed'  // where cost_usd came from (cost-state already includes sub-agents)
 }
 
 export interface BillingBlock {
@@ -350,7 +365,8 @@ const stmts = {
       file_churn_score     = ?,
       seq_cycle_count      = ?,
       context_used         = ?,
-      context_window       = ?
+      context_window       = ?,
+      cost_source          = COALESCE(?, cost_source)
     WHERE id = ?
   `),
 
@@ -440,6 +456,11 @@ const stmts = {
     UPDATE sessions SET parent_session_id = ? WHERE id = ? AND parent_session_id IS NULL
   `),
 
+  // Path-derived link is authoritative: overrides a heuristic guess
+  setSessionParent: db.prepare(`
+    UPDATE sessions SET parent_session_id = ? WHERE id = ?
+  `),
+
   getChildSessions: db.prepare(`
     SELECT id, dominant_model, total_cost_usd, started_at
     FROM sessions WHERE parent_session_id = ? ORDER BY started_at ASC
@@ -449,13 +470,13 @@ const stmts = {
     SELECT
       project_path,
       COUNT(*) as session_count,
-      COALESCE(SUM(total_cost_usd),    0) as total_cost_usd,
+      COALESCE(SUM(billable_cost_usd),    0) as total_cost_usd,
       COALESCE(SUM(total_input_tokens),0) as total_input_tokens,
       COALESCE(SUM(total_output_tokens),0) as total_output_tokens,
       COALESCE(SUM(total_cache_read),0)    as total_cache_read,
       MAX(last_event_at) as last_active,
       AVG(CASE WHEN efficiency_score > 0 THEN efficiency_score END) as avg_efficiency
-    FROM sessions
+    FROM billable_sessions
     WHERE project_path IS NOT NULL
     GROUP BY project_path
     ORDER BY last_active DESC
@@ -496,19 +517,19 @@ const stmts = {
     SELECT
       COALESCE(source, 'claude-code')                                                   as source,
       COUNT(*)                                                                           as session_count,
-      COALESCE(SUM(total_cost_usd), 0)                                                  as total_cost_usd,
+      COALESCE(SUM(billable_cost_usd), 0)                                                  as total_cost_usd,
       COALESCE(SUM(total_input_tokens + total_output_tokens + total_cache_read), 0)     as total_tokens,
       AVG(CASE WHEN efficiency_score > 0 THEN efficiency_score END)                     as avg_efficiency,
       AVG(loops_detected)                                                               as avg_loops,
       MAX(last_event_at)                                                                as last_active,
       (SELECT s2.dominant_model
        FROM sessions s2
-       WHERE COALESCE(s2.source, 'claude-code') = COALESCE(sessions.source, 'claude-code')
-         AND s2.project_path = sessions.project_path
+       WHERE COALESCE(s2.source, 'claude-code') = COALESCE(billable_sessions.source, 'claude-code')
+         AND s2.project_path = billable_sessions.project_path
          AND s2.dominant_model IS NOT NULL
        GROUP BY s2.dominant_model
        ORDER BY COUNT(*) DESC LIMIT 1)                                                  as dominant_model
-    FROM sessions
+    FROM billable_sessions
     WHERE project_path = ?
     GROUP BY COALESCE(source, 'claude-code')
   `),
@@ -551,16 +572,16 @@ const stmts = {
     SELECT
       COALESCE(SUM(CASE
         WHEN s.loops_detected > 0
-        THEN s.total_cost_usd * CAST(s.loops_detected AS REAL) / MAX(1.0,
+        THEN s.billable_cost_usd * CAST(s.loops_detected AS REAL) / MAX(1.0,
           (SELECT CAST(COUNT(*) AS REAL) FROM events e WHERE e.session_id = s.id AND e.type = 'Done')
         )
         ELSE 0.0
       END), 0) AS loop_waste_usd,
-      COALESCE(SUM(s.total_cost_usd), 0)                           AS total_cost_usd,
+      COALESCE(SUM(s.billable_cost_usd), 0)                           AS total_cost_usd,
       COUNT(CASE WHEN s.loops_detected > 0 THEN 1 END)             AS loop_sessions,
       COALESCE(SUM(s.loops_detected), 0)                           AS total_loops,
       COUNT(*)                                                      AS total_sessions
-    FROM sessions s
+    FROM billable_sessions s
     WHERE s.started_at >= ?
   `),
 
@@ -584,13 +605,13 @@ const stmts = {
       date(started_at / 1000, 'unixepoch', 'localtime')          AS date,
       COALESCE(source, 'claude-code')                             AS source,
       COUNT(*)                                                     AS sessions,
-      COALESCE(SUM(total_cost_usd),       0)                      AS cost,
+      COALESCE(SUM(billable_cost_usd),       0)                      AS cost,
       COALESCE(SUM(total_input_tokens),   0)                      AS input_tokens,
       COALESCE(SUM(total_output_tokens),  0)                      AS output_tokens,
       COALESCE(SUM(total_cache_read),     0)                      AS cache_read,
       COALESCE(SUM(loops_detected),       0)                      AS loops,
       COALESCE(AVG(CASE WHEN efficiency_score > 0 THEN efficiency_score END), 100) AS avg_efficiency
-    FROM sessions
+    FROM billable_sessions
     WHERE started_at >= ?
     GROUP BY date, COALESCE(source, 'claude-code')
     ORDER BY date ASC
@@ -602,8 +623,8 @@ const stmts = {
       COALESCE(dominant_model, 'claude-sonnet-4-6')                                     AS model,
       COALESCE(source, 'claude-code')                                                   AS source,
       COALESCE(SUM(total_input_tokens + total_output_tokens + total_cache_read), 0)     AS tokens,
-      COALESCE(SUM(total_cost_usd), 0)                                                  AS cost
-    FROM sessions
+      COALESCE(SUM(billable_cost_usd), 0)                                                  AS cost
+    FROM billable_sessions
     WHERE started_at >= ?
       AND (dominant_model IS NULL OR dominant_model NOT LIKE '<%')
     GROUP BY date, model, COALESCE(source, 'claude-code')
@@ -616,8 +637,8 @@ const stmts = {
       COALESCE(source, 'claude-code')                           AS source,
       COUNT(*)                                                  AS sessions,
       COALESCE(SUM(last_event_at - started_at), 0) / 3600000.0 AS hours,
-      COALESCE(SUM(total_cost_usd), 0)                         AS cost
-    FROM sessions
+      COALESCE(SUM(billable_cost_usd), 0)                         AS cost
+    FROM billable_sessions
     WHERE started_at >= ?
     GROUP BY project, COALESCE(source, 'claude-code')
     ORDER BY hours DESC
@@ -736,7 +757,7 @@ const stmts = {
   getWeeklyInsight: db.prepare(`
     SELECT
       COUNT(*)                                                      AS total_sessions,
-      COALESCE(SUM(total_cost_usd),       0)                        AS total_cost,
+      COALESCE(SUM(billable_cost_usd),       0)                        AS total_cost,
       COALESCE(SUM(total_input_tokens),   0)                        AS input_tokens,
       COALESCE(SUM(total_output_tokens),  0)                        AS output_tokens,
       COALESCE(SUM(total_cache_read),     0)                        AS cache_read,
@@ -744,7 +765,7 @@ const stmts = {
       COALESCE(AVG(CASE WHEN efficiency_score > 0 THEN efficiency_score END), 100) AS avg_efficiency,
       MIN(started_at)                                               AS week_start,
       MAX(last_event_at)                                            AS week_end
-    FROM sessions
+    FROM billable_sessions
     WHERE started_at >= ?
   `),
 
@@ -757,10 +778,10 @@ const stmts = {
 
   getCostProjection: db.prepare(`
     SELECT
-      SUM(total_cost_usd)   AS total_cost_usd,
+      SUM(billable_cost_usd)   AS total_cost_usd,
       MIN(started_at)      AS earliest,
       MAX(last_event_at)   AS latest
-    FROM sessions
+    FROM billable_sessions
     WHERE started_at >= ?
   `),
 
@@ -768,9 +789,9 @@ const stmts = {
     SELECT
       COALESCE(project_path, 'no project') AS project,
       COUNT(*)                              AS session_count,
-      COALESCE(SUM(total_cost_usd), 0)     AS total_cost
-    FROM sessions
-    WHERE started_at >= ? AND total_cost_usd > 0
+      COALESCE(SUM(billable_cost_usd), 0)     AS total_cost
+    FROM billable_sessions
+    WHERE started_at >= ? AND billable_cost_usd > 0
     GROUP BY project_path
     ORDER BY total_cost DESC
     LIMIT 5
@@ -798,8 +819,8 @@ const stmts = {
 
   getUnattributedCost: db.prepare(`
     WITH period_cost AS (
-      SELECT COALESCE(SUM(total_cost_usd), 0) AS total_cost
-      FROM sessions WHERE started_at >= ?
+      SELECT COALESCE(SUM(billable_cost_usd), 0) AS total_cost
+      FROM billable_sessions WHERE started_at >= ?
     ),
     attributed_cost AS (
       WITH session_totals AS (
@@ -815,13 +836,13 @@ const stmts = {
       )
       SELECT COALESCE(SUM(
         CASE WHEN st.total_done > 0
-             THEN (tps.cnt * 1.0 / st.total_done) * s.total_cost_usd
+             THEN (tps.cnt * 1.0 / st.total_done) * s.billable_cost_usd
              ELSE 0 END
       ), 0) AS attributed
       FROM tool_per_session tps
       JOIN session_totals st ON tps.session_id = st.session_id
-      JOIN sessions s ON tps.session_id = s.id
-      WHERE s.total_cost_usd > 0
+      JOIN billable_sessions s ON tps.session_id = s.id
+      WHERE s.billable_cost_usd > 0
     )
     SELECT (pc.total_cost - ac.attributed) AS other_cost_usd
     FROM period_cost pc, attributed_cost ac
@@ -978,6 +999,7 @@ export const dbOps = {
       seqCycleCount,
       cost.context_used,
       cost.context_window,
+      cost.costSource ?? null,
       sessionId,
     )
   },
@@ -1066,6 +1088,10 @@ export const dbOps = {
 
   updateSessionSummary(sessionId: string, summary: string) {
     stmts.updateSessionSummary.run(summary, sessionId)
+  },
+
+  setSessionParent(sessionId: string, parentId: string) {
+    stmts.setSessionParent.run(parentId, sessionId)
   },
 
   updateSessionParent(sessionId: string, parentId: string) {
@@ -1182,7 +1208,7 @@ export const dbOps = {
     const row = db.prepare(`
       SELECT
         COUNT(*)                               AS total_sessions,
-        COALESCE(SUM(total_cost_usd), 0)       AS total_cost,
+        COALESCE(SUM(billable_cost_usd), 0)       AS total_cost,
         COALESCE(SUM(total_input_tokens), 0)   AS input_tokens,
         COALESCE(SUM(total_output_tokens), 0)  AS output_tokens,
         COALESCE(SUM(total_cache_read), 0)     AS cache_read,
@@ -1190,7 +1216,7 @@ export const dbOps = {
         COALESCE(AVG(efficiency_score), 100)   AS avg_efficiency,
         MIN(started_at)                        AS week_start,
         MAX(started_at)                        AS week_end
-      FROM sessions
+      FROM billable_sessions
       WHERE started_at >= ? AND started_at < ?
     `).get(weekStart, weekEnd) as any
 
@@ -1284,9 +1310,9 @@ export const dbOps = {
     return db.prepare(`
       SELECT
         COALESCE(dominant_model, 'unknown') as model,
-        SUM(total_cost_usd) as total_cost,
+        SUM(billable_cost_usd) as total_cost,
         COUNT(*) as session_count
-      FROM sessions
+      FROM billable_sessions
       WHERE started_at >= ?
       GROUP BY dominant_model
       ORDER BY total_cost DESC
@@ -1406,9 +1432,9 @@ export const dbOps = {
         (started_at / 18000000) * 18000000           AS block_start,
         (started_at / 18000000) * 18000000 + 18000000 AS block_end,
         COUNT(*)                                      AS sessions,
-        COALESCE(SUM(total_cost_usd), 0)              AS total_cost_usd,
+        COALESCE(SUM(billable_cost_usd), 0)              AS total_cost_usd,
         COALESCE(SUM(total_input_tokens + total_output_tokens), 0) AS total_tokens
-      FROM sessions
+      FROM billable_sessions
       WHERE started_at > 0
       GROUP BY (started_at / 18000000)
       ORDER BY block_start DESC
@@ -1426,10 +1452,10 @@ export const dbOps = {
     return db.prepare(`
       SELECT
         strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch') AS date,
-        ROUND(SUM(s.total_cost_usd), 6) AS cost_usd,
+        ROUND(SUM(s.billable_cost_usd), 6) AS cost_usd,
         SUM(COALESCE(s.total_input_tokens, 0) + COALESCE(s.total_output_tokens, 0)) AS total_tokens,
         SUM(COALESCE(e.done_count, 0)) AS tool_calls
-      FROM sessions s
+      FROM billable_sessions s
       LEFT JOIN (
         SELECT session_id, COUNT(*) AS done_count
         FROM events WHERE type = 'Done'
@@ -1473,15 +1499,15 @@ export const dbOps = {
     const yesterdayStart = todayStart - 86_400_000
 
     const todayRow = db.prepare(`
-      SELECT COALESCE(SUM(total_cost_usd),0) as cost,
+      SELECT COALESCE(SUM(billable_cost_usd),0) as cost,
              COUNT(*) as sessions,
              COALESCE(SUM(total_input_tokens + total_output_tokens),0) as tokens
-      FROM sessions WHERE started_at >= ?
+      FROM billable_sessions WHERE started_at >= ?
     `).get(todayStart) as { cost: number; sessions: number; tokens: number }
 
     const yesterdayRow = db.prepare(`
-      SELECT COALESCE(SUM(total_cost_usd),0) as cost, COUNT(*) as sessions
-      FROM sessions WHERE started_at >= ? AND started_at < ?
+      SELECT COALESCE(SUM(billable_cost_usd),0) as cost, COUNT(*) as sessions
+      FROM billable_sessions WHERE started_at >= ? AND started_at < ?
     `).get(yesterdayStart, todayStart) as { cost: number; sessions: number }
 
     const topToolRow = db.prepare(`
@@ -1495,15 +1521,15 @@ export const dbOps = {
     `).get(todayStart) as { cnt: number }).cnt
 
     const sevenDayRow = db.prepare(`
-      SELECT COALESCE(SUM(total_cost_usd),0) as cost
-      FROM sessions WHERE started_at >= ? AND started_at < ?
+      SELECT COALESCE(SUM(billable_cost_usd),0) as cost
+      FROM billable_sessions WHERE started_at >= ? AND started_at < ?
     `).get(todayStart - 7 * 86_400_000, todayStart) as { cost: number }
 
     const weekDayOfWeek = new Date(todayStart).getDay()
     const daysFromMonday = (weekDayOfWeek + 6) % 7
     const weekStart = todayStart - daysFromMonday * 86_400_000
     const weekCostRow = db.prepare(`
-      SELECT COALESCE(SUM(total_cost_usd),0) as cost FROM sessions WHERE started_at >= ?
+      SELECT COALESCE(SUM(billable_cost_usd),0) as cost FROM billable_sessions WHERE started_at >= ?
     `).get(weekStart) as { cost: number }
 
     const daysElapsed = Math.max(1, daysFromMonday + 1)

@@ -2,12 +2,17 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { dbOps } from '../src/db'
 
-function insertSession(id: string, startedAt: number, cost: number, inputTok: number, outputTok: number) {
+function insertSession(
+  id: string, startedAt: number, cost: number, inputTok: number, outputTok: number,
+  opts: { costSource?: 'cost-state' | 'computed'; parentId?: string } = {},
+) {
   dbOps.upsertSession({ id, cwd: '/tmp', started_at: startedAt, last_event_at: startedAt })
   dbOps.updateSessionCost(id, {
     cost_usd: cost, input_tokens: inputTok, output_tokens: outputTok,
     cache_read: 0, cache_creation: 0, context_used: 0, context_window: 0,
+    costSource: opts.costSource,
   }, 100, 0)
+  if (opts.parentId) dbOps.updateSessionParent(id, opts.parentId)
 }
 
 test('getBillingBlocks: sessions in 2 different blocks return 2 entries ordered desc', () => {
@@ -47,4 +52,31 @@ test('getBillingBlocks: is_current true for block containing Date.now()', () => 
 test('getBillingBlocks: limit is respected', () => {
   const blocks = dbOps.getBillingBlocks(1)
   assert.ok(blocks.length <= 1)
+})
+
+// S2 — a parent's cost-state total already includes its sub-agents, so their
+// own cost must not be added again (tokens still count: they are real usage).
+test('S2: block and daily totals do not double count sub-agents covered by cost-state', () => {
+  const blockStart = Math.floor(1_700_000_000_000 / 18_000_000) * 18_000_000 // isolated past block
+  const at = (n: number) => blockStart + 60_000 * n
+
+  insertSession('s2-parent', at(1), 19.56, 1000, 500, { costSource: 'cost-state' })
+  const kids = [1.20, 0.90, 0.80, 0.76, 0.70, 0.50] // 4.86
+  kids.forEach((c, i) => insertSession(`agent-s2-kid${i}`, at(2 + i), c, 100, 50, { parentId: 's2-parent' }))
+  // Edge: parent unknown → child counted once
+  insertSession('agent-s2-orphan', at(10), 0.50, 10, 5, { parentId: 'not-in-db' })
+  // Edge: parent without cost-state (computed from lines) → child counted
+  insertSession('s2-parent-computed', at(11), 1.00, 10, 5, { costSource: 'computed' })
+  insertSession('agent-s2-kid-computed', at(12), 0.25, 10, 5, { parentId: 's2-parent-computed' })
+
+  const expected = 19.56 + 0.50 + 1.00 + 0.25
+  const block = dbOps.getBillingBlocks(100_000).find(b => b.block_start === blockStart)
+  assert.ok(block, 'fixture block exists')
+  assert.ok(Math.abs(block!.total_cost_usd - expected) < 1e-9, `block ${block!.total_cost_usd} vs ${expected}`)
+  assert.equal(block!.sessions, 10)                          // every session still listed
+  assert.equal(block!.total_tokens, 1500 + 6 * 150 + 3 * 15)  // sub-agent tokens still counted
+
+  const day = new Date(at(1)).toISOString().slice(0, 10)
+  const daily = dbOps.getDailyActivity(5000).find(d => d.date === day)
+  assert.ok(daily && Math.abs(daily.cost_usd - expected) < 1e-6, `daily ${daily?.cost_usd} vs ${expected}`)
 })

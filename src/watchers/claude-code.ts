@@ -11,7 +11,7 @@ import fsSync from 'fs'
 import { type WatcherAdapter, type ParsedEvent, registerAdapter } from './adapter'
 import { getClaudeDir } from '../paths'
 import { calcCost, getContextWindow, pricingForUsage, DEFAULT_MODEL } from '../pricing'
-import { isDuplicateMessageId, readCostStateUsd } from '../jsonl'
+import { isDuplicateMessageId, readCostStateUsd, parentSessionIdFromPath } from '../jsonl'
 import type { CostUpdate } from '../db'
 import type { BlockCostEntry } from '../db'
 
@@ -155,7 +155,10 @@ export async function processJSONL(filePath: string): Promise<CostUpdate | null>
     }
 
     // Claude Code's own cost-state line is the authoritative session total
+    // (it already includes the session's sub-agents)
     if (costStateUsd !== undefined) totals.cost_usd = costStateUsd
+    totals.costSource = costStateUsd !== undefined ? 'cost-state' : 'computed'
+    totals.parentSessionId = parentSessionIdFromPath(filePath)
 
     fileOffsets.set(filePath, { offset: currentSize, lastAccess: Date.now(), totals, seenIds, costStateUsd })
     return totals

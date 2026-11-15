@@ -12,6 +12,7 @@ import { ConfigPanel }        from './components/ConfigPanel'
 import { TracePanel }          from './components/TracePanel'
 import { LiveSourceBar, SOURCE_LABELS } from './components/LiveSourceBar'
 import { fmtTok } from './components/shared'
+import { mergeLiveEvent } from './lib/liveEvents'
 
 const HistoryView  = lazy(() => import('./components/HistoryView').then(m => ({ default: m.HistoryView })))
 const ProjectsView = lazy(() => import('./components/ProjectsView').then(m => ({ default: m.ProjectsView })))
@@ -653,16 +654,7 @@ function handleMessage(prev: AppState, msg: any): AppState {
     if (evt.session_id && prev.sessionId && evt.session_id !== prev.sessionId) {
       return { ...prev, blockCosts, pendingBlockCostBySession }
     }
-    let events = [...prev.events]
-    if (evt.type === 'Done' && evt.tool_name) {
-      const idx = [...events].reverse().findIndex(e => e.type === 'PreToolUse' && e.tool_name === evt.tool_name)
-      if (idx !== -1) {
-        const ri = events.length - 1 - idx
-        events[ri] = { ...events[ri], type: 'Done', duration_ms: evt.ts - events[ri].ts }
-      }
-    } else {
-      events = [...events, evt]
-    }
+    let events = mergeLiveEvent(prev.events, evt)
     if (events.length > MAX_EVENTS) events = events.slice(-MAX_EVENTS)
     const next: AppState = { ...prev, events, blockCosts, pendingBlockCostBySession }
     if (!prev.sessionId && evt.session_id) {

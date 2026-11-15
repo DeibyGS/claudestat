@@ -205,6 +205,13 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
   ` },
   // v28's view also zeroed top-level sessions mislinked by the cwd heuristic
   { version: 30, sql: `DROP VIEW IF EXISTS billable_sessions; ${BILLABLE_SESSIONS_VIEW}` },
+  // CC branch from the JSONL `gitBranch`; external_id lookups without session_id
+  // (a tool_use id is global: a sub-agent's call may reach the hook under its parent)
+  { version: 31, sql: `
+    ALTER TABLE sessions ADD COLUMN git_branch TEXT;
+    CREATE INDEX IF NOT EXISTS idx_events_external ON events(external_id) WHERE external_id IS NOT NULL;
+    DROP VIEW IF EXISTS billable_sessions; ${BILLABLE_SESSIONS_VIEW}
+  ` },
 ]
 
 function runMigrations() {
@@ -239,6 +246,7 @@ export interface SessionRow {
   ai_summary?: string
   dominant_model?: string
   parent_session_id?: string
+  git_branch?: string | null
   billing?: BillingKind | null
   api_equivalent_usd?: number | null
   /** Only on rows read from billable_sessions: 0 when the parent's cost-state covers this session. Use for sums. */
@@ -282,6 +290,15 @@ export interface EventRow {
   duration_ms?: number
   skill_parent?: string
   source?: string
+  external_id?: string   // CC tool_use id / OC part id — dedup key across hook and JSONL
+}
+
+/** A tool_use block read from a Claude Code JSONL (S6 fallback when hooks are off). */
+export interface JsonlToolUse {
+  id:    string
+  name:  string
+  input: string   // JSON of tool_use.input
+  ts:    number
 }
 
 export interface BlockCostEntry {
@@ -316,6 +333,9 @@ export interface CostUpdate {
   costSource?: 'cost-state' | 'computed'  // where cost_usd came from (cost-state already includes sub-agents)
   billing?: BillingKind              // OpenCode only (see BillingKind)
   apiEquivalentUsd?: number | null   // OpenCode: same tokens at the catalog API price (null = unknown)
+  cwd?: string                       // CC: latest `cwd` seen in the JSONL
+  gitBranch?: string                 // CC: latest `gitBranch` seen in the JSONL
+  toolUses?: JsonlToolUse[]          // CC: tool_use blocks new since the previous poll
 }
 
 export interface BillingBlock {
@@ -396,9 +416,44 @@ const stmts = {
     WHERE id = ?
   `),
 
+  // A row whose external_id (CC tool_use id) is already stored is skipped
   insertEvent: db.prepare(`
-    INSERT INTO events (session_id, type, tool_name, tool_input, ts, cwd, skill_parent, source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, 'claude-code'))
+    INSERT INTO events (session_id, type, tool_name, tool_input, ts, cwd, skill_parent, source, external_id)
+    SELECT @session_id, @type, @tool_name, @tool_input, @ts, @cwd, @skill_parent, COALESCE(@source, 'claude-code'), @external_id
+    WHERE @external_id IS NULL OR NOT EXISTS (SELECT 1 FROM events WHERE external_id = @external_id)
+  `),
+
+  // JSONL fallback: skip ids already stored, and legacy hook rows (no id) for the
+  // same tool within the window in this session or its parent
+  insertJsonlToolEvent: db.prepare(`
+    INSERT INTO events (session_id, type, tool_name, tool_input, ts, external_id, source)
+    SELECT @sid, 'Done', @name, @input, @ts, @id, 'claude-code'
+    WHERE NOT EXISTS (SELECT 1 FROM events WHERE external_id = @id)
+      AND NOT EXISTS (
+        SELECT 1 FROM events
+        WHERE session_id IN (@sid, @parent) AND tool_name = @name AND external_id IS NULL
+          AND ts BETWEEN @ts - @window AND @ts + @window
+      )
+  `),
+
+  // Hook Pre arriving after the JSONL row: keep the context only the hook knows
+  fillEventContext: db.prepare(`
+    UPDATE events SET skill_parent = COALESCE(skill_parent, @skill_parent), cwd = COALESCE(cwd, @cwd)
+    WHERE external_id = @external_id
+  `),
+
+  pairPostByExternalId: db.prepare(`
+    UPDATE events SET type = 'Done', tool_response = ?, duration_ms = MAX(0, ? - ts)
+    WHERE external_id = ? AND tool_response IS NULL
+    RETURNING id
+  `),
+
+  updateSessionLocation: db.prepare(`
+    UPDATE sessions SET
+      cwd          = COALESCE(cwd, @cwd),
+      project_path = COALESCE(project_path, @cwd),
+      git_branch   = COALESCE(@branch, git_branch)
+    WHERE id = @id
   `),
 
   insertOcEvent: db.prepare(`
@@ -969,11 +1024,46 @@ export const dbOps = {
   },
 
   insertEvent(e: EventRow): number {
-    const res = stmts.insertEvent.run(
-      e.session_id, e.type, e.tool_name ?? null,
-      e.tool_input ?? null, e.ts, e.cwd ?? null, e.skill_parent ?? null, e.source ?? null
-    )
+    const res = stmts.insertEvent.run({
+      session_id: e.session_id, type: e.type, tool_name: e.tool_name ?? null,
+      tool_input: e.tool_input ?? null, ts: e.ts, cwd: e.cwd ?? null,
+      skill_parent: e.skill_parent ?? null, source: e.source ?? null, external_id: e.external_id ?? null,
+    })
+    if (Number(res.changes) === 0 && e.external_id) {
+      stmts.fillEventContext.run({ skill_parent: e.skill_parent ?? null, cwd: e.cwd ?? null, external_id: e.external_id })
+    }
     return Number(res.lastInsertRowid)
+  },
+
+  /** Stores JSONL tool calls not already seen; returns the ones actually inserted. */
+  insertJsonlToolEvents(sessionId: string, parentId: string | null, uses: JsonlToolUse[], windowMs = 5_000): JsonlToolUse[] {
+    const inserted: JsonlToolUse[] = []
+    // one transaction per poll: a startup re-read can carry thousands of calls
+    db.exec('BEGIN')
+    try {
+      for (const u of uses) {
+        const r = stmts.insertJsonlToolEvent.run({
+          sid: sessionId, name: u.name, input: u.input, ts: u.ts, id: u.id,
+          parent: parentId ?? sessionId, window: windowMs,
+        })
+        if (Number(r.changes) > 0) inserted.push(u)
+      }
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+    return inserted
+  },
+
+  /** Pairs a PostToolUse onto the row with its tool_use id (hook Pre or JSONL). */
+  pairPostByExternalId(toolUseId: string, response: string, postTs: number): number | null {
+    const row = stmts.pairPostByExternalId.get(capToolResponse(response), postTs, toolUseId) as { id: number } | undefined
+    return row?.id ?? null
+  },
+
+  updateSessionLocation(sessionId: string, cwd: string | undefined, gitBranch: string | undefined): void {
+    stmts.updateSessionLocation.run({ cwd: cwd ?? null, branch: gitBranch ?? null, id: sessionId })
   },
 
   insertOcEvent(sessionId: string, toolName: string, ts: number, durationMs: number, externalId: string): void {

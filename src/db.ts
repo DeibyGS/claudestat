@@ -190,6 +190,12 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
     FROM sessions s
     LEFT JOIN sessions p ON p.id = s.parent_session_id
   ` },
+  // OpenCode: 'subscription' | 'api' | 'free', plus what the same tokens would
+  // cost at the provider's API price (NULL when the catalog has no price).
+  { version: 29, sql: `
+    ALTER TABLE sessions ADD COLUMN billing TEXT;
+    ALTER TABLE sessions ADD COLUMN api_equivalent_usd REAL
+  ` },
 ]
 
 function runMigrations() {
@@ -224,6 +230,9 @@ export interface SessionRow {
   ai_summary?: string
   dominant_model?: string
   parent_session_id?: string
+  billing?: BillingKind | null
+  api_equivalent_usd?: number | null
+
   source?: string
   exact_retries?: number
   error_rate?: number
@@ -274,7 +283,11 @@ export interface BlockCostEntry {
   cacheCreate?:  number
   context_used?:   number
   context_window?: number
+  apiEquivalentUsd?: number | null  // OpenCode: API price of this step's tokens (null = not in catalog)
 }
+
+/** 'subscription' = provider reported $0; 'api' = provider reported a cost; 'free' = $0 model. */
+export type BillingKind = 'subscription' | 'api' | 'free'
 
 export interface CostUpdate {
   input_tokens: number
@@ -290,6 +303,8 @@ export interface CostUpdate {
   lastTs?: number             // timestamp ms del último mensaje assistant (para last_event_at de sub-agentes)
   parentSessionId?: string    // CC sub-agent: parent id taken from <parentId>/subagents/agent-*.jsonl
   costSource?: 'cost-state' | 'computed'  // where cost_usd came from (cost-state already includes sub-agents)
+  billing?: BillingKind              // OpenCode only (see BillingKind)
+  apiEquivalentUsd?: number | null   // OpenCode: same tokens at the catalog API price (null = unknown)
 }
 
 export interface BillingBlock {
@@ -454,6 +469,10 @@ const stmts = {
 
   updateSessionParent: db.prepare(`
     UPDATE sessions SET parent_session_id = ? WHERE id = ? AND parent_session_id IS NULL
+  `),
+
+  updateSessionBilling: db.prepare(`
+    UPDATE sessions SET billing = ?, api_equivalent_usd = ? WHERE id = ?
   `),
 
   // Path-derived link is authoritative: overrides a heuristic guess
@@ -1002,6 +1021,7 @@ export const dbOps = {
       cost.costSource ?? null,
       sessionId,
     )
+    if (cost.billing) stmts.updateSessionBilling.run(cost.billing, cost.apiEquivalentUsd ?? null, sessionId)
   },
 
   getSessionEvents(sessionId: string): EventRow[] {

@@ -17,12 +17,12 @@ import os   from 'os'
 import path from 'path'
 import { type PollableAdapter, type PollSession, type ParsedEvent, registerAdapter } from './adapter'
 import { getOpencodeDb } from '../paths'
-import { getContextWindow, calcCost } from '../pricing'
-import type { CostUpdate, BlockCostEntry } from '../db'
+import { getContextWindow, type ModelPricing } from '../pricing'
+import type { CostUpdate, BlockCostEntry, BillingKind } from '../db'
 import { dbOps } from '../db'
 import { findProjectCwdForFile } from '../routes/helpers'
 import { hasOcV2, ocSessionTable } from './oc-schema'
-import { ocContextWindow } from './oc-catalog'
+import { ocContextWindow, ocModelPricing } from './oc-catalog'
 
 function openDb() {
   const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
@@ -47,7 +47,23 @@ function contextWindowFor(db: Parameters<typeof ocContextWindow>[0], ref: { id: 
 
 interface StepFinishRow {
   total_tokens: number; input_tokens: number; output_tokens: number; cache_read: number; cache_write: number
+  cost: number | null   // real cost OpenCode recorded for this step (0 on a subscription)
   time_created: number
+}
+
+/** USD for a token count at per-MTok prices. */
+function costAt(p: ModelPricing, t: { input: number; output: number; cacheRead: number; cacheWrite: number }): number {
+  return (t.input * p.input + t.output * p.output + t.cacheRead * p.cacheRead + t.cacheWrite * p.cacheCreate) / 1_000_000
+}
+
+/**
+ * OpenCode records the real cost: 0 means the provider bills a subscription
+ * (or the model is free), never "unknown". The API price of the same tokens
+ * comes from OC's catalog, so a $0 session is not re-estimated at Claude rates.
+ */
+function billingKind(realCost: number, apiPricing: ModelPricing | null): BillingKind {
+  if (realCost > 0) return 'api'
+  return apiPricing && apiPricing.input === 0 && apiPricing.output === 0 ? 'free' : 'subscription'
 }
 
 const STEP_FINISH_COLUMNS = `json_extract(data, '$.tokens.total') as total_tokens,
@@ -55,13 +71,14 @@ const STEP_FINISH_COLUMNS = `json_extract(data, '$.tokens.total') as total_token
               json_extract(data, '$.tokens.output') as output_tokens,
               json_extract(data, '$.tokens.cache.read') as cache_read,
               json_extract(data, '$.tokens.cache.write') as cache_write,
+              json_extract(data, '$.cost') as cost,
               time_created`
 
 // v2: cada assistant message con `tokens` es un paso (equivalente al
 // 'step-finish' de v1). total_tokens replica la fórmula de v1
 // (input + output + reasoning + cache.read + cache.write).
-// El costo usa solo input/output/cache (paridad con v1): OpenCode reporta el
-// coste real en session_v2.cost cuando es no-cero; aquí solo estimamos.
+// `cost` es el coste real que OpenCode registró para el paso (0 con suscripción);
+// el equivalente API se calcula aparte con el catálogo (ver billingKind).
 const V2_STEP_COLUMNS = `COALESCE(json_extract(m.data, '$.tokens.input'), 0) as input_tokens,
               COALESCE(json_extract(m.data, '$.tokens.output'), 0) as output_tokens,
               COALESCE(json_extract(m.data, '$.tokens.cache.read'), 0) as cache_read,
@@ -71,6 +88,7 @@ const V2_STEP_COLUMNS = `COALESCE(json_extract(m.data, '$.tokens.input'), 0) as 
                 + COALESCE(json_extract(m.data, '$.tokens.reasoning'), 0)
                 + COALESCE(json_extract(m.data, '$.tokens.cache.read'), 0)
                 + COALESCE(json_extract(m.data, '$.tokens.cache.write'), 0) as total_tokens,
+              json_extract(m.data, '$.cost') as cost,
               m.time_created`
 
 // Un "paso" = step-finish (v1) o assistant message con tokens (v2).
@@ -111,14 +129,14 @@ const lastEmittedStepFinishTs = new Map<string, number>()
 // Un 'step-finish' de OC ya es un turno completo (a diferencia de CC, que fragmenta
 // un turno en varias llamadas API) — se usa tanto para el bloque en vivo (pollSessions,
 // solo el último) como para el historial completo (getAllStepFinishBlocksForSession).
-function stepFinishRowToBlockCost(row: StepFinishRow, modelId: string, contextWindow: number): BlockCostEntry | null {
-  const price = calcCost(modelId, {
-    input_tokens: row.input_tokens ?? 0,
-    output_tokens: row.output_tokens ?? 0,
-    cache_read_input_tokens: row.cache_read ?? 0,
-    cache_creation_input_tokens: row.cache_write ?? 0,
-  })
-  if (price <= 0) return null
+function stepFinishRowToBlockCost(row: StepFinishRow, contextWindow: number, apiPricing: ModelPricing | null): BlockCostEntry | null {
+  const tokens = {
+    input: row.input_tokens ?? 0, output: row.output_tokens ?? 0,
+    cacheRead: row.cache_read ?? 0, cacheWrite: row.cache_write ?? 0,
+  }
+  if (!tokens.input && !tokens.output && !tokens.cacheRead && !tokens.cacheWrite) return null
+  // Real step cost (0 on a subscription); the 70/30 split is a display approximation
+  const price = row.cost && row.cost > 0 ? row.cost : 0
   return {
     inputUsd:       price * 0.7,
     outputUsd:      price * 0.3,
@@ -129,6 +147,7 @@ function stepFinishRowToBlockCost(row: StepFinishRow, modelId: string, contextWi
     cacheCreate:    row.cache_write ?? 0,
     context_used:   row.total_tokens,
     context_window: contextWindow,
+    apiEquivalentUsd: apiPricing ? costAt(apiPricing, tokens) : null,
   }
 }
 
@@ -360,18 +379,18 @@ export const opencodeAdapter: PollableAdapter = {
         const modelRef = parseModelRef(row.model)
         const modelId = modelRef.id
         const contextWindow = contextWindowFor(db!, modelRef)
+        const apiPricing = ocModelPricing(db!, modelRef.providerId, modelId)
         const dir = row.directory
         const shouldInfer = !dir || dir === HOME || dir.split(/[/\\]/).filter(Boolean).length <= 3
         const inferred = shouldInfer ? inferProjectFromParts(db, row.id) : undefined
         const projectCwd = inferred ?? dir ?? undefined
 
-        const realCost = row.cost
-        const estimatedCost = realCost !== 0 ? realCost : calcCost(modelId, {
-          input_tokens: row.tokens_input,
-          output_tokens: row.tokens_output,
-          cache_read_input_tokens: row.tokens_cache_read,
-          cache_creation_input_tokens: row.tokens_cache_write,
-        })
+        const realCost = row.cost > 0 ? row.cost : 0
+        const billing = billingKind(realCost, apiPricing)
+        const apiEquivalentUsd = apiPricing ? costAt(apiPricing, {
+          input: row.tokens_input, output: row.tokens_output,
+          cacheRead: row.tokens_cache_read, cacheWrite: row.tokens_cache_write,
+        }) : null
 
         // Query latest step for actual context usage (step-finish en v1,
         // último assistant message con tokens en v2)
@@ -386,7 +405,7 @@ export const opencodeAdapter: PollableAdapter = {
               contextUsed = stepFinish.total_tokens
               if (stepFinish.time_created !== lastEmittedStepFinishTs.get(row.id)) {
                 lastEmittedStepFinishTs.set(row.id, stepFinish.time_created)
-                lastEntry = stepFinishRowToBlockCost(stepFinish, modelId, contextWindow) ?? undefined
+                lastEntry = stepFinishRowToBlockCost(stepFinish, contextWindow, apiPricing) ?? undefined
               }
             }
           }
@@ -400,7 +419,9 @@ export const opencodeAdapter: PollableAdapter = {
             output_tokens: row.tokens_output,
             cache_read: row.tokens_cache_read,
             cache_creation: row.tokens_cache_write,
-            cost_usd: estimatedCost,
+            cost_usd: realCost,
+            billing,
+            apiEquivalentUsd,
             context_used: contextUsed,
             context_window: contextWindow,
             lastModel: modelId,
@@ -440,12 +461,13 @@ export async function getAllStepFinishBlocksForSession(sessionId: string): Promi
     const sessionRow = db.prepare(`SELECT model FROM ${ocSessionTable(db)} WHERE id = ?`).get(sessionId) as { model: string | null } | undefined
     const modelRef = parseModelRef(sessionRow?.model ?? null)
     const contextWindow = contextWindowFor(db, modelRef)
+    const apiPricing = ocModelPricing(db, modelRef.providerId, modelRef.id)
 
     const rows = querySteps(db, sessionId, v2, 'ASC')
 
     const blocks = rows
       .filter(r => r.total_tokens)
-      .map(r => stepFinishRowToBlockCost(r, modelRef.id, contextWindow))
+      .map(r => stepFinishRowToBlockCost(r, contextWindow, apiPricing))
       .filter((b): b is BlockCostEntry => b !== null)
 
     stepFinishBlocksCache.set(sessionId, { data: blocks, ts: Date.now() })

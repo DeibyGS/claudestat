@@ -256,3 +256,56 @@ describe('opencode watcher — schema v1 fallback', () => {
     assert.equal(done[0].duration_ms, 110)
   })
 })
+
+// Each OpenCode provider/model has its own window: read it from OC's own
+// models-dev catalog (kv 'models-dev:v2:catalog') instead of guessing.
+describe('opencode watcher — context window from the models-dev catalog', () => {
+  const catalogFile = path.join(tmpDir, 'oc-catalog.db')
+
+  before(() => {
+    const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
+    const db = new DatabaseSync(catalogFile)
+    db.exec(`
+      CREATE TABLE session_v2 (
+        id TEXT PRIMARY KEY, directory TEXT, model TEXT, cost REAL DEFAULT 0,
+        tokens_input INTEGER DEFAULT 0, tokens_output INTEGER DEFAULT 0,
+        tokens_cache_read INTEGER DEFAULT 0, tokens_cache_write INTEGER DEFAULT 0,
+        time_created INTEGER, time_updated INTEGER, time_archived INTEGER
+      );
+      CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, data TEXT);
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);
+    `)
+    const body = JSON.stringify({
+      openai:   { models: { 'gpt-x':  { limit: { context: 400_000, input: 272_000, output: 128_000 } } } },
+      opencode: { models: { 'free-y': { limit: { context: 200_000, output: 128_000 } } } },
+    })
+    db.prepare(`INSERT INTO kv VALUES (?, ?)`).run('models-dev:v2:catalog', JSON.stringify({ updatedAt: 1, digest: 'd1', body }))
+    db.prepare(`INSERT INTO kv VALUES (?, ?)`).run('models-dev:v2:catalog:meta', JSON.stringify({ updatedAt: 1, digest: 'd1' }))
+    const now = Date.now()
+    const insert = db.prepare(`INSERT INTO session_v2 VALUES (?, ?, ?, 0, 10, 5, 0, 0, ?, ?, NULL)`)
+    insert.run('ses_cat_input',   '/Users/test/projects/cat/a', JSON.stringify({ id: 'gpt-x',  providerID: 'openai' }),   now - 3000, now - 3000)
+    insert.run('ses_cat_context', '/Users/test/projects/cat/b', JSON.stringify({ id: 'free-y', providerID: 'opencode' }), now - 2000, now - 2000)
+    insert.run('ses_cat_missing', '/Users/test/projects/cat/c', JSON.stringify({ id: 'claude-opus-4-8', providerID: 'anthropic' }), now - 1000, now - 1000)
+    db.close()
+    process.env.OPENCODE_DB = catalogFile
+  })
+
+  after(() => {
+    if (prevOpenCodeDb === undefined) delete process.env.OPENCODE_DB
+    else process.env.OPENCODE_DB = prevOpenCodeDb
+  })
+
+  test('uses limit.input when present, else limit.context, else the Claude table', async () => {
+    const { dbOps } = require('../src/db')
+    for (const id of ['ses_cat_input', 'ses_cat_context', 'ses_cat_missing'])
+      dbOps.upsertSession({ id, cwd: '/Users/test/projects/cat', started_at: Date.now() - 5000, source: 'opencode' })
+
+    const { opencodeAdapter } = require('../src/watchers/opencode')
+    const sessions = await opencodeAdapter.pollSessions(0)
+    const win = (id: string) => sessions.find((s: { sessionId: string }) => s.sessionId === id)?.cost.context_window
+
+    assert.equal(win('ses_cat_input'), 272_000)   // max prompt size, not the 400K total
+    assert.equal(win('ses_cat_context'), 200_000)
+    assert.equal(win('ses_cat_missing'), 967_000) // not in catalog → Claude table
+  })
+})

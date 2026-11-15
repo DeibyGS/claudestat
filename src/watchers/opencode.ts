@@ -22,20 +22,27 @@ import type { CostUpdate, BlockCostEntry } from '../db'
 import { dbOps } from '../db'
 import { findProjectCwdForFile } from '../routes/helpers'
 import { hasOcV2, ocSessionTable } from './oc-schema'
+import { ocContextWindow } from './oc-catalog'
 
 function openDb() {
   const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
   return new DatabaseSync(getOpencodeDb(), { open: true })
 }
 
-function parseModel(raw: string | null): string {
-  if (!raw) return 'unknown'
+/** Session `model` column: {"id":"gpt-6.1-sol","providerID":"openai",…}. */
+function parseModelRef(raw: string | null): { id: string; providerId?: string } {
+  if (!raw) return { id: 'unknown' }
   try {
-    const obj = JSON.parse(raw) as { id?: string }
-    return obj.id ?? 'unknown'
+    const obj = JSON.parse(raw) as { id?: string; providerID?: string }
+    return { id: obj.id ?? 'unknown', providerId: obj.providerID }
   } catch {
-    return 'unknown'
+    return { id: 'unknown' }
   }
+}
+
+/** OC catalog window for this provider/model, else the Claude table / 200K fallback. */
+function contextWindowFor(db: Parameters<typeof ocContextWindow>[0], ref: { id: string; providerId?: string }): number {
+  return ocContextWindow(db, ref.providerId, ref.id) ?? getContextWindow(ref.id)
 }
 
 interface StepFinishRow {
@@ -104,7 +111,7 @@ const lastEmittedStepFinishTs = new Map<string, number>()
 // Un 'step-finish' de OC ya es un turno completo (a diferencia de CC, que fragmenta
 // un turno en varias llamadas API) — se usa tanto para el bloque en vivo (pollSessions,
 // solo el último) como para el historial completo (getAllStepFinishBlocksForSession).
-function stepFinishRowToBlockCost(row: StepFinishRow, modelId: string): BlockCostEntry | null {
+function stepFinishRowToBlockCost(row: StepFinishRow, modelId: string, contextWindow: number): BlockCostEntry | null {
   const price = calcCost(modelId, {
     input_tokens: row.input_tokens ?? 0,
     output_tokens: row.output_tokens ?? 0,
@@ -121,7 +128,7 @@ function stepFinishRowToBlockCost(row: StepFinishRow, modelId: string): BlockCos
     cacheRead:      row.cache_read ?? 0,
     cacheCreate:    row.cache_write ?? 0,
     context_used:   row.total_tokens,
-    context_window: getContextWindow(modelId),
+    context_window: contextWindow,
   }
 }
 
@@ -350,7 +357,9 @@ export const opencodeAdapter: PollableAdapter = {
       }
 
       return grouped.map(row => {
-        const modelId = parseModel(row.model)
+        const modelRef = parseModelRef(row.model)
+        const modelId = modelRef.id
+        const contextWindow = contextWindowFor(db!, modelRef)
         const dir = row.directory
         const shouldInfer = !dir || dir === HOME || dir.split(/[/\\]/).filter(Boolean).length <= 3
         const inferred = shouldInfer ? inferProjectFromParts(db, row.id) : undefined
@@ -377,7 +386,7 @@ export const opencodeAdapter: PollableAdapter = {
               contextUsed = stepFinish.total_tokens
               if (stepFinish.time_created !== lastEmittedStepFinishTs.get(row.id)) {
                 lastEmittedStepFinishTs.set(row.id, stepFinish.time_created)
-                lastEntry = stepFinishRowToBlockCost(stepFinish, modelId) ?? undefined
+                lastEntry = stepFinishRowToBlockCost(stepFinish, modelId, contextWindow) ?? undefined
               }
             }
           }
@@ -393,7 +402,7 @@ export const opencodeAdapter: PollableAdapter = {
             cache_creation: row.tokens_cache_write,
             cost_usd: estimatedCost,
             context_used: contextUsed,
-            context_window: getContextWindow(modelId),
+            context_window: contextWindow,
             lastModel: modelId,
             firstTs: row.time_created,
             lastTs:  row.time_updated,
@@ -429,13 +438,14 @@ export async function getAllStepFinishBlocksForSession(sessionId: string): Promi
     db = openDb()
     const v2 = hasOcV2(db)
     const sessionRow = db.prepare(`SELECT model FROM ${ocSessionTable(db)} WHERE id = ?`).get(sessionId) as { model: string | null } | undefined
-    const modelId = parseModel(sessionRow?.model ?? null)
+    const modelRef = parseModelRef(sessionRow?.model ?? null)
+    const contextWindow = contextWindowFor(db, modelRef)
 
     const rows = querySteps(db, sessionId, v2, 'ASC')
 
     const blocks = rows
       .filter(r => r.total_tokens)
-      .map(r => stepFinishRowToBlockCost(r, modelId))
+      .map(r => stepFinishRowToBlockCost(r, modelRef.id, contextWindow))
       .filter((b): b is BlockCostEntry => b !== null)
 
     stepFinishBlocksCache.set(sessionId, { data: blocks, ts: Date.now() })

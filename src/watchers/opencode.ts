@@ -465,7 +465,7 @@ export const opencodeAdapter: PollableAdapter = {
             apiEquivalentUsd,
             provider: ocProviderLabel(modelRef.providerId, billing),
             ocState:   ocSessionState(row.time_busy, row.time_idle),
-            gitBranch: ocBranch(shouldInfer ? undefined : dir, row.time_updated),
+            gitBranch: ocBranch(projectCwd, row.time_updated),
             context_used: contextUsed,
             context_window: contextWindow,
             lastModel: modelId,

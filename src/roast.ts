@@ -79,7 +79,7 @@ export async function runRoast(opts: { stats: boolean; months: number }) {
     totalBashCalls += bashCalls
   }
 
-  const totalCost = sessions.reduce((a, s) => a + (s.total_cost_usd || 0), 0)
+  const totalCost = sessions.reduce((a, s) => a + (s.billable_cost_usd || 0), 0)
   const avgEfficiency = sessions.length > 0
     ? sessions.reduce((a, s) => a + (s.efficiency_score || 0), 0) / sessions.length
     : 100

@@ -16,13 +16,13 @@
  */
 
 import { readConfig } from './config'
-import { KNOWN_CONTEXT_WINDOWS } from './model-pricing'
+import { knownContextWindow } from './model-pricing'
 
 export * from './model-pricing'
 
 /**
  * Get context window for a model.
- * Priority: config override → KNOWN_CONTEXT_WINDOWS → 200K fallback.
+ * Priority: config override → KNOWN_CONTEXT_WINDOWS (suffix-tolerant) → 200K fallback.
  */
 export function getContextWindow(model: string): number {
   try {
@@ -31,7 +31,7 @@ export function getContextWindow(model: string): number {
       return config.contextWindowOverrides[model]
     }
   } catch { /* ignore config read errors */ }
-  return KNOWN_CONTEXT_WINDOWS[model] ?? 200_000
+  return knownContextWindow(model) ?? 200_000
 }
 
 // ─── Context Thresholds ───────────────────────────────────────────────────────

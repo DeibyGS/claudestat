@@ -615,7 +615,7 @@ miscRouter.get('/api/oc-model-usage', (req: Request, res: Response) => {
     const model = s.dominant_model || 'unknown'
     const existing = modelMap.get(model) ?? { sessions: 0, totalCost: 0 }
     existing.sessions++
-    existing.totalCost += s.total_cost_usd ?? 0
+    existing.totalCost += s.billable_cost_usd ?? 0
     modelMap.set(model, existing)
   }
 

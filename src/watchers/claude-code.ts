@@ -10,8 +10,8 @@ import fs   from 'fs/promises'
 import fsSync from 'fs'
 import { type WatcherAdapter, type ParsedEvent, registerAdapter } from './adapter'
 import { getClaudeDir } from '../paths'
-import { calcCost, getContextWindow, pricingFor, DEFAULT_MODEL } from '../pricing'
-import { isDuplicateMessageId, readCostStateUsd } from '../jsonl'
+import { costFromPricing, getContextWindow, pricingForUsage, DEFAULT_MODEL } from '../pricing'
+import { isDuplicateMessageId, readCostStateUsd, parentSessionIdFromPath } from '../jsonl'
 import type { CostUpdate } from '../db'
 import type { BlockCostEntry } from '../db'
 
@@ -119,13 +119,13 @@ export async function processJSONL(filePath: string): Promise<CostUpdate | null>
         totals.output_tokens  += usage.output_tokens               ?? 0
         totals.cache_read     += usage.cache_read_input_tokens      ?? 0
         totals.cache_creation += usage.cache_creation_input_tokens  ?? 0
-        totals.cost_usd       += calcCost(model, usage)
+        const price = pricingForUsage(model, usage)  // resolved once per API call
+        totals.cost_usd       += costFromPricing(price, usage)
         totals.context_used    = (usage.input_tokens                ?? 0)
                                + (usage.cache_read_input_tokens     ?? 0)
                                + (usage.cache_creation_input_tokens ?? 0)
         totals.context_window  = getContextWindow(model)
 
-        const price = pricingFor(model)
         const M     = 1_000_000
         const inp   = usage.input_tokens ?? 0
         const cacheRead = usage.cache_read_input_tokens ?? 0
@@ -155,7 +155,10 @@ export async function processJSONL(filePath: string): Promise<CostUpdate | null>
     }
 
     // Claude Code's own cost-state line is the authoritative session total
+    // (it already includes the session's sub-agents)
     if (costStateUsd !== undefined) totals.cost_usd = costStateUsd
+    totals.costSource = costStateUsd !== undefined ? 'cost-state' : 'computed'
+    totals.parentSessionId = parentSessionIdFromPath(filePath)
 
     fileOffsets.set(filePath, { offset: currentSize, lastAccess: Date.now(), totals, seenIds, costStateUsd })
     return totals
@@ -403,7 +406,7 @@ export async function getAllBlockCostsForSession(sessionId: string): Promise<Blo
             if (!usage) continue
             // Same API call logged once per content block — usage already counted
             if (isDuplicateMessageId(obj.message?.id, seenIds)) continue
-            const price = pricingFor(model)
+            const price = pricingForUsage(model, usage)
             const M = 1_000_000
             const inUsd = ((usage.input_tokens ?? 0) * price.input + (usage.cache_read_input_tokens ?? 0) * price.cacheRead + (usage.cache_creation_input_tokens ?? 0) * price.cacheCreate) / M
             const outUsd = ((usage.output_tokens ?? 0) * price.output) / M

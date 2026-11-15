@@ -30,3 +30,15 @@ export function readCostStateUsd(obj: { type?: unknown; totalCostUSD?: unknown }
     ? obj.totalCostUSD
     : undefined
 }
+
+/**
+ * Claude Code stores a sub-agent transcript at
+ * `<project>/<parentSessionId>/subagents/agent-<id>.jsonl`. Returns the parent
+ * session id for such a path, undefined for a top-level session file.
+ */
+export function parentSessionIdFromPath(filePath: string): string | undefined {
+  const parts = filePath.split(/[/\\]/)
+  const n = parts.length
+  if (n < 3 || parts[n - 2] !== 'subagents' || !parts[n - 1].startsWith('agent-')) return undefined
+  return parts[n - 3] || undefined
+}

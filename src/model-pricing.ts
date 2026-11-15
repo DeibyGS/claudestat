@@ -17,63 +17,135 @@ export interface ModelPricing {
 }
 
 /**
- * Newest first: family fallback (pricingFor) picks the first entry that
- * matches the family, so unknown future versions bill at current prices.
+ * Official first-party rates, verified 2026-11-15 against
+ * https://platform.claude.com/docs/en/about-claude/pricing
+ *
+ * Order matters for the family fallback: within each family the newest model
+ * comes first, so an unknown future version (e.g. 'claude-opus-9') bills at
+ * the newest known price of its family. Dated/suffixed IDs ('…-20251101',
+ * '…[1m]') resolve by the longest key they contain, so order does not matter
+ * for those.
+ * cacheCreate is the 5-minute TTL write rate. Cache reads are 0.025x input on
+ * Fable/Mythos 5.1+, 0.05x on Opus 5.5 / Sonnet 5.5 and 0.1x elsewhere.
  */
 export const PRICING: Record<string, ModelPricing> = {
-  'claude-opus-5-5':            { input: 4,    output: 20,  cacheRead: 0.20, cacheCreate: 5.00 },
-  'claude-sonnet-5':            { input: 2,    output: 10,  cacheRead: 0.20, cacheCreate: 2.50  },
-  'claude-opus-4-6':            { input: 5,    output: 25,  cacheRead: 0.50, cacheCreate: 6.25  },
-  'claude-sonnet-4-6':          { input: 3,    output: 15,  cacheRead: 0.30, cacheCreate: 3.75  },
-  'claude-haiku-4-5':           { input: 1,    output: 5,   cacheRead: 0.10, cacheCreate: 1.25  },
-  'claude-haiku-4-5-20251001':  { input: 1,    output: 5,   cacheRead: 0.10, cacheCreate: 1.25  },
+  'claude-fable-5-2':           { input: 8,    output: 40,   cacheRead: 0.20, cacheCreate: 10    },
+  'claude-fable-5-1':           { input: 10,   output: 50,   cacheRead: 0.25, cacheCreate: 12.50 },
+  'claude-fable-5':             { input: 10,   output: 50,   cacheRead: 1.00, cacheCreate: 12.50 },
+  'claude-mythos-5-2':          { input: 8,    output: 40,   cacheRead: 0.20, cacheCreate: 10    },
+  'claude-mythos-5-1':          { input: 10,   output: 50,   cacheRead: 0.25, cacheCreate: 12.50 },
+  'claude-mythos-5':            { input: 10,   output: 50,   cacheRead: 1.00, cacheCreate: 12.50 },
+  'claude-opus-5-5':            { input: 4,    output: 20,   cacheRead: 0.20, cacheCreate: 5.00  },
+  'claude-opus-5':              { input: 5,    output: 25,   cacheRead: 0.50, cacheCreate: 6.25  },
+  'claude-opus-4-8':            { input: 5,    output: 25,   cacheRead: 0.50, cacheCreate: 6.25  },
+  'claude-opus-4-7':            { input: 5,    output: 25,   cacheRead: 0.50, cacheCreate: 6.25  },
+  'claude-opus-4-6':            { input: 5,    output: 25,   cacheRead: 0.50, cacheCreate: 6.25  },
+  'claude-opus-4-5':            { input: 5,    output: 25,   cacheRead: 0.50, cacheCreate: 6.25  },
+  'claude-opus-4-1':            { input: 15,   output: 75,   cacheRead: 1.50, cacheCreate: 18.75 },
+  // Opus 4 / Sonnet 4 only by their dated IDs: a bare 'claude-opus-4' key would
+  // swallow every future 'claude-opus-4-N' and bill it at $15/$75.
+  'claude-opus-4-20250514':     { input: 15,   output: 75,   cacheRead: 1.50, cacheCreate: 18.75 },
+  'claude-sonnet-5-5':          { input: 2,    output: 10,   cacheRead: 0.10, cacheCreate: 2.50  },
+  'claude-sonnet-5':            { input: 2,    output: 10,   cacheRead: 0.20, cacheCreate: 2.50  },
+  'claude-sonnet-4-6':          { input: 3,    output: 15,   cacheRead: 0.30, cacheCreate: 3.75  },
+  'claude-sonnet-4-5':          { input: 3,    output: 15,   cacheRead: 0.30, cacheCreate: 3.75  },
+  'claude-sonnet-4-20250514':   { input: 3,    output: 15,   cacheRead: 0.30, cacheCreate: 3.75  },
+  'claude-haiku-5-5':           { input: 0.10, output: 0.50, cacheRead: 0.01, cacheCreate: 0.125 },
+  'claude-haiku-4-5':           { input: 1,    output: 5,    cacheRead: 0.10, cacheCreate: 1.25  },
+  'claude-haiku-4-5-20251001':  { input: 1,    output: 5,    cacheRead: 0.10, cacheCreate: 1.25  },
 }
 
-export const DEFAULT_PRICING: ModelPricing = PRICING['claude-sonnet-4-6']
+/**
+ * Models priced by prompt length: a request whose prompt (input + cache reads
+ * + cache writes) exceeds the threshold pays these rates for the whole request.
+ */
+const LONG_CONTEXT_PRICING: Record<string, { thresholdTokens: number; pricing: ModelPricing }> = {
+  'claude-haiku-5-5': {
+    thresholdTokens: 100_000,
+    pricing: { input: 0.50, output: 2.50, cacheRead: 0.05, cacheCreate: 0.625 },
+  },
+}
+
+/**
+ * Returned for models with no known price. All-zero on purpose: an unknown
+ * model costs $0 and is flagged unpriced instead of being estimated at
+ * Sonnet rates (which made e.g. OpenCode's free models look paid).
+ */
+export const UNPRICED: Readonly<ModelPricing> = Object.freeze({ input: 0, output: 0, cacheRead: 0, cacheCreate: 0 })
 
 export const DEFAULT_MODEL = 'claude-sonnet-4-6'
 
 // ─── Context Windows ──────────────────────────────────────────────────────────
 
 /**
- * Context window per model ID, in tokens — Claude Code's auto-compact window
- * as reported by its `/context` command, NOT the API spec window: Anthropic
- * documents 1M for these models, but real logs never exceed ~966.5K. Usage %
- * and the 50/75/90 thresholds are computed against these values, so 100% is
- * the point where Claude Code actually compacts.
+ * Context window per Claude model ID, in tokens — Claude Code's auto-compact
+ * window as reported by its `/context` command, NOT the API spec window:
+ * Anthropic documents 1M for these models, but real logs never exceed ~966.5K
+ * (965,904 max measured on opus-5-5). Usage % and the 50/75/90 thresholds are
+ * computed against these values, so 100% is where Claude Code compacts.
+ * 200K-window models keep 200K. Opus/Sonnet 4.6 also stay at 200K: Claude Code
+ * only gives them 1M through the '[1m]' variant.
  *
- * Fallback for unknown models: 200,000 tokens.
+ * Claude models only: OpenCode reads each provider/model window from its own
+ * models-dev catalog (src/watchers/oc-catalog.ts) and falls back to this table.
+ * Unknown models: 200,000 tokens (see getContextWindow).
  */
-export const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
-  'claude-opus-5-5':            967_000,
-  'claude-sonnet-5':            967_000,
-  'claude-opus-4-6':            200_000,
-  'claude-sonnet-4-6':          200_000,
-  'claude-haiku-4-5':           200_000,
-  'claude-haiku-4-5-20251001':  200_000,
-  'deepseek-v4-flash-free':     1_000_000,
+const CC_1M_WINDOW = 967_000
+/** Models whose API window is 200K; every other priced Claude model has 1M. */
+const API_200K_MODELS = new Set([
+  'claude-opus-4-6', 'claude-opus-4-5', 'claude-opus-4-1', 'claude-opus-4-20250514',
+  'claude-sonnet-4-6', 'claude-sonnet-4-5', 'claude-sonnet-4-20250514',
+  'claude-haiku-4-5', 'claude-haiku-4-5-20251001',
+])
+/** Derived from PRICING so a newly priced model can never miss its window. */
+export const KNOWN_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
+  Object.keys(PRICING).map(k => [k, API_200K_MODELS.has(k) ? 200_000 : CC_1M_WINDOW]),
+)
+
+// ─── Lookup ───────────────────────────────────────────────────────────────────
+
+const FAMILIES = ['fable', 'mythos', 'opus', 'sonnet', 'haiku'] as const
+
+/** Longest table key contained in the model ID ('claude-opus-4-8[1m]' → 'claude-opus-4-8'). */
+function longestKeyIn(m: string, table: Record<string, unknown>): string | null {
+  let best: string | null = null
+  for (const k of Object.keys(table)) {
+    if (m.includes(k) && (!best || k.length > best.length)) best = k
+  }
+  return best
 }
 
-// ─── Pricing Lookup ───────────────────────────────────────────────────────────
-
-const FAMILIES = ['opus', 'sonnet', 'haiku'] as const
-
 /**
- * Resolve pricing for a model ID:
- * exact ID → known key (dated suffix) → family (newest known) → Sonnet default.
- * Unknown opus/sonnet/haiku versions no longer fall back to Sonnet prices.
+ * Resolve the PRICING key for a model ID, or null when no Claude price applies:
+ * exact ID → longest contained key (dated/[1m] suffix) → family (newest known).
  */
-export function pricingFor(model?: string | null): ModelPricing {
+function resolvePricingKey(model?: string | null): string | null {
   const m = (model ?? '').toLowerCase()
-  if (m) {
-    if (PRICING[m]) return PRICING[m]
-    const exact = Object.keys(PRICING).find(k => m.includes(k))
-    if (exact) return PRICING[exact]
-    const family = FAMILIES.find(f => m.includes(f))
-    const familyKey = family && Object.keys(PRICING).find(k => k.includes(family))
-    if (familyKey) return PRICING[familyKey]
-  }
-  return DEFAULT_PRICING
+  if (!m) return null
+  if (PRICING[m]) return m
+  const contained = longestKeyIn(m, PRICING)
+  if (contained) return contained
+  const family = FAMILIES.find(f => m.includes(f))
+  return (family && Object.keys(PRICING).find(k => k.includes(family))) || null
+}
+
+/** Pricing for a model ID; UNPRICED (all zero) when the model is unknown. */
+export function pricingFor(model?: string | null): ModelPricing {
+  const key = resolvePricingKey(model)
+  return key ? PRICING[key] : UNPRICED
+}
+
+/** True when the model resolves to a known Claude price. */
+export function isPriced(model?: string | null): boolean {
+  return resolvePricingKey(model) !== null
+}
+
+/** Known Claude Code context window for a model ID, or null when unknown. */
+export function knownContextWindow(model?: string | null): number | null {
+  const m = (model ?? '').toLowerCase()
+  if (!m) return null
+  const key = KNOWN_CONTEXT_WINDOWS[m] ? m : longestKeyIn(m, KNOWN_CONTEXT_WINDOWS)
+  return key ? KNOWN_CONTEXT_WINDOWS[key] : null
 }
 
 export interface ModelPrice {
@@ -88,18 +160,53 @@ export function findPricing(model: string): ModelPrice | null {
 
 // ─── Cost Calculation ─────────────────────────────────────────────────────────
 
-export function calcCost(
-  model: string,
-  usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
-): number {
-  const price = pricingFor(model)
-  const M = 1_000_000
+export interface TokenUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_read_input_tokens: number
+  cache_creation_input_tokens: number
+}
+
+/** Rates for one request under a resolved PRICING key (long-context tier aware). */
+function pricingForKey(key: string, usage: Partial<TokenUsage>): ModelPricing {
+  const tier = LONG_CONTEXT_PRICING[key]
+  if (tier) {
+    const prompt = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
+    if (prompt > tier.thresholdTokens) return tier.pricing
+  }
+  return PRICING[key]
+}
+
+/**
+ * Rates that apply to one request: the long-context tier when the model has
+ * one and the prompt (input + cache reads + cache writes) exceeds it.
+ * UNPRICED for unknown models.
+ */
+export function pricingForUsage(model: string, usage: Partial<TokenUsage>): ModelPricing {
+  const key = resolvePricingKey(model)
+  return key ? pricingForKey(key, usage) : UNPRICED
+}
+
+/** USD for a usage record at the given per-MTok rates. */
+export function costFromPricing(price: ModelPricing, usage: Partial<TokenUsage>): number {
   return (
-    (usage.input_tokens                  * price.input)       / M +
-    (usage.output_tokens                 * price.output)      / M +
-    (usage.cache_read_input_tokens       * price.cacheRead)   / M +
-    (usage.cache_creation_input_tokens * price.cacheCreate) / M
-  )
+    (usage.input_tokens                ?? 0) * price.input +
+    (usage.output_tokens               ?? 0) * price.output +
+    (usage.cache_read_input_tokens     ?? 0) * price.cacheRead +
+    (usage.cache_creation_input_tokens ?? 0) * price.cacheCreate
+  ) / 1_000_000
+}
+
+/** Cost of a usage record plus whether the model had a known price. */
+export function priceUsage(model: string, usage: TokenUsage): { cost_usd: number; priced: boolean } {
+  const key = resolvePricingKey(model)
+  if (!key) return { cost_usd: 0, priced: false }
+  return { cost_usd: costFromPricing(pricingForKey(key, usage), usage), priced: true }
+}
+
+/** Cost in USD; 0 for unpriced models (check isPriced/priceUsage to tell them apart). */
+export function calcCost(model: string, usage: TokenUsage): number {
+  return priceUsage(model, usage).cost_usd
 }
 
 export function estimateCost(inputTokens: number, outputTokens: number, model: string): number {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import http from 'http'
 import express from 'express'
 import { dbOps } from '../src/db'
-import { eventsRouter, setSessionTracker } from '../src/routes/events'
+import { eventsRouter, setSessionTracker, onCostUpdate } from '../src/routes/events'
 import { createSessionTracker } from '../src/session-tracker'
 import { stopRateLimiter } from '../src/middleware/rate-limiter'
 
@@ -121,5 +121,59 @@ describe('POST /event — API integration tests', () => {
     } finally {
       setSessionTracker(null as any)
     }
+  })
+
+  // S6 — the same tool call reported by the hook and by the JSONL is stored once
+  test('hook Pre/Post with tool_use_id + JSONL fallback → one event per tool call', async () => {
+    const sid = newSid()
+    const t0 = Date.now()
+    await postEvent({ type: 'PreToolUse', session_id: sid, tool_name: 'Read', tool_use_id: 'toolu_hk_1', tool_input: { file_path: '/x' }, ts: t0, cwd: '/test' })
+    await postEvent({ type: 'PostToolUse', session_id: sid, tool_name: 'Read', tool_use_id: 'toolu_hk_1', tool_response: 'ok', ts: t0 + 40, cwd: '/test' })
+
+    const cost = {
+      input_tokens: 1, output_tokens: 1, cache_read: 0, cache_creation: 0, cost_usd: 0.01,
+      context_used: 0, context_window: 0, firstTs: t0, costSource: 'computed' as const,
+      toolUses: [
+        { id: 'toolu_hk_1', name: 'Read', input: '{"file_path":"/x"}', ts: t0 - 10_000 },  // also caught by the hook
+        { id: 'toolu_hk_2', name: 'Grep', input: '{}', ts: t0 + 20_000 },
+        { id: 'toolu_hk_3', name: 'Bash', input: '{}', ts: t0 + 30_000 },
+      ],
+    }
+    onCostUpdate(sid, cost, 'claude-code')
+
+    // JSONL first, hook afterwards: the hook pairs onto the existing row
+    await postEvent({ type: 'PreToolUse', session_id: sid, tool_name: 'Bash', tool_use_id: 'toolu_hk_3', ts: t0 + 30_500, cwd: '/test' })
+    await postEvent({ type: 'PostToolUse', session_id: sid, tool_name: 'Bash', tool_use_id: 'toolu_hk_3', tool_response: 'done', ts: t0 + 31_000, cwd: '/test' })
+
+    const events = dbOps.getSessionEvents(sid)
+    assert.deepEqual(events.map((e: any) => [e.type, e.tool_name]), [['Done', 'Read'], ['Done', 'Grep'], ['Done', 'Bash']])
+    assert.equal(events.find((e: any) => e.tool_name === 'Bash').tool_response, 'done')
+  })
+
+  test('JSONL row stored before the hook Pre keeps the hook cwd and skill_parent', async () => {
+    const sid = newSid()
+    const t0 = Date.now()
+    await postEvent({ type: 'PostToolUse', session_id: sid, tool_name: 'Skill', tool_input: { skill: 'git' }, tool_response: 'ok', ts: t0, cwd: '/test' })
+    onCostUpdate(sid, {
+      input_tokens: 1, output_tokens: 1, cache_read: 0, cache_creation: 0, cost_usd: 0.01,
+      context_used: 0, context_window: 0, firstTs: t0, costSource: 'computed' as const,
+      toolUses: [{ id: 'toolu_sk_1', name: 'Bash', input: '{}', ts: t0 + 100 }],
+    }, 'claude-code')
+    await postEvent({ type: 'PreToolUse', session_id: sid, tool_name: 'Bash', tool_use_id: 'toolu_sk_1', ts: t0 + 300, cwd: '/test' })
+
+    const row = dbOps.getSessionEvents(sid).find((e: any) => e.tool_name === 'Bash')
+    assert.equal(row.skill_parent, 'git')
+    assert.equal(row.cwd, '/test')
+  })
+
+  test('a Post whose tool_use_id matches nothing does not close an unrelated Pre', async () => {
+    const sid = newSid()
+    const t0 = Date.now()
+    await postEvent({ type: 'PreToolUse', session_id: sid, tool_name: 'Read', tool_use_id: 'toolu_un_1', ts: t0, cwd: '/test' })
+    await postEvent({ type: 'PostToolUse', session_id: sid, tool_name: 'Read', tool_use_id: 'toolu_un_2', tool_response: 'other', ts: t0 + 50, cwd: '/test' })
+
+    const row = dbOps.getSessionEvents(sid).find((e: any) => e.external_id === 'toolu_un_1')
+    assert.equal(row.type, 'PreToolUse')
+    assert.equal(row.tool_response, null)
   })
 })

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Project, branch and tool calls missing when hooks were off** — Claude Code sessions now take `cwd`, `gitBranch` and every `tool_use` straight from the JSONL, so Read/Grep/Bash/Edit calls, the project and the branch show up without hooks. A call reported by both the hook and the JSONL is stored once, keyed by its `tool_use` id
+- **Prices for every current Claude model** — unknown models are flagged unpriced instead of billed as Sonnet; context windows are per model (Claude Code 967K, OpenCode from its own catalog) (#94)
+- **Sub-agent cost counted twice** — sub-agents are linked to their parent from the JSONL path and excluded from block and aggregate sums when the parent's `cost-state` already includes them (#94)
+- **OpenCode subscription sessions showed an estimated cost** — they now show the real $0 plus the API-equivalent price from OpenCode's catalog (#94)
+
+### Added
+
+- **`GET /api/active-sessions?view=all`** — every live session, sub-agents included, with parent link, project, branch, model and state. Without `view` the response is unchanged
+
 ## [1.23.1] - 2026-11-07
 
 ### Fixed

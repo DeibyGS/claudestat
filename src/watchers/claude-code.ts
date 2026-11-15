@@ -12,7 +12,7 @@ import { type WatcherAdapter, type ParsedEvent, registerAdapter } from './adapte
 import { getClaudeDir } from '../paths'
 import { costFromPricing, getContextWindow, pricingForUsage, DEFAULT_MODEL } from '../pricing'
 import { isDuplicateMessageId, readCostStateUsd, parentSessionIdFromPath } from '../jsonl'
-import type { CostUpdate } from '../db'
+import type { CostUpdate, JsonlToolUse } from '../db'
 import type { BlockCostEntry } from '../db'
 
 function projectsDir(): string { return path.join(getClaudeDir(), 'projects') }
@@ -42,6 +42,18 @@ function cleanupStaleOffsets() {
   }
 }
 
+function toolUsesFrom(content: unknown, timestamp: unknown): JsonlToolUse[] {
+  if (!Array.isArray(content)) return []
+  const parsed = typeof timestamp === 'string' ? Date.parse(timestamp) : NaN
+  const ts = Number.isNaN(parsed) ? Date.now() : parsed
+  const out: JsonlToolUse[] = []
+  for (const block of content as any[]) {
+    if (block?.type !== 'tool_use' || typeof block.id !== 'string' || typeof block.name !== 'string') continue
+    out.push({ id: block.id, name: block.name, input: JSON.stringify(block.input ?? {}), ts })
+  }
+  return out
+}
+
 export async function processJSONL(filePath: string): Promise<CostUpdate | null> {
   let fd: Awaited<ReturnType<typeof fs.open>> | undefined
   try {
@@ -58,7 +70,7 @@ export async function processJSONL(filePath: string): Promise<CostUpdate | null>
     const fromByte = state?.offset ?? 0
 
     // Nothing new — return cached totals without lastEntry to avoid duplicate SSE
-    if (currentSize === fromByte && state) return { ...state.totals, lastEntry: undefined }
+    if (currentSize === fromByte && state) return { ...state.totals, lastEntry: undefined, toolUses: undefined }
 
     // Read only the new bytes since last processed offset
     const buf = Buffer.alloc(currentSize - fromByte)
@@ -79,7 +91,10 @@ export async function processJSONL(filePath: string): Promise<CostUpdate | null>
       context_window: prevTotals?.context_window  ?? 200_000,
       firstTs:        prevTotals?.firstTs,
       lastModel:      prevTotals?.lastModel,
+      cwd:            prevTotals?.cwd,
+      gitBranch:      prevTotals?.gitBranch,
     }
+    const toolUses: JsonlToolUse[] = []
 
     let lastInputUsd     = 0
     let lastOutputUsd    = 0
@@ -96,8 +111,15 @@ export async function processJSONL(filePath: string): Promise<CostUpdate | null>
         const obj = JSON.parse(line)
         const costState = readCostStateUsd(obj)
         if (costState !== undefined) { costStateUsd = costState; continue }
+        // Every message line carries the session's cwd/branch — hooks are not needed
+        if (typeof obj.cwd === 'string' && obj.cwd) totals.cwd = obj.cwd
+        // CC writes 'HEAD' outside a git repo (and on detached HEAD) — not a branch
+        if (typeof obj.gitBranch === 'string' && obj.gitBranch && obj.gitBranch !== 'HEAD') totals.gitBranch = obj.gitBranch
         if (obj.type !== 'assistant') continue
         const msg = obj.message
+        // Collected before the duplicate-id skip: each tool_use of one API call
+        // arrives on its own line, all sharing that call's message.id
+        toolUses.push(...toolUsesFrom(msg?.content, obj.timestamp))
         if (!msg?.usage) continue
 
         // Same API call is logged once per content block (repeated id + usage)
@@ -161,7 +183,7 @@ export async function processJSONL(filePath: string): Promise<CostUpdate | null>
     totals.parentSessionId = parentSessionIdFromPath(filePath)
 
     fileOffsets.set(filePath, { offset: currentSize, lastAccess: Date.now(), totals, seenIds, costStateUsd })
-    return totals
+    return { ...totals, toolUses }
   } catch {
     return null
   } finally {

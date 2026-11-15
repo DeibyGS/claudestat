@@ -183,8 +183,11 @@ miscRouter.get('/api/build-id', (_req: Request, res: Response) => {
 })
 
 // ─── GET /api/active-sessions — fuentes activas en los últimos 5 min ──────────
+// Default: one entry per source (current dashboard). `?view=all`: every live
+// session, sub-agents included, with its parent link (S4).
 
-miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
+miscRouter.get('/api/active-sessions', (req: Request, res: Response) => {
+  const viewAll = req.query.view === 'all'
   const CC_CUTOFF = Date.now() - 30 * 60 * 1000  // CC can wait 30 min for user input
   const OC_CUTOFF = Date.now() - 15 * 60 * 1000  // OC: 15 min (may wait for user input too)
   const sessions = dbOps.getAllSessions()
@@ -215,6 +218,35 @@ miscRouter.get('/api/active-sessions', (_req: Request, res: Response) => {
   const supersededIds = new Set(
     sessions.filter(s => s.source !== 'claude-code' && s.parent_session_id && activeIds.has(s.parent_session_id)).map(s => s.parent_session_id!)
   )
+
+  const hasData = (s: { total_cost_usd?: number; total_input_tokens?: number; total_output_tokens?: number }) =>
+    (s.total_cost_usd ?? 0) > 0 || (s.total_input_tokens ?? 0) > 0 || (s.total_output_tokens ?? 0) > 0
+
+  if (viewAll) {
+    const all = sessions
+      .filter(s => activeIds.has(s.id) && KNOWN_SOURCES.has(s.source ?? '') && hasData(s))
+      .filter(s => s.source !== 'opencode' || !isSessionArchived(s.id))
+      .map(s => {
+        // newest of the hook-driven state and the last stored event (JSONL fallback)
+        const hook   = sessionLastEvent.get(s.id)
+        const realTs = realEventTimes.get(s.id) ?? 0
+        const last   = hook && hook.ts >= realTs ? hook : { type: undefined, ts: effectiveTs(s) }
+        return {
+          source:       s.source!,
+          sessionId:    s.id,
+          parentId:     s.parent_session_id ?? null,
+          project:      s.project_path ?? s.cwd ?? null,
+          branch:       s.git_branch ?? null,
+          model:        s.dominant_model ?? 'unknown',
+          state:        deriveSessionState(last.type, last.ts),
+          cost_usd:     s.total_cost_usd ?? 0,
+          last_seen_ms: realTs,
+        }
+      })
+      .sort((a, b) => b.last_seen_ms - a.last_seen_ms)
+    res.json(all)
+    return
+  }
 
   for (const s of sessions) {
     const realTs = realEventTimes.get(s.id) ?? 0

@@ -3,6 +3,7 @@ process.env.CLAUDESTAT_DB_PATH ??= ':memory:'
 process.env.CLAUDESTAT_DATA_DIR ??= require('os').tmpdir()
 
 require('./api-events.test')
+require('./active-sessions.test')
 require('./api-stream.test')
 require('./billing-blocks.test')
 require('./daily-activity.test')

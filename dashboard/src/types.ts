@@ -9,6 +9,7 @@ export interface TraceEvent {
   cwd?:          string
   skill_parent?: string
   text_preview?: string
+  tool_use_id?:  string   // CC call id — pairs hook and JSONL copies of one call
 }
 
 export interface LoopAlert {

@@ -142,6 +142,8 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
   }
 
   const { type, session_id, tool_name, tool_input, tool_response, ts, cwd, transcript_path, source: rawSource } = req.body
+  // CC hook payloads carry the tool_use id — the same key the JSONL fallback uses
+  const toolUseId = typeof req.body.tool_use_id === 'string' ? req.body.tool_use_id : undefined
 
   if (!session_id || !type) {
     res.status(400).json({ error: 'Missing session_id or type' })
@@ -167,17 +169,17 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
     : undefined
 
   if (type === 'PostToolUse' && tool_name) {
-    const pairedId = dbOps.pairPostWithPre(
-      session_id, tool_name,
-      typeof tool_response === 'string' ? tool_response : JSON.stringify(tool_response ?? ''),
-      ts
-    )
+    const response = typeof tool_response === 'string' ? tool_response : JSON.stringify(tool_response ?? '')
+    // With an id, pair only by id: a name-based fallback could close an unrelated Pre
+    const pairedId = toolUseId
+      ? dbOps.pairPostByExternalId(toolUseId, response, ts)
+      : dbOps.pairPostWithPre(session_id, tool_name, response, ts)
     // Truncar tool_response a 4000 chars para no saturar SSE con archivos grandes
     const rawResp  = typeof tool_response === 'string' ? tool_response : JSON.stringify(tool_response ?? '')
     const tool_output = rawResp.length > 4000
       ? rawResp.slice(0, 4000) + `\n…[truncated: ${rawResp.length} chars]`
       : rawResp
-    broadcast({ type: 'event', payload: { type: 'Done', session_id, tool_name, tool_input: tool_input != null ? JSON.stringify(tool_input) : undefined, tool_output, ts, pairedId, skill_parent: skillParent } })
+    broadcast({ type: 'event', payload: { type: 'Done', session_id, tool_name, tool_input: tool_input != null ? JSON.stringify(tool_input) : undefined, tool_output, ts, pairedId, skill_parent: skillParent, tool_use_id: toolUseId } })
 
     // Activar skill parent para los eventos siguientes si este fue un Skill Done
     if (tool_name === 'Skill') {
@@ -201,7 +203,8 @@ eventsRouter.post('/event', (req: Request, res: Response) => {
       session_id, type,
       tool_name: tool_name ?? undefined,
       tool_input: tool_input ? JSON.stringify(tool_input) : (stopPreview ?? undefined),
-      ts, cwd: resolvedCwd, skill_parent: skillParent, source
+      ts, cwd: resolvedCwd, skill_parent: skillParent, source,
+      external_id: type === 'PreToolUse' ? toolUseId : undefined,
     })
     broadcast({ type: 'event', payload: { ...req.body, skill_parent: skillParent, ...(stopPreview ? { text_preview: stopPreview } : {}) } })
 
@@ -342,6 +345,18 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
       if (agentInfo && agentInfo.session_id !== sessionId && agentInfo.pre_ts < cost.firstTs) {
         dbOps.updateSessionParent(sessionId, agentInfo.session_id)
       }
+    }
+  }
+
+  // S6 — project, branch and tool calls straight from the JSONL (hooks may be off)
+  if (cost.cwd || cost.gitBranch) dbOps.updateSessionLocation(sessionId, cost.cwd, cost.gitBranch)
+  if (cost.toolUses?.length) {
+    const inserted = dbOps.insertJsonlToolEvents(sessionId, sessionRow?.parent_session_id ?? null, cost.toolUses)
+    // Only live calls reach the dashboard; a startup re-read only backfills the DB
+    const liveCutoff = Date.now() - 5 * 60_000
+    for (const u of inserted) {
+      if (u.ts < liveCutoff) continue
+      broadcast({ type: 'event', payload: { type: 'Done', session_id: sessionId, tool_name: u.name, tool_input: u.input, ts: u.ts, source, tool_use_id: u.id } })
     }
   }
 

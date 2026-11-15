@@ -396,6 +396,26 @@ describe('opencode watcher — subscription vs API cost (S3)', () => {
     assert.ok(Math.abs(block.apiEquivalentUsd - (1000 * 2 + 100 * 10) / 1e6) < 1e-12)
   })
 
+  test('S8: provider is exposed from model.providerID (subscription vs API aware)', async () => {
+    const { opencodeAdapter } = require('../src/watchers/opencode')
+    const sessions = await opencodeAdapter.pollSessions(0)
+    const provider = (id: string) => sessions.find((s: { sessionId: string }) => s.sessionId === id)!.cost.provider
+    assert.equal(provider('ses_sub'),   'ChatGPT')
+    assert.equal(provider('ses_api'),   'OpenAI API')
+    assert.equal(provider('ses_free'),  'OpenCode Go/Zen')
+    assert.equal(provider('ses_nocat'), 'acme')
+  })
+
+  test('S8: provider is persisted on the session', () => {
+    const { dbOps } = require('../src/db')
+    const { onCostUpdate } = require('../src/routes/events')
+    onCostUpdate('ses_api', {
+      input_tokens: 1, output_tokens: 1, cache_read: 0, cache_creation: 0, cost_usd: 1.25,
+      context_used: 0, context_window: 0, billing: 'api', apiEquivalentUsd: 3.4, provider: 'OpenAI API',
+    }, 'opencode')
+    assert.equal(dbOps.getSession('ses_api').provider, 'OpenAI API')
+  })
+
   test('billing and API equivalent are persisted on the session', () => {
     const { dbOps } = require('../src/db')
     const { onCostUpdate } = require('../src/routes/events')
@@ -406,5 +426,84 @@ describe('opencode watcher — subscription vs API cost (S3)', () => {
     const row = dbOps.getSession('ses_sub')
     assert.equal(row.billing, 'subscription')
     assert.equal(row.api_equivalent_usd, 3.4)
+  })
+})
+
+// ─── S9: OC session state and branch ─────────────────────────────────────────
+
+describe('opencode watcher — state and branch (S9)', () => {
+  const stateFile = path.join(tmpDir, 'oc-state.db')
+  const gitDir    = fs.mkdtempSync(path.join(os.tmpdir(), 'claudestat-oc-git-'))
+  const plainDir  = fs.mkdtempSync(path.join(os.tmpdir(), 'claudestat-oc-plain-'))
+
+  before(() => {
+    const { execSync } = require('child_process') as typeof import('child_process')
+    execSync('git init -q -b feat/oc-state', { cwd: gitDir })
+    // rev-parse needs a commit: an unborn branch has no HEAD to resolve
+    execSync('git -c user.name=t -c user.email=t@t commit -q --allow-empty -m init', { cwd: gitDir })
+
+    const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
+    const db = new DatabaseSync(stateFile)
+    db.exec(`
+      CREATE TABLE session_v2 (
+        id TEXT PRIMARY KEY, directory TEXT, model TEXT, cost REAL DEFAULT 0,
+        tokens_input INTEGER DEFAULT 0, tokens_output INTEGER DEFAULT 0,
+        tokens_cache_read INTEGER DEFAULT 0, tokens_cache_write INTEGER DEFAULT 0,
+        time_created INTEGER, time_updated INTEGER, time_archived INTEGER,
+        time_busy INTEGER, time_idle INTEGER
+      );
+      CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, data TEXT);
+    `)
+    const now = Date.now()
+    const insert = db.prepare(`INSERT INTO session_v2 VALUES (?, ?, ?, 0, 10, 10, 0, 0, ?, ?, NULL, ?, ?)`)
+    const model  = JSON.stringify({ id: 'gpt-x', providerID: 'openai' })
+    insert.run('ses_busy',     gitDir,   model, now - 9000, now - 100, now - 500,  now - 2000)
+    insert.run('ses_idle',     plainDir, model, now - 9000, now - 200, now - 3000, now - 1000)
+    insert.run('ses_nullidle', plainDir, model, now - 9000, now - 300, now - 500,  null)
+    db.close()
+    process.env.OPENCODE_DB = stateFile
+  })
+
+  after(() => {
+    if (prevOpenCodeDb === undefined) delete process.env.OPENCODE_DB
+    else process.env.OPENCODE_DB = prevOpenCodeDb
+  })
+
+  test('time_busy > time_idle (or idle null) → working, else idle; branch from git, null outside a repo', async () => {
+    const { opencodeAdapter } = require('../src/watchers/opencode')
+    const sessions = await opencodeAdapter.pollSessions(0)
+    const cost = (id: string) => sessions.find((s: { sessionId: string }) => s.sessionId === id)!.cost
+
+    assert.equal(cost('ses_busy').ocState, 'working')
+    assert.equal(cost('ses_idle').ocState, 'idle')
+    assert.equal(cost('ses_nullidle').ocState, 'working')
+
+    assert.equal(cost('ses_busy').gitBranch, 'feat/oc-state')
+    assert.equal(cost('ses_idle').gitBranch, undefined)
+  })
+
+  test('the reported OC state wins only while the session is fresh', () => {
+    const { ocLiveState, setOcLiveState } = require('../src/session-state')
+    const now = Date.now()
+    setOcLiveState('ses_fresh', 'working', now - 60_000)
+    assert.equal(ocLiveState('ses_fresh', now), 'working')
+    // OC killed while busy: time_idle never written → falls back to the event-derived state
+    setOcLiveState('ses_crashed', 'working', now - 6 * 60_000)
+    assert.equal(ocLiveState('ses_crashed', now), undefined)
+    assert.equal(ocLiveState('ses_unknown', now), undefined)
+  })
+
+  test('branch is read only for live sessions, never for the backfill', async () => {
+    const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
+    const db = new DatabaseSync(stateFile)
+    const old = Date.now() - 2 * 3_600_000
+    db.prepare(`INSERT INTO session_v2 VALUES (?, ?, ?, 0, 10, 10, 0, 0, ?, ?, NULL, ?, ?)`)
+      .run('ses_old', gitDir, JSON.stringify({ id: 'gpt-x', providerID: 'openai' }), old - 9000, old, old - 500, old)
+    db.close()
+    const { opencodeAdapter } = require('../src/watchers/opencode')
+    const sessions = await opencodeAdapter.pollSessions(0)
+    const old_ = sessions.find((s: { sessionId: string }) => s.sessionId === 'ses_old')
+    assert.ok(old_, 'old session is still polled')
+    assert.equal(old_.cost.gitBranch, undefined)
   })
 })

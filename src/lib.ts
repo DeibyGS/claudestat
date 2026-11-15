@@ -52,6 +52,8 @@ export type { ModelPricing } from './pricing'
 export {
   analyzeSession,
   detectLoops,
+  detectErrorPersistence,
+  normalizeToolInput,
   calcEfficiencyScore,
   detectExactRetries,
   computeErrorRate,
@@ -61,6 +63,7 @@ export {
 } from './intelligence'
 export type {
   LoopAlert,
+  ErrorPersistenceAlert,
   LoopContext,
   IntelligenceReport,
   SaturationPrediction,

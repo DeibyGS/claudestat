@@ -144,11 +144,15 @@ export function readClaudeAuth(): ClaudeAuthInfo {
  *   "max"    → Max plan — puede ser max5 o max20, diferenciado por rateLimitTier
  *   "max_5"  → Max 5×   (225 prompts/5h)
  *   "max_20" → Max 20×  (900 prompts/5h)
+ *   "team" / "enterprise" → their own plan; checked first because their
+ *   rateLimitTier can look like a Max tier
  */
 export function subscriptionTypeToPlan(subscriptionType: string, rateLimitTier: string): import('./quota-tracker').ClaudePlan {
   const sub  = subscriptionType.toLowerCase()
   const tier = rateLimitTier.toLowerCase()
 
+  if (sub === 'team')       return 'team'
+  if (sub === 'enterprise') return 'enterprise'
   if (sub.includes('max_20') || tier.includes('max_20')) return 'max20'
   if (sub.includes('max_5')  || tier.includes('max_5'))  return 'max5'
   if (sub === 'max' || tier.includes('max'))              return 'max5'  // conservador

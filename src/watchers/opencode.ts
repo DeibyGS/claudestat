@@ -23,6 +23,7 @@ import { dbOps } from '../db'
 import { findProjectCwdForFile } from '../routes/helpers'
 import { hasOcV2, ocSessionTable } from './oc-schema'
 import { ocModelInfo } from './oc-catalog'
+import { getCachedGitInfo } from '../cache/projects-cache'
 
 function openDb() {
   const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
@@ -60,6 +61,44 @@ interface StepFinishRow {
 function billingKind(realCost: number, apiPricing: ModelPricing | null): BillingKind {
   if (realCost > 0) return 'api'
   return apiPricing && apiPricing.input === 0 && apiPricing.output === 0 ? 'free' : 'subscription'
+}
+
+// Known OpenCode providers. Subscription-backed ones get the consumer product
+// name; with a real cost they are the provider's pay-as-you-go API.
+const PROVIDER_LABELS: Record<string, { subscription: string; api: string }> = {
+  openai:    { subscription: 'ChatGPT',    api: 'OpenAI API' },
+  anthropic: { subscription: 'Claude',     api: 'Anthropic API' },
+}
+
+/** Human label for an OC session's provider; unknown providers keep their id. */
+export function ocProviderLabel(providerId: string | undefined, billing: BillingKind): string | undefined {
+  if (!providerId) return undefined
+  if (providerId.startsWith('opencode')) return 'OpenCode Go/Zen'   // opencode, opencode-go, …
+  const known = PROVIDER_LABELS[providerId]
+  if (!known) return providerId
+  return billing === 'api' ? known.api : known.subscription
+}
+
+/**
+ * time_busy / time_idle are the moments the session last went busy / idle, so
+ * the newer one is the current state. A busy session never idled yet has a
+ * null time_idle. Older schemas lack both columns → unknown.
+ */
+export function ocSessionState(busy: number | null, idle: number | null): 'working' | 'idle' | undefined {
+  if (busy == null && idle == null) return undefined
+  return busy != null && (idle == null || busy > idle) ? 'working' : 'idle'
+}
+
+// Branch is the directory's *current* branch, so it is only true for a session
+// in use now — reading it for the backfill would stamp today's branch on old
+// sessions (and run git for every directory at startup).
+const OC_BRANCH_LIVE_MS = 10 * 60_000
+
+/** Branch of a live session's directory (cached git call, best effort; detached HEAD → none). */
+function ocBranch(dir: string | null | undefined, updatedAt: number): string | undefined {
+  if (!dir || Date.now() - updatedAt > OC_BRANCH_LIVE_MS) return undefined
+  const branch = getCachedGitInfo(dir)?.branch
+  return branch && !branch.startsWith('(') ? branch : undefined
 }
 
 const STEP_FINISH_COLUMNS = `json_extract(data, '$.tokens.total') as total_tokens,
@@ -246,14 +285,13 @@ function importToolEvents(ocDb: ReturnType<typeof openDb>, sessionId: string, ta
 // OpenCode creates a new session row per prompt, even within the same conversation.
 // We group sessions by directory + close time_created (<60s apart) into one.
 
-function groupOcSessions(
-  rows: Array<{
+function groupOcSessions<R extends {
     id: string; directory: string | null; model: string | null
     cost: number; tokens_input: number; tokens_output: number
     tokens_cache_read: number; tokens_cache_write: number
     time_created: number; time_updated: number
-  }>
-): typeof rows {
+    time_busy?: number | null; time_idle?: number | null
+  }>(rows: R[]): R[] {
   const sorted = [...rows].sort((a, b) => a.time_created - b.time_created)
   const groups: Map<string, typeof rows> = new Map()
   const grouped = new Set<string>()
@@ -302,6 +340,9 @@ function groupOcSessions(
       master.tokens_cache_read += s.tokens_cache_read
       master.tokens_cache_write+= s.tokens_cache_write
       if (s.time_updated > master.time_updated) master.time_updated = s.time_updated
+      // The chain's state is its newest busy/idle transition, whichever row has it
+      if ((s.time_busy ?? 0) > (master.time_busy ?? 0)) master.time_busy = s.time_busy
+      if ((s.time_idle ?? 0) > (master.time_idle ?? 0)) master.time_idle = s.time_idle
     }
     return master
   })
@@ -337,10 +378,13 @@ export const opencodeAdapter: PollableAdapter = {
     try {
       db = openDb()
       const v2 = hasOcV2(db)
+      const table = ocSessionTable(db)
+      const cols  = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(c => c.name))
+      const orNull = (c: string) => cols.has(c) ? c : `NULL as ${c}`
       const rows = db.prepare(
         `SELECT id, directory, model, cost, tokens_input, tokens_output, tokens_cache_read, tokens_cache_write,
-                time_created, time_updated
-         FROM ${ocSessionTable(db)}
+                time_created, time_updated, ${orNull('time_busy')}, ${orNull('time_idle')}
+         FROM ${table}
          WHERE time_updated >= ?
          AND time_archived IS NULL`
       ).all(since) as Array<{
@@ -354,6 +398,8 @@ export const opencodeAdapter: PollableAdapter = {
         tokens_cache_write: number
         time_created: number
         time_updated: number
+        time_busy:    number | null
+        time_idle:    number | null
       }>
 
       const grouped = groupOcSessions(rows)
@@ -417,6 +463,9 @@ export const opencodeAdapter: PollableAdapter = {
             cost_usd: realCost,
             billing,
             apiEquivalentUsd,
+            provider: ocProviderLabel(modelRef.providerId, billing),
+            ocState:   ocSessionState(row.time_busy, row.time_idle),
+            gitBranch: ocBranch(projectCwd, row.time_updated),
             context_used: contextUsed,
             context_window: contextWindow,
             lastModel: modelId,

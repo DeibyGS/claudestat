@@ -212,6 +212,11 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
     CREATE INDEX IF NOT EXISTS idx_events_external ON events(external_id) WHERE external_id IS NOT NULL;
     DROP VIEW IF EXISTS billable_sessions; ${BILLABLE_SESSIONS_VIEW}
   ` },
+  // OpenCode provider label from session_v2.model.providerID (e.g. "ChatGPT", "OpenCode Go/Zen")
+  { version: 32, sql: `
+    ALTER TABLE sessions ADD COLUMN provider TEXT;
+    DROP VIEW IF EXISTS billable_sessions; ${BILLABLE_SESSIONS_VIEW}
+  ` },
 ]
 
 function runMigrations() {
@@ -249,6 +254,7 @@ export interface SessionRow {
   git_branch?: string | null
   billing?: BillingKind | null
   api_equivalent_usd?: number | null
+  provider?: string | null
   /** Only on rows read from billable_sessions: 0 when the parent's cost-state covers this session. Use for sums. */
   billable_cost_usd?: number
 
@@ -333,8 +339,10 @@ export interface CostUpdate {
   costSource?: 'cost-state' | 'computed'  // where cost_usd came from (cost-state already includes sub-agents)
   billing?: BillingKind              // OpenCode only (see BillingKind)
   apiEquivalentUsd?: number | null   // OpenCode: same tokens at the catalog API price (null = unknown)
+  provider?: string                  // OpenCode: provider label (see ocProviderLabel)
+  ocState?: 'working' | 'idle'       // OpenCode: from session_v2.time_busy/time_idle
   cwd?: string                       // CC: latest `cwd` seen in the JSONL
-  gitBranch?: string                 // CC: latest `gitBranch` seen in the JSONL
+  gitBranch?: string                 // CC: latest `gitBranch` in the JSONL · OC: `git` on the session directory
   toolUses?: JsonlToolUse[]          // CC: tool_use blocks new since the previous poll
 }
 
@@ -538,7 +546,7 @@ const stmts = {
   `),
 
   updateSessionBilling: db.prepare(`
-    UPDATE sessions SET billing = ?, api_equivalent_usd = ? WHERE id = ?
+    UPDATE sessions SET billing = ?, api_equivalent_usd = ?, provider = COALESCE(?, provider) WHERE id = ?
   `),
 
   // Path-derived link is authoritative: overrides a heuristic guess
@@ -1122,7 +1130,7 @@ export const dbOps = {
       cost.costSource ?? null,
       sessionId,
     )
-    if (cost.billing) stmts.updateSessionBilling.run(cost.billing, cost.apiEquivalentUsd ?? null, sessionId)
+    if (cost.billing) stmts.updateSessionBilling.run(cost.billing, cost.apiEquivalentUsd ?? null, cost.provider ?? null, sessionId)
   },
 
   getSessionEvents(sessionId: string): EventRow[] {

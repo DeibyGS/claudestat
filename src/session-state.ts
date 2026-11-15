@@ -53,3 +53,21 @@ export const STATE_META: Record<SessionState, { label: string; color: string; pu
   waiting_for_input: { label: 'waiting', color: '#58a6ff', pulse: false },
   idle:              { label: 'idle',    color: '#7d8590', pulse: false },
 }
+
+// ─── OpenCode reported state ──────────────────────────────────────────────────
+// OC records when a session last went busy/idle (session_v2.time_busy/time_idle),
+// which is the real state — OC emits no hook events to derive it from. The
+// watcher refreshes it every poll, so an in-memory map is enough. It only wins
+// while the session row is fresh: OC killed while busy never writes time_idle,
+// and a stale 'working' would otherwise stick forever.
+const ocStates = new Map<string, { state: SessionState; updatedAt: number }>()
+
+export function setOcLiveState(sessionId: string, state: SessionState, updatedAt: number): void {
+  ocStates.set(sessionId, { state, updatedAt })
+}
+
+export function ocLiveState(sessionId: string, now: number = Date.now()): SessionState | undefined {
+  const entry = ocStates.get(sessionId)
+  if (!entry || now - entry.updatedAt > IDLE_THRESHOLD_MS) return undefined
+  return entry.state
+}

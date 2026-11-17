@@ -23,6 +23,7 @@ import {
   type CompactDetectedCallback,
 } from '../enricher'
 import { findJSONLForSession, extractSemanticData, syntheticStopsFor } from '../watchers/claude-code'
+import { extractOcTurns } from '../watchers/opencode'
 import { getAlertState, persistAlertState } from '../alert-persist'
 
 // ─── Semantic extraction debounce: 3s after last new assistant turn ───────────
@@ -490,11 +491,25 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
     semanticDebounce.set(sessionId, setTimeout(async () => {
       semanticDebounce.delete(sessionId)
       try {
+        // S6 — OC has no JSONL; its turns/compactions come straight from opencode.db.
+        if (sessionSource === 'opencode') {
+          const ocData = await extractOcTurns(sessionId)
+          if (ocData) {
+            dbOps.upsertAssistantTurns(sessionId, ocData.turns)
+            dbOps.upsertCompactions(sessionId, ocData.compactions)
+            const ocLoops = analyzeSemanticLoops(ocData.turns)
+            dbOps.updateSessionSemantic(sessionId, ocData.avg_output_chars, ocData.error_block_count, ocLoops.length)
+            if (ocLoops.length > 0) broadcast({ type: 'semantic_loop', payload: { session_id: sessionId, loops: ocLoops } })
+          }
+          return
+        }
+
         const filePath = await findJSONLForSession(sessionId)
         if (!filePath) return
         const semantic = await extractSemanticData(filePath)
         if (!semantic) return
         dbOps.upsertAssistantTurns(sessionId, semantic.turns)
+        dbOps.upsertCompactions(sessionId, semantic.compactions)
         const semLoops = analyzeSemanticLoops(semantic.turns)
         dbOps.updateSessionSemantic(sessionId, semantic.avg_output_chars, semantic.error_block_count, semLoops.length)
         if (semLoops.length > 0) {

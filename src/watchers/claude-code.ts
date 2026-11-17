@@ -8,11 +8,12 @@
 import path from 'path'
 import fs   from 'fs/promises'
 import fsSync from 'fs'
-import { type WatcherAdapter, type ParsedEvent, registerAdapter } from './adapter'
+import { type WatcherAdapter, type ParsedEvent, registerAdapter, clampGapMs } from './adapter'
 import { getClaudeDir } from '../paths'
 import { costFromPricing, getContextWindow, pricingForUsage, DEFAULT_MODEL } from '../pricing'
+import { priceUsage } from '../model-pricing'
 import { isDuplicateMessageId, readCostStateUsd, parentSessionIdFromPath } from '../jsonl'
-import type { CostUpdate, JsonlToolUse } from '../db'
+import type { CostUpdate, JsonlToolUse, CompactionRow } from '../db'
 import type { BlockCostEntry } from '../db'
 
 function projectsDir(): string { return path.join(getClaudeDir(), 'projects') }
@@ -248,12 +249,53 @@ export interface AssistantTurn {
   stop_reason?: string
   stop_sequence?: string
   turnEnd?: boolean
+  // S1 — null/priced=false when the model has no price in the #94 table.
+  cost_usd?: number | null
+  priced?: boolean
+  input_tokens?: number
+  output_tokens?: number
+  cache_read?: number
+  cache_creation?: number
+  // S2 — from successful Edit/MultiEdit/Write tool_results only.
+  lines_added: number
+  lines_removed: number
+  // S3 — ms, clamped to >=0.
+  api_ms: number
+  tool_ms: number
+  // S4 — ceil(chars/4); undefined when no non-empty thinking block.
+  thinking_tokens_est?: number
+  /** Internal accumulator for S4; cleared once the turn is finalized. */
+  thinkingChars?: number
 }
 
 export interface SemanticData {
   turns: AssistantTurn[]
   avg_output_chars: number
   error_block_count: number
+  compactions: CompactionRow[]
+}
+
+// S2 — tools whose successful tool_result carries a line diff.
+const LINE_COUNTING_TOOLS = new Set(['Edit', 'MultiEdit', 'Write'])
+
+/** S2 — lines added/removed from a CC tool_result: a new file (`type: 'create'`) counts
+ *  all its lines as added; an edit (`type: 'update'`) counts +/- lines in `structuredPatch`. */
+function linesFromToolResult(toolUseResult: unknown): { added: number; removed: number } {
+  if (!toolUseResult || typeof toolUseResult !== 'object') return { added: 0, removed: 0 }
+  const tur = toolUseResult as any
+  if (tur.type === 'create') {
+    const text = typeof tur.content === 'string' ? tur.content : ''
+    return { added: text.length > 0 ? text.split('\n').length : 0, removed: 0 }
+  }
+  let added = 0, removed = 0
+  for (const hunk of Array.isArray(tur.structuredPatch) ? tur.structuredPatch : []) {
+    for (const l of hunk?.lines ?? []) {
+      if (typeof l !== 'string') continue
+      if (l.startsWith('+')) added++
+      else if (l.startsWith('-')) removed++
+    }
+  }
+  return { added, removed }
 }
 
 export async function findJSONLForSession(sessionId: string): Promise<string | null> {
@@ -270,9 +312,12 @@ export async function findJSONLForSession(sessionId: string): Promise<string | n
   return null
 }
 
-/** Extract text/tool_use info from a message content array (any shape). */
-function collectBlocks(content: unknown): { outputChars: number; textParts: string[]; toolCalls: string[] } {
-  const out = { outputChars: 0, textParts: [] as string[], toolCalls: [] as string[] }
+/** Extract text/tool_use/thinking info from a message content array (any shape). */
+function collectBlocks(content: unknown): {
+  outputChars: number; textParts: string[]; toolCalls: string[]
+  toolUses: { id: string; name: string }[]; thinkingChars: number
+} {
+  const out = { outputChars: 0, textParts: [] as string[], toolCalls: [] as string[], toolUses: [] as { id: string; name: string }[], thinkingChars: 0 }
   if (!Array.isArray(content)) return out
   for (const block of content as any[]) {
     if (block?.type === 'text' && typeof block.text === 'string') {
@@ -280,52 +325,68 @@ function collectBlocks(content: unknown): { outputChars: number; textParts: stri
       out.textParts.push(block.text)
     } else if (block?.type === 'tool_use' && typeof block.name === 'string') {
       out.toolCalls.push(block.name)
+      if (typeof block.id === 'string') out.toolUses.push({ id: block.id, name: block.name })
+    } else if (block?.type === 'thinking' && typeof block.thinking === 'string') {
+      out.thinkingChars += block.thinking.length
     }
   }
   return out
+}
+
+function finalizeThinking(turn: AssistantTurn) {
+  if (turn.thinkingChars && turn.thinkingChars > 0) turn.thinking_tokens_est = Math.ceil(turn.thinkingChars / 4)
+  delete turn.thinkingChars
 }
 
 export async function extractSemanticData(filePath: string): Promise<SemanticData | null> {
   try {
     const content = await fs.readFile(filePath, 'utf8')
     const turns: AssistantTurn[] = []
+    const compactions: CompactionRow[] = []
     let pendingTurn: AssistantTurn | null = null
     let lastAssistantId: string | undefined
     let totalErrorBlocks = 0
     let turnIndex = 0
+    // S3 — ts of the most recent user/tool_result line, for the next turn's api_ms.
+    let lastUserTs: number | undefined
+    // S3/S2 — tool_use id -> { its own line ts, tool name, owning turn } until its tool_result arrives.
+    const pendingToolUses = new Map<string, { ts: number; name: string; turn: AssistantTurn }>()
 
     for (const raw of content.split('\n')) {
       const line = raw.trim()
       if (!line) continue
       try {
         const obj = JSON.parse(line)
+        let lineTs: number | undefined
+        if (obj.timestamp) {
+          try { lineTs = new Date(obj.timestamp as string).getTime() } catch { /* ignore */ }
+        }
 
         if (obj.type === 'assistant') {
           const msgId = obj.message?.id
           // Same API call logged once per content block → merge into current turn
           if (typeof msgId === 'string' && msgId === lastAssistantId && pendingTurn) {
-            const { outputChars, textParts, toolCalls } = collectBlocks(obj.message?.content)
+            const { outputChars, textParts, toolCalls, toolUses, thinkingChars } = collectBlocks(obj.message?.content)
             pendingTurn.output_chars += outputChars
             if (textParts.length > 0) {
               const merged = (pendingTurn.text_preview ? pendingTurn.text_preview + '\n' : '') + textParts.join('\n')
               pendingTurn.text_preview = merged.slice(0, 500)
             }
             pendingTurn.tool_calls.push(...toolCalls)
+            pendingTurn.thinkingChars = (pendingTurn.thinkingChars ?? 0) + thinkingChars
+            if (lineTs !== undefined) {
+              for (const tu of toolUses) pendingToolUses.set(tu.id, { ts: lineTs, name: tu.name, turn: pendingTurn })
+            }
             continue
           }
           lastAssistantId = typeof msgId === 'string' ? msgId : undefined
 
-          if (pendingTurn) turns.push(pendingTurn)
+          if (pendingTurn) { finalizeThinking(pendingTurn); turns.push(pendingTurn) }
 
           const msgContent = obj.message?.content
           if (!Array.isArray(msgContent)) { pendingTurn = null; continue }
 
-          const { outputChars, textParts, toolCalls } = collectBlocks(msgContent)
-
-          let ts: number | undefined
-          if (obj.timestamp) {
-            try { ts = new Date(obj.timestamp as string).getTime() } catch { /* ignore */ }
-          }
+          const { outputChars, textParts, toolCalls, toolUses, thinkingChars } = collectBlocks(msgContent)
 
           const usage = obj.message?.usage
           const contextUsed = usage
@@ -340,44 +401,94 @@ export async function extractSemanticData(filePath: string): Promise<SemanticDat
               ? JSON.stringify(stopSeq)
               : undefined
 
+          const model = typeof llmMsg.model === 'string' ? llmMsg.model : undefined
+          let cost_usd: number | null | undefined
+          let priced: boolean | undefined
+          if (usage && model) {
+            const priceResult = priceUsage(model, {
+              input_tokens: usage.input_tokens ?? 0,
+              output_tokens: usage.output_tokens ?? 0,
+              cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
+              cache_creation_input_tokens: usage.cache_creation_input_tokens ?? 0,
+            })
+            priced = priceResult.priced
+            cost_usd = priceResult.priced ? priceResult.cost_usd : null
+          }
+
+          const apiMs = clampGapMs(lastUserTs, lineTs)
+
           pendingTurn = {
             turn_index:   turnIndex++,
-            ts,
+            ts: lineTs,
             text_preview: textParts.join('\n').slice(0, 500),
             tool_calls:   toolCalls,
             error_count:  0,
             output_chars: outputChars,
             context_used: contextUsed,
-            model:        typeof llmMsg.model     === 'string' ? llmMsg.model     : undefined,
+            model,
             effort:       typeof obj.effort       === 'string' ? obj.effort       : undefined,
             stop_reason:  typeof llmMsg.stop_reason === 'string' ? llmMsg.stop_reason : undefined,
             stop_sequence: stopSequence,
+            cost_usd, priced,
+            input_tokens: usage?.input_tokens, output_tokens: usage?.output_tokens,
+            cache_read: usage?.cache_read_input_tokens, cache_creation: usage?.cache_creation_input_tokens,
+            lines_added: 0, lines_removed: 0,
+            api_ms: apiMs, tool_ms: 0,
+            thinkingChars,
           }
-        } else if ((obj.type === 'human' || obj.type === 'user') && pendingTurn) {
+          if (lineTs !== undefined) {
+            for (const tu of toolUses) pendingToolUses.set(tu.id, { ts: lineTs, name: tu.name, turn: pendingTurn })
+          }
+        } else if (obj.type === 'human' || obj.type === 'user') {
           const msgContent = obj.message?.content
           // Un tool_result es continuación del turno en curso; cualquier otro contenido
           // (texto plano o array sin tool_result al inicio) es un prompt real del usuario
           // y cierra el turno — mismo criterio que getAllBlockCostsForSession().
-          const isToolResultOnly = Array.isArray(msgContent) && msgContent[0]?.type === 'tool_result'
-          if (!isToolResultOnly) pendingTurn.turnEnd = true
+          if (pendingTurn) {
+            const isToolResultOnly = Array.isArray(msgContent) && msgContent[0]?.type === 'tool_result'
+            if (!isToolResultOnly) pendingTurn.turnEnd = true
+          }
           if (Array.isArray(msgContent)) {
             for (const block of msgContent as any[]) {
-              if (block?.type === 'tool_result' && block.is_error === true) {
+              if (block?.type !== 'tool_result') continue
+              if (block.is_error === true && pendingTurn) {
                 pendingTurn.error_count++
                 totalErrorBlocks++
               }
+              // S2/S3 — attribute tool_ms and lines changed to the turn that issued this tool_use,
+              // even if a later turn is now open (tool_result can arrive after the turn moved on).
+              const toolUseId = typeof block.tool_use_id === 'string' ? block.tool_use_id : undefined
+              const pending = toolUseId ? pendingToolUses.get(toolUseId) : undefined
+              if (pending) {
+                pending.turn.tool_ms += clampGapMs(pending.ts, lineTs)
+                if (block.is_error !== true && LINE_COUNTING_TOOLS.has(pending.name)) {
+                  const { added, removed } = linesFromToolResult(obj.toolUseResult)
+                  pending.turn.lines_added   += added
+                  pending.turn.lines_removed += removed
+                }
+                pendingToolUses.delete(toolUseId)
+              }
             }
           }
+          if (lineTs !== undefined) lastUserTs = lineTs
+        } else if (obj.type === 'system' && obj.subtype === 'compact_boundary') {
+          // S5 — compaction marker; Claude Code nests trigger/pre-token counts under compactMetadata.
+          const meta = obj.compactMetadata ?? {}
+          compactions.push({
+            ts: lineTs ?? Date.now(),
+            trigger: typeof meta.trigger === 'string' ? meta.trigger : undefined,
+            pre_tokens: typeof meta.preTokens === 'number' ? meta.preTokens : undefined,
+          })
         }
       } catch { /* skip malformed lines */ }
     }
 
-    if (pendingTurn) turns.push(pendingTurn)
+    if (pendingTurn) { finalizeThinking(pendingTurn); turns.push(pendingTurn) }
 
     const totalOutputChars = turns.reduce((sum, t) => sum + t.output_chars, 0)
     const avg_output_chars = turns.length > 0 ? Math.round(totalOutputChars / turns.length) : 0
 
-    return { turns, avg_output_chars, error_block_count: totalErrorBlocks }
+    return { turns, avg_output_chars, error_block_count: totalErrorBlocks, compactions }
   } catch {
     return null
   }

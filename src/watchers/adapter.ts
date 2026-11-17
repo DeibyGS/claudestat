@@ -8,6 +8,12 @@
 
 import type { CostUpdate } from '../db'
 
+/** live-tab-v2 S3 — gap between two step timestamps, clamped to >=0 (0 when either side is unknown). */
+export function clampGapMs(from: number | undefined, to: number | undefined): number {
+  if (from === undefined || to === undefined) return 0
+  return Math.max(0, to - from)
+}
+
 export interface ParsedEvent {
   sessionId: string
   type: string

@@ -15,10 +15,10 @@
 import fs   from 'fs'
 import os   from 'os'
 import path from 'path'
-import { type PollableAdapter, type PollSession, type ParsedEvent, registerAdapter } from './adapter'
+import { type PollableAdapter, type PollSession, type ParsedEvent, registerAdapter, clampGapMs } from './adapter'
 import { getOpencodeDb } from '../paths'
 import { getContextWindow, costFromPricing, type ModelPricing } from '../pricing'
-import type { CostUpdate, BlockCostEntry, BillingKind } from '../db'
+import type { CostUpdate, BlockCostEntry, BillingKind, AssistantTurnRow, CompactionRow } from '../db'
 import { dbOps } from '../db'
 import { findProjectCwdForFile } from '../routes/helpers'
 import { hasOcV2, ocSessionTable } from './oc-schema'
@@ -517,6 +517,91 @@ export async function getAllStepFinishBlocksForSession(sessionId: string): Promi
     return blocks
   } catch {
     return cached?.data ?? []
+  } finally {
+    db?.close()
+  }
+}
+
+/**
+ * S5/S6 — per-turn rows for the live focus, built only from what OC's `session_message`
+ * (v2) actually records: real reasoning tokens, `type='compaction'` rows (trigger = its
+ * `reason`, 'auto'|'manual'), and step timings (`time.created/.completed`, plus the gap to
+ * the next step as tool time). No file-diff data exists anywhere in OC's schema, so
+ * lines_added/lines_removed stay undefined (stored as NULL, rendered "—") — never 0, which
+ * would wrongly claim "no lines changed". v1 installs have no such per-message JSON, so
+ * they get no turns rather than guessed ones.
+ */
+export async function extractOcTurns(sessionId: string): Promise<{
+  turns: AssistantTurnRow[]; compactions: CompactionRow[]; avg_output_chars: number; error_block_count: number
+} | null> {
+  let db: ReturnType<typeof openDb> | null = null
+  try {
+    db = openDb()
+    if (!hasOcV2(db)) return { turns: [], compactions: [], avg_output_chars: 0, error_block_count: 0 }
+
+    const rows = db.prepare(`
+      SELECT type, time_created, data FROM session_message WHERE session_id = ? ORDER BY seq ASC
+    `).all(sessionId) as Array<{ type: string; time_created: number; data: string }>
+
+    const compactions: CompactionRow[] = []
+    const steps: Array<{ ts: number; parsed: any }> = []
+
+    for (const row of rows) {
+      if (row.type === 'compaction') {
+        try {
+          const d = JSON.parse(row.data)
+          compactions.push({ ts: row.time_created, trigger: typeof d.reason === 'string' ? d.reason : undefined })
+        } catch {}
+        continue
+      }
+      if (row.type !== 'assistant') continue
+      try {
+        const d = JSON.parse(row.data)
+        if (d.tokens) steps.push({ ts: row.time_created, parsed: d })
+      } catch {}
+    }
+
+    const turns: AssistantTurnRow[] = steps.map((step, i) => {
+      const d = step.parsed
+      const tokens: Record<string, any> = d.tokens ?? {}
+      const time:   Record<string, any> = d.time   ?? {}
+      const created   = typeof time.created   === 'number' ? time.created   : undefined
+      const completed = typeof time.completed === 'number' ? time.completed : undefined
+      const apiMs  = clampGapMs(created, completed)
+      const nextCreated = steps[i + 1]?.parsed?.time?.created
+      const toolMs = clampGapMs(completed, typeof nextCreated === 'number' ? nextCreated : undefined)
+
+      const content: any[] = Array.isArray(d.content) ? d.content : []
+      const toolCalls  = content.filter(c => c?.type === 'tool' && typeof c.name === 'string').map(c => c.name as string)
+      const textParts  = content.filter(c => c?.type === 'text' && typeof c.text === 'string').map(c => c.text as string)
+      const reasoning  = tokens.reasoning
+      const cost       = d.cost
+
+      return {
+        turn_index:    i,
+        ts:            created ?? step.ts,
+        text_preview:  textParts.join('\n').slice(0, 500),
+        tool_calls:    toolCalls,
+        error_count:   0,
+        output_chars:  textParts.reduce((sum, t) => sum + t.length, 0),
+        context_used:  (tokens.input ?? 0) + (tokens.output ?? 0) + (tokens.reasoning ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0),
+        model:         typeof d.model?.id === 'string' ? d.model.id : undefined,
+        cost_usd:      typeof cost === 'number' ? cost : null,
+        priced:        typeof cost === 'number',
+        input_tokens:  tokens.input, output_tokens: tokens.output,
+        cache_read:    tokens.cache?.read, cache_creation: tokens.cache?.write,
+        lines_added:   undefined, lines_removed: undefined,
+        api_ms: apiMs, tool_ms: toolMs,
+        // Real reasoning-token count, not an estimate — the UI must not prefix it with "≈".
+        thinking_tokens_est: typeof reasoning === 'number' && reasoning > 0 ? reasoning : undefined,
+      }
+    })
+
+    const totalOutputChars = turns.reduce((sum, t) => sum + t.output_chars, 0)
+    const avg_output_chars = turns.length > 0 ? Math.round(totalOutputChars / turns.length) : 0
+    return { turns, compactions, avg_output_chars, error_block_count: 0 }
+  } catch {
+    return null
   } finally {
     db?.close()
   }

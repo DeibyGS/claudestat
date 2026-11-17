@@ -13,6 +13,7 @@ import { DatabaseSync } from 'node:sqlite'
 import path from 'path'
 import fs from 'fs'
 import { getClaudestatDir } from './paths'
+import { CYCLE_MS } from './quota-tracker'
 
 export const CLAUDESTAT_DIR = getClaudestatDir()
 const DB_PATH = process.env.CLAUDESTAT_DB_PATH ?? path.join(CLAUDESTAT_DIR, 'events.db')
@@ -217,6 +218,31 @@ const MIGRATIONS: Array<{ version: number; sql: string }> = [
     ALTER TABLE sessions ADD COLUMN provider TEXT;
     DROP VIEW IF EXISTS billable_sessions; ${BILLABLE_SESSIONS_VIEW}
   ` },
+  // live-tab-v2 S1-S5: per-turn cost/usage, lines changed, API vs tool time,
+  // thinking estimate, and session compactions (CC compact_boundary / OC parts).
+  { version: 33, sql: `
+    ALTER TABLE assistant_turns ADD COLUMN cost_usd            REAL;
+    ALTER TABLE assistant_turns ADD COLUMN input_tokens        INTEGER;
+    ALTER TABLE assistant_turns ADD COLUMN output_tokens       INTEGER;
+    ALTER TABLE assistant_turns ADD COLUMN cache_read          INTEGER;
+    ALTER TABLE assistant_turns ADD COLUMN cache_creation      INTEGER;
+    ALTER TABLE assistant_turns ADD COLUMN priced              INTEGER DEFAULT 0;
+    ALTER TABLE assistant_turns ADD COLUMN lines_added         INTEGER DEFAULT 0;
+    ALTER TABLE assistant_turns ADD COLUMN lines_removed       INTEGER DEFAULT 0;
+    ALTER TABLE assistant_turns ADD COLUMN api_ms              INTEGER DEFAULT 0;
+    ALTER TABLE assistant_turns ADD COLUMN tool_ms             INTEGER DEFAULT 0;
+    ALTER TABLE assistant_turns ADD COLUMN thinking_tokens_est INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_assistant_turns_ts ON assistant_turns(ts);
+    CREATE TABLE IF NOT EXISTS compactions (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT    NOT NULL,
+      ts         INTEGER NOT NULL,
+      trigger    TEXT,
+      pre_tokens INTEGER,
+      UNIQUE(session_id, ts) ON CONFLICT REPLACE
+    );
+    CREATE INDEX IF NOT EXISTS idx_compactions_session ON compactions(session_id);
+  ` },
 ]
 
 function runMigrations() {
@@ -282,6 +308,27 @@ export interface AssistantTurnRow {
   effort?: string
   stop_reason?: string
   stop_sequence?: string
+  /** S1: null/priced=0 when the model has no price in the #94 table — never a $0 or estimated cost. */
+  cost_usd?: number | null
+  input_tokens?: number
+  output_tokens?: number
+  cache_read?: number
+  cache_creation?: number
+  priced?: boolean
+  /** S2: from successful Edit/MultiEdit/Write only; 0 on a failed edit. null when the source (e.g. OC) has no patch data at all — see S6. */
+  lines_added?: number | null
+  lines_removed?: number | null
+  /** S3: ms, clamped to >=0; missing timestamps contribute 0. */
+  api_ms?: number
+  tool_ms?: number
+  /** S4: ceil(chars/4) of non-empty `thinking` blocks; undefined when none/redacted (render "—"). */
+  thinking_tokens_est?: number
+}
+
+export interface CompactionRow {
+  ts: number
+  trigger?: string
+  pre_tokens?: number
 }
 
 export interface EventRow {
@@ -896,8 +943,14 @@ const stmts = {
 
   getAssistantTurns: db.prepare(`
     SELECT turn_index, ts, text_preview, tool_calls, error_count, output_chars, context_used,
-           model, effort, stop_reason, stop_sequence
+           model, effort, stop_reason, stop_sequence,
+           cost_usd, input_tokens, output_tokens, cache_read, cache_creation, priced,
+           lines_added, lines_removed, api_ms, tool_ms, thinking_tokens_est
     FROM assistant_turns WHERE session_id = ? ORDER BY turn_index ASC
+  `),
+
+  getCompactions: db.prepare(`
+    SELECT ts, trigger, pre_tokens FROM compactions WHERE session_id = ? ORDER BY ts ASC
   `),
 
   getHourlyDistribution: db.prepare(`
@@ -1395,14 +1448,21 @@ export const dbOps = {
   upsertAssistantTurns(sessionId: string, turns: AssistantTurnRow[]) {
     db.prepare(`DELETE FROM assistant_turns WHERE session_id = ?`).run(sessionId)
     const insert = db.prepare(`
-      INSERT INTO assistant_turns (session_id, turn_index, ts, text_preview, tool_calls, error_count, output_chars, context_used, model, effort, stop_reason, stop_sequence)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO assistant_turns (
+        session_id, turn_index, ts, text_preview, tool_calls, error_count, output_chars, context_used,
+        model, effort, stop_reason, stop_sequence,
+        cost_usd, input_tokens, output_tokens, cache_read, cache_creation, priced,
+        lines_added, lines_removed, api_ms, tool_ms, thinking_tokens_est
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
     for (const t of turns) {
       insert.run(
         sessionId, t.turn_index, t.ts ?? null, t.text_preview ?? null, JSON.stringify(t.tool_calls ?? []),
         t.error_count, t.output_chars, t.context_used,
         t.model ?? null, t.effort ?? null, t.stop_reason ?? null, t.stop_sequence ?? null,
+        t.cost_usd ?? null, t.input_tokens ?? null, t.output_tokens ?? null, t.cache_read ?? null, t.cache_creation ?? null,
+        t.priced ? 1 : 0, t.lines_added ?? null, t.lines_removed ?? null, t.api_ms ?? 0, t.tool_ms ?? 0, t.thinking_tokens_est ?? null,
       )
     }
   },
@@ -1421,7 +1481,31 @@ export const dbOps = {
       effort:       r.effort ?? undefined,
       stop_reason:  r.stop_reason ?? undefined,
       stop_sequence: r.stop_sequence ?? undefined,
+      cost_usd:     r.cost_usd ?? null,
+      input_tokens: r.input_tokens ?? undefined,
+      output_tokens: r.output_tokens ?? undefined,
+      cache_read:   r.cache_read ?? undefined,
+      cache_creation: r.cache_creation ?? undefined,
+      priced:       !!r.priced,
+      lines_added:   r.lines_added ?? null,
+      lines_removed: r.lines_removed ?? null,
+      api_ms:        r.api_ms ?? 0,
+      tool_ms:       r.tool_ms ?? 0,
+      thinking_tokens_est: r.thinking_tokens_est ?? undefined,
     }))
+  },
+
+  upsertCompactions(sessionId: string, compactions: CompactionRow[]) {
+    db.prepare(`DELETE FROM compactions WHERE session_id = ?`).run(sessionId)
+    const insert = db.prepare(`INSERT INTO compactions (session_id, ts, trigger, pre_tokens) VALUES (?, ?, ?, ?)`)
+    for (const c of compactions) {
+      insert.run(sessionId, c.ts, c.trigger ?? null, c.pre_tokens ?? null)
+    }
+  },
+
+  getCompactions(sessionId: string): CompactionRow[] {
+    const rows = stmts.getCompactions.all(sessionId) as any[]
+    return rows.map(r => ({ ts: r.ts, trigger: r.trigger ?? undefined, pre_tokens: r.pre_tokens ?? undefined }))
   },
 
   getCacheReadByModel(days: number) {
@@ -1555,7 +1639,21 @@ export const dbOps = {
     `).all() as { id: number; tool: string; file_path: string }[]
   },
 
-  getBillingBlocks(limit = 20): BillingBlock[] {
+  /**
+   * S7 — `resetsAt` (epoch ms, from the OAuth usage API's `five_hour.resets_at`) replaces the
+   * epoch-aligned grid for the CURRENT block only: its boundaries become `[resetsAt-5h, resetsAt)`
+   * and its cost/tokens/sessions are recomputed from `assistant_turns` (priced turns only for
+   * cost) inside that exact window — never estimated from a Sonnet rate. Historical blocks keep
+   * the grid grouping (no per-turn data for every past session). Omit `resetsAt` (no usage API,
+   * no token, or a failed request) to fall back to the grid entirely, unchanged.
+   */
+  getBillingBlocks(limit = 20, resetsAt?: number): BillingBlock[] {
+    const hasRealWindow = !!resetsAt && resetsAt > 0
+    // The epoch-aligned grid and the real window are almost never aligned, so a grid cell can
+    // straddle realStart. Excluding sessions >= realStart from the grid query (rather than just
+    // dropping grid rows whose block_start < realStart) keeps a straddling cell's pre-window
+    // sessions as historical without ever re-summing the ones already counted in turnAgg below.
+    const realStart = hasRealWindow ? resetsAt! - CYCLE_MS : 0
     const rows = db.prepare(`
       SELECT
         (started_at / 18000000) * 18000000           AS block_start,
@@ -1564,16 +1662,35 @@ export const dbOps = {
         COALESCE(SUM(billable_cost_usd), 0)              AS total_cost_usd,
         COALESCE(SUM(total_input_tokens + total_output_tokens), 0) AS total_tokens
       FROM billable_sessions
-      WHERE started_at > 0
+      WHERE started_at > 0 ${hasRealWindow ? 'AND started_at < ?' : ''}
       GROUP BY (started_at / 18000000)
       ORDER BY block_start DESC
       LIMIT ?
-    `).all(limit) as Array<{
+    `).all(...(hasRealWindow ? [realStart, limit] : [limit])) as Array<{
       block_start: number; block_end: number; sessions: number
       total_cost_usd: number; total_tokens: number
     }>
-    const currentBlock = Math.floor(Date.now() / 18_000_000) * 18_000_000
-    return rows.map(r => ({ ...r, is_current: r.block_start === currentBlock }))
+
+    if (!hasRealWindow) {
+      const currentBlock = Math.floor(Date.now() / 18_000_000) * 18_000_000
+      return rows.map(r => ({ ...r, is_current: r.block_start === currentBlock }))
+    }
+
+    const turnAgg = db.prepare(`
+      SELECT
+        COUNT(DISTINCT session_id)                                AS sessions,
+        COALESCE(SUM(CASE WHEN priced = 1 THEN cost_usd ELSE 0 END), 0) AS total_cost_usd,
+        COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), 0) AS total_tokens
+      FROM assistant_turns
+      WHERE ts >= ? AND ts < ?
+    `).get(realStart, resetsAt) as { sessions: number; total_cost_usd: number; total_tokens: number }
+
+    const realCurrent: BillingBlock = {
+      block_start: realStart, block_end: resetsAt!, is_current: true, ...turnAgg,
+    }
+    const historical = rows.map(r => ({ ...r, is_current: false }))
+
+    return [realCurrent, ...historical].slice(0, limit)
   },
 
   getDailyActivity(days = 365): DailyActivity[] {

@@ -607,7 +607,11 @@ miscRouter.post('/tool-status', (req: Request, res: Response) => {
 
 miscRouter.get('/api/blocks', (req: Request, res: Response) => {
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string || '20', 10) || 20))
-  res.json({ blocks: dbOps.getBillingBlocks(limit) })
+  // S7 — align the current block to the OAuth usage API's real resets_at; fall back
+  // to the epoch-aligned grid (unchanged) when there's no usage API / token / response.
+  const quota = computeQuota()
+  const resetsAt = quota.cycleResetSource === 'api' ? quota.cycleResetAt : undefined
+  res.json({ blocks: dbOps.getBillingBlocks(limit, resetsAt) })
 })
 
 // ─── GET /api/activity — 52-week daily activity heatmap data ─────────────────

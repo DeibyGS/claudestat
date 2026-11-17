@@ -22,6 +22,7 @@ export { DaemonNotRunningError } from './lib-guard'
 export type {
   SessionRow,
   AssistantTurnRow,
+  CompactionRow,
   EventRow,
   BlockCostEntry,
   CostUpdate,

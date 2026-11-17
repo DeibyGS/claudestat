@@ -246,14 +246,17 @@ export interface ClaudeStatsData {
 
 // ─── Quota ────────────────────────────────────────────────────────────────────
 
-export type ClaudePlan = 'free' | 'pro' | 'max5' | 'max20'
+export type ClaudePlan = 'free' | 'pro' | 'max5' | 'max20' | 'team' | 'enterprise'
 
 export interface QuotaData {
   cyclePrompts:    number
   cycleLimit:      number
   cyclePct:        number
+  cycleTokens:      number   // tokens used in the current 5h cycle (input + output)
+  cycleLimitTokens: number   // plan's token limit for the cycle — 0 for team/enterprise (no local estimate)
   cycleResetMs:    number
   cycleResetAt:    number   // timestamp absoluto del próximo reset
+  cycleResetSource: 'api' | 'estimated'
   cycleStartTs:    number
   weeklyHoursSonnet:  number
   weeklyHoursOpus:    number
@@ -263,6 +266,7 @@ export interface QuotaData {
   weeklyTokensHaiku:  number
   weeklyLimitSonnet:  number
   weeklyLimitOpus:   number
+  weeklyPctAll:       number   // % combinado Sonnet+Opus (coincide con claude.ai "Todos los modelos")
   burnRateTokensPerMin: number
   detectedPlan:    ClaudePlan
   planSource:      'config' | 'keychain' | 'inferred'

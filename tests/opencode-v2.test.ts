@@ -507,3 +507,86 @@ describe('opencode watcher — state and branch (S9)', () => {
     assert.equal(old_.cost.gitBranch, undefined)
   })
 })
+
+// ─── live-tab-v2 T3: per-turn reasoning/compactions/timings from opencode.db (S5, S6) ──
+
+describe('opencode watcher — extractOcTurns (S5, S6)', () => {
+  const turnsFile = path.join(tmpDir, 'oc-turns.db')
+
+  before(() => {
+    const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
+    const db = new DatabaseSync(turnsFile)
+    db.exec(`
+      CREATE TABLE session_v2 (id TEXT PRIMARY KEY, directory TEXT, model TEXT, cost REAL DEFAULT 0,
+        tokens_input INTEGER DEFAULT 0, tokens_output INTEGER DEFAULT 0, tokens_cache_read INTEGER DEFAULT 0,
+        tokens_cache_write INTEGER DEFAULT 0, time_created INTEGER, time_updated INTEGER, time_archived INTEGER);
+      CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, data TEXT);
+    `)
+    const t0 = Date.now() - 120_000
+    db.prepare(`INSERT INTO session_v2 VALUES (?, ?, ?, 0, 0, 0, 0, 0, ?, ?, NULL)`)
+      .run('ses_turns_1', '/tmp/x', JSON.stringify({ id: 'gpt-x' }), t0, t0 + 2000)
+
+    db.prepare(`INSERT INTO session_message VALUES (?, ?, 'assistant', 1, ?, ?)`).run(
+      'm1', 'ses_turns_1', t0,
+      JSON.stringify({
+        time: { created: t0, completed: t0 + 500 },
+        model: { id: 'gpt-x', providerID: 'openai' },
+        content: [{ type: 'tool', id: 'c1', name: 'read' }, { type: 'text', text: 'done reading' }],
+        tokens: { input: 100, output: 20, reasoning: 40, cache: { read: 0, write: 0 } },
+        cost: 0.01,
+      })
+    )
+    // next step starts 300ms after m1 completed → that gap is m1's tool_ms
+    const t1 = t0 + 800
+    db.prepare(`INSERT INTO session_message VALUES (?, ?, 'assistant', 2, ?, ?)`).run(
+      'm2', 'ses_turns_1', t1,
+      JSON.stringify({
+        time: { created: t1, completed: t1 + 400 },
+        model: { id: 'gpt-x', providerID: 'openai' },
+        content: [{ type: 'text', text: 'ok' }],
+        tokens: { input: 50, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+        cost: 0,
+      })
+    )
+    db.prepare(`INSERT INTO session_message VALUES (?, ?, 'compaction', 3, ?, ?)`).run(
+      'm3', 'ses_turns_1', t1 + 1000, JSON.stringify({ status: 'completed', reason: 'manual' })
+    )
+    db.close()
+    process.env.OPENCODE_DB = turnsFile
+  })
+
+  after(() => {
+    if (prevOpenCodeDb === undefined) delete process.env.OPENCODE_DB
+    else process.env.OPENCODE_DB = prevOpenCodeDb
+  })
+
+  test('fills reasoning tokens and timings per step; lines changed stay null (no patch data exists)', async () => {
+    const { extractOcTurns } = require('../src/watchers/opencode')
+    const r = await extractOcTurns('ses_turns_1')
+    assert.ok(r)
+    assert.equal(r!.turns.length, 2)
+
+    const [t1turn, t2turn] = r!.turns
+    assert.equal(t1turn.thinking_tokens_est, 40)      // real reasoning count, not an estimate
+    assert.equal(t2turn.thinking_tokens_est, undefined) // reasoning: 0 → no source, not "0"
+    assert.equal(t1turn.api_ms, 500)                  // time.completed - time.created
+    assert.equal(t1turn.tool_ms, 300)                 // next step's created - this step's completed
+    assert.equal(t1turn.cost_usd, 0.01)
+    assert.equal(t1turn.priced, true)
+    assert.equal(t2turn.cost_usd, 0)                  // a real $0 (subscription), not "unpriced"
+    assert.equal(t2turn.priced, true)
+
+    // S6 — OC has no file-diff data anywhere: render "—", never a false "0 lines changed"
+    assert.equal(t1turn.lines_added, undefined)
+    assert.equal(t1turn.lines_removed, undefined)
+    assert.equal(t2turn.lines_added, undefined)
+  })
+
+  test('a compact_boundary-equivalent session_message is recorded with its trigger', async () => {
+    const { extractOcTurns } = require('../src/watchers/opencode')
+    const r = await extractOcTurns('ses_turns_1')
+    assert.ok(r)
+    assert.equal(r!.compactions.length, 1)
+    assert.equal(r!.compactions[0].trigger, 'manual')
+  })
+})

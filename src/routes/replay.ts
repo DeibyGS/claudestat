@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express'
-import { dbOps } from '../db'
+import { dbOps, type AssistantTurnRow } from '../db'
 import { getOpencodeEvents } from './opencode-reader'
 import { getContextWindow } from '../pricing'
 
@@ -113,4 +113,38 @@ function buildTree(sessionId: string, depth = 0): AgentNode {
 replayRouter.get('/session/:id/agent-tree', (req: Request, res: Response) => {
   const { id } = req.params
   res.json(buildTree(id))
+})
+
+/** Sum of a nullable per-turn metric, or null when no turn in the session reports it at all (S6). */
+function nullableSum(turns: AssistantTurnRow[], key: 'lines_added' | 'lines_removed' | 'thinking_tokens_est'): number | null {
+  let sum = 0, known = false
+  for (const t of turns) {
+    const v = t[key]
+    if (v != null) { sum += v; known = true }
+  }
+  return known ? sum : null
+}
+
+// S8 — live focus data: per-turn S1-S4 metrics plus session totals. Totals for
+// lines ±/thinking stay null when no turn in the session has that metric at all
+// (e.g. an OC session — S6), rather than a misleading 0.
+replayRouter.get('/api/sessions/:id/turns', (req: Request, res: Response) => {
+  const { id } = req.params
+  const session = dbOps.getSession(id)
+  if (!session) { res.status(404).json({ error: 'session not found' }); return }
+
+  const turns       = dbOps.getAssistantTurns(id)
+  const compactions = dbOps.getCompactions(id)
+
+  res.json({
+    turns,
+    totals: {
+      lines_added:   nullableSum(turns, 'lines_added'),
+      lines_removed: nullableSum(turns, 'lines_removed'),
+      api_ms:  turns.reduce((s, t) => s + (t.api_ms  ?? 0), 0),
+      tool_ms: turns.reduce((s, t) => s + (t.tool_ms ?? 0), 0),
+      thinking_tokens_est: nullableSum(turns, 'thinking_tokens_est'),
+      compactions,
+    },
+  })
 })

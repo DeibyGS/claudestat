@@ -58,6 +58,8 @@ export interface QuotaData {
   cycleLimitTokens: number   // límite de tokens del plan
   cycleResetMs:    number   // ms hasta el próximo reset (calculado desde resetAt)
   cycleResetAt:    number   // timestamp absoluto del próximo reset (rolling window)
+  /** S7 — 'api' cuando cycleResetAt viene del OAuth usage API (resets_at real); 'estimated' en fallback (grid alineado a epoch). */
+  cycleResetSource: 'api' | 'estimated'
   cycleStartTs:    number   // timestamp (ms) del primer mensaje del ciclo actual
   // Semanal por modelo (horas de actividad en ventanas de 5 min)
   weeklyHoursSonnet: number
@@ -79,7 +81,7 @@ export interface QuotaData {
 
 // ─── Helpers de ventanas temporales ──────────────────────────────────────────
 
-const CYCLE_MS    = 5 * 60 * 60 * 1000   // 5 horas en ms
+export const CYCLE_MS = 5 * 60 * 60 * 1000   // 5 horas en ms — también usado por db.ts (S7, ventana real de resets_at)
 const WEEK_MS     = 7 * 24 * 60 * 60 * 1000
 const WINDOW_5MIN = 5 * 60 * 1000        // ventana de 5 min para agrupar actividad por modelo
 
@@ -421,6 +423,7 @@ export function computeQuota(forcePlan?: ClaudePlan): QuotaData {
     cycleLimitTokens: limits.tokens5h,
     cycleResetMs:     resolvedCycleResetMs,
     cycleResetAt:     resolvedCycleResetAt,
+    cycleResetSource: (apiFresh && apiCache!.cycleResetAt > 0) ? 'api' : 'estimated',
     cycleStartTs:      cycleStart,
     weeklyHoursSonnet,
     weeklyHoursOpus,

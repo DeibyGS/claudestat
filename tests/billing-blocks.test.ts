@@ -93,3 +93,81 @@ test('S2: block and daily totals do not double count sub-agents covered by cost-
   assert.ok(Math.abs(billable - expected) < 1e-9, `rows ${billable} vs ${expected}`)
   assert.equal(fixture.find(r => r.id === 'agent-s2-kid0')!.total_cost_usd, 1.20)
 })
+
+// S7 — the current block aligns to the OAuth usage API's real [resets_at-5h, resets_at)
+// window, and its cost sums only priced assistant-turn rows inside it.
+test('S7: with resetsAt, the current block is [resetsAt-5h, resetsAt) and sums priced turns', () => {
+  const { dbOps } = require('../src/db')
+  const FIVE_H = 5 * 60 * 60 * 1000
+  const resetsAt = Date.now() + 37 * 60_000   // mid-cycle: resets in 37 min
+  const windowStart = resetsAt - FIVE_H
+
+  const sid = 's7-sess-1'
+  dbOps.upsertSession({ id: sid, cwd: '/tmp', started_at: windowStart + 60_000 })
+  dbOps.upsertAssistantTurns(sid, [
+    { turn_index: 0, ts: windowStart + 1000, error_count: 0, output_chars: 1, context_used: 0,
+      cost_usd: 1.5, priced: true, input_tokens: 100, output_tokens: 50, lines_added: 0, lines_removed: 0, api_ms: 0, tool_ms: 0 },
+    { turn_index: 1, ts: windowStart + 2000, error_count: 0, output_chars: 1, context_used: 0,
+      cost_usd: null, priced: false, input_tokens: 10, output_tokens: 5, lines_added: 0, lines_removed: 0, api_ms: 0, tool_ms: 0 },
+    // outside the real window (belongs to the previous 5h cycle) — must not count
+    { turn_index: 2, ts: windowStart - 1000, error_count: 0, output_chars: 1, context_used: 0,
+      cost_usd: 99, priced: true, input_tokens: 1, output_tokens: 1, lines_added: 0, lines_removed: 0, api_ms: 0, tool_ms: 0 },
+  ])
+
+  const blocks = dbOps.getBillingBlocks(20, resetsAt)
+  const current = blocks.find((b: any) => b.is_current)
+  assert.ok(current, 'should have a current block')
+  assert.equal(current!.block_start, windowStart)
+  assert.equal(current!.block_end, resetsAt)
+  assert.equal(current!.total_cost_usd, 1.5)      // unpriced turn excluded, out-of-window turn excluded
+  assert.equal(current!.total_tokens, 100 + 50 + 10 + 5)  // tokens count even when unpriced
+  assert.equal(current!.sessions, 1)
+})
+
+// S7 regression (code-review finding) — the epoch grid and the real [resetsAt-5h, resetsAt)
+// window are almost never aligned, so a grid cell can straddle realStart. A session that
+// started on the "current" side of that cell must not be summed both in the historical grid
+// row (whole-cell GROUP BY) and again in the current block's turnAgg.
+test('S7: a straddling grid cell does not double-count sessions on both sides of realStart', () => {
+  const FIVE_H = 5 * 60 * 60 * 1000
+  // Fixed, isolated anchor (not Date.now()-relative) so this fixture's grid cell can't
+  // collide with another "now minus a few hours" fixture elsewhere in this file.
+  const resetsAt  = 1_650_000_000_000 + FIVE_H + 123_456
+  const realStart = resetsAt - FIVE_H
+  const gridStart = Math.floor(realStart / 18_000_000) * 18_000_000
+  assert.ok(gridStart < realStart && realStart < gridStart + 18_000_000, 'fixture assumes a straddling grid cell')
+
+  // Session A: started before realStart, in the same grid cell — stays historical.
+  insertSession('s7-straddle-before', gridStart + 1000, 10, 100, 50)
+
+  // Session B: started AFTER realStart but inside the SAME grid cell — the overlap the old
+  // code double-counted (whole-cell historical sum + its own turns in turnAgg).
+  insertSession('s7-straddle-after', realStart + 1000, 20, 10, 5)
+  dbOps.upsertAssistantTurns('s7-straddle-after', [
+    { turn_index: 0, ts: realStart + 2000, error_count: 0, output_chars: 1, context_used: 0,
+      cost_usd: 20, priced: true, input_tokens: 10, output_tokens: 5, lines_added: 0, lines_removed: 0, api_ms: 0, tool_ms: 0 },
+  ])
+
+  const blocks = dbOps.getBillingBlocks(50, resetsAt)
+  const current    = blocks.find((b: any) => b.is_current)
+  const historical = blocks.find((b: any) => b.block_start === gridStart)
+
+  assert.ok(historical, 'the straddling grid cell should still appear historically')
+  assert.equal(historical!.sessions, 1)        // only session A — B must not appear here too
+  assert.equal(historical!.total_cost_usd, 10)
+
+  assert.equal(current!.sessions, 1)           // only session B, counted once via its own turns
+  assert.equal(current!.total_cost_usd, 20)
+})
+
+test('S7 fallback: without resetsAt the grid grouping is unchanged', () => {
+  const { dbOps } = require('../src/db')
+  const blockStart = Math.floor(Date.now() / 18_000_000) * 18_000_000
+  insertSession('s7-fallback-1', blockStart + 500, 0.02, 100, 50)
+
+  const blocks = dbOps.getBillingBlocks(20)
+  const current = blocks.find((b: any) => b.is_current)
+  assert.ok(current, 'should have a current block')
+  assert.equal(current!.block_start, blockStart)
+  assert.equal(current!.block_end, blockStart + 18_000_000)
+})

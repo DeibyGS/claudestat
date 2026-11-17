@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { FolderOpen, Zap, Settings2, Wrench } from 'lucide-react'
-import type { AppState, TraceEvent, QuotaData, ActiveSource } from '../types'
+import type { AppState, TraceEvent, ActiveSource } from '../types'
 import { modelStyle } from '../lib/modelLabel'
 import { Tip } from './Tip'
 
@@ -24,7 +24,6 @@ interface Props {
   connStatus:     'idle' | 'connected' | 'error'
   activeProject:  string | null
   onOpenConfig:   () => void
-  quota?:         QuotaData
   activeSources?: ActiveSource[]
 }
 
@@ -183,7 +182,7 @@ function ContextBadge({ remaining, contextPct, color }: { remaining: number; con
 
 // Tip re-exported from shared component — see Tip.tsx
 
-export function Header({ activeSources: as, state, connStatus, activeProject, onOpenConfig, quota }: Props) {
+export function Header({ activeSources: as, state, connStatus, activeProject, onOpenConfig }: Props) {
   const connected = connStatus === 'connected'
   const { sessionId, cost, startedAt } = state
 

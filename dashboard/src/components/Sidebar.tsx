@@ -102,7 +102,10 @@ export function Sidebar({ activeTab, onTabChange, connStatus, liveCount = 0 }: P
         </div>
       }>
         <div className="cs-brand">
-          <span className="dot" style={{ background: CONN_COLOR[connStatus] }} />
+          <span className="dot" style={{
+            background: CONN_COLOR[connStatus],
+            boxShadow: connStatus === 'connected' ? `0 0 5px ${CONN_COLOR[connStatus]}` : undefined,
+          }} />
           claudestat
         </div>
       </Tip>

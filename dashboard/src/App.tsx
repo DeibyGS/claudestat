@@ -525,7 +525,6 @@ export default function App() {
         state={state} connStatus={connStatus}
         activeProject={activeProject}
         onOpenConfig={() => setConfigOpen(true)}
-        quota={quota}
         activeSources={activeSources}
       />
       <QuotaStrip quota={quota} />

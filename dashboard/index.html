@@ -5,11 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ClaudeStat</title>
     <style>
+      /* ── Design tokens (S10, live-tab-v2) ────────────────────────────────
+         Default values keep today's dark Primer palette byte-for-byte so this
+         is a pure rename, not a re-theme. data-theme="light" defines the
+         prototype's light set for when a toggle lands later — nothing sets
+         that attribute yet, so behavior is unchanged until it does. */
+      :root {
+        --ground: #0d1117; --panel: #161b22; --panel-2: #21262d;
+        --line: #30363d; --line-2: #484f58;
+        --text: #e6edf3; --muted: #8b949e; --faint: #6e7681;
+        --accent: #58a6ff; --accent-soft: #58a6ff22;
+        --ok: #3fb950; --ok-soft: #3fb95022;
+        --warn: #d29922; --warn-soft: #d2992222;
+        --crit: #f85149; --crit-soft: #f8514922;
+      }
+      :root[data-theme="light"] {
+        --ground: #f3f5f8; --panel: #ffffff; --panel-2: #eef1f5;
+        --line: #dde2e9; --line-2: #c9d0da;
+        --text: #18202b; --muted: #5d6878; --faint: #8a94a3;
+        --accent: #1f6feb; --accent-soft: #dbe8fd;
+        --ok: #1a7f37; --ok-soft: #dcf2e2;
+        --warn: #9a6700; --warn-soft: #fbf0d2;
+        --crit: #cf222e; --crit-soft: #fde2e3;
+      }
       *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0 }
-      html, body, #root { height: 100%; background: #0d1117; color: #e6edf3; font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 13px }
+      html, body, #root { height: 100%; background: var(--ground); color: var(--text); font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 13px }
       ::-webkit-scrollbar { width: 6px }
-      ::-webkit-scrollbar-track { background: #161b22 }
-      ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px }
+      ::-webkit-scrollbar-track { background: var(--panel) }
+      ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px }
     </style>
   </head>
   <body>

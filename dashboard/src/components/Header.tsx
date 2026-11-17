@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Radio, History, FolderGit2, FolderOpen, Zap, Settings2, Wrench, Layers, TrendingUp, Trophy, Workflow, type LucideIcon } from 'lucide-react'
+import { FolderOpen, Zap, Settings2, Wrench } from 'lucide-react'
 import type { AppState, TraceEvent, QuotaData, ActiveSource } from '../types'
 import { modelStyle } from '../lib/modelLabel'
 import { Tip } from './Tip'
@@ -19,28 +19,13 @@ import { Tip } from './Tip'
   document.head.appendChild(s)
 })()
 
-export type Tab = 'live' | 'history' | 'projects' | 'top' | 'analytics' | 'system' | 'orchestrator'
-
 interface Props {
   state:          AppState
   connStatus:     'idle' | 'connected' | 'error'
-  activeTab:      Tab
-  onTabChange:    (t: Tab) => void
   activeProject:  string | null
   onOpenConfig:   () => void
   quota?:         QuotaData
   activeSources?: ActiveSource[]
-}
-
-const CONN_LABEL: Record<string, string> = {
-  idle:      '○ Starting',
-  connected: '● Connected',
-  error:     '● Daemon down',
-}
-const CONN_COLOR: Record<string, string> = {
-  idle:      '#8b949e',
-  connected: '#3fb950',
-  error:     '#f85149',
 }
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -55,16 +40,6 @@ const SOURCE_COLORS: Record<string, string> = {
   'claude-code': '#58a6ff',
   'opencode':    '#3fb950',
 }
-
-const TAB_LABELS: { id: Tab; label: string; icon: LucideIcon }[] = [
-  { id: 'live',      label: 'Live',      icon: Radio      },
-  { id: 'history',   label: 'History',   icon: History    },
-  { id: 'projects',  label: 'Projects',  icon: FolderGit2 },
-  { id: 'top',       label: 'Top',       icon: Trophy     },
-  { id: 'analytics', label: 'Analytics', icon: TrendingUp  },
-  { id: 'system',    label: 'System',    icon: Layers     },
-  { id: 'orchestrator', label: 'Orchestrator', icon: Workflow },
-]
 
 function fmtUptime(startedAt: number): string {
   const ms = Date.now() - startedAt
@@ -99,46 +74,6 @@ const S = {
     height: 48,
     flexShrink: 0,
   } as React.CSSProperties,
-
-  /* Brand */
-  brand: {
-    display: 'inline-flex', alignItems: 'center', gap: 8,
-    marginRight: 0, flexShrink: 0, height: '100%',
-  } as React.CSSProperties,
-  dot: (connected: boolean, status?: string): React.CSSProperties => ({
-    width: 7, height: 7, borderRadius: '50%',
-    background: connected ? '#3fb950' : '#6e7681',
-    flexShrink: 0,
-    boxShadow: connected ? '0 0 5px #3fb950' : undefined,
-  }),
-  brandName: {
-    color: '#e6edf3', fontWeight: 700, fontSize: 13,
-    letterSpacing: '-0.2px',
-  } as React.CSSProperties,
-
-  sep: {
-    width: 1, height: 20, background: '#21262d',
-    margin: '0 4px', flexShrink: 0,
-  } as React.CSSProperties,
-
-  /* Tabs */
-  tabs: {
-    display: 'flex', alignItems: 'stretch',
-    height: '100%',
-  } as React.CSSProperties,
-  tab: (active: boolean): React.CSSProperties => ({
-    display: 'flex', alignItems: 'center', gap: 6,
-    padding: '0 10px',
-    fontSize: 12, fontWeight: active ? 600 : 400,
-    color: active ? '#e6edf3' : '#6e7681',
-    cursor: 'pointer',
-    userSelect: 'none',
-    background: 'transparent',
-    border: 'none',
-    outline: 'none',
-    borderBottom: active ? '2px solid #1f6feb' : '2px solid transparent',
-    transition: 'color 0.15s',
-  } as any),
 
   spacer: { flex: 1 } as React.CSSProperties,
 
@@ -248,7 +183,7 @@ function ContextBadge({ remaining, contextPct, color }: { remaining: number; con
 
 // Tip re-exported from shared component — see Tip.tsx
 
-export function Header({ activeSources: as, state, connStatus, activeTab, onTabChange, activeProject, onOpenConfig, quota }: Props) {
+export function Header({ activeSources: as, state, connStatus, activeProject, onOpenConfig, quota }: Props) {
   const connected = connStatus === 'connected'
   const { sessionId, cost, startedAt } = state
 
@@ -271,40 +206,6 @@ export function Header({ activeSources: as, state, connStatus, activeTab, onTabC
 
   return (
     <div style={S.header}>
-      {/* Brand + Tabs juntos */}
-      <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-        <Tip align="left" content={
-          <div>
-            <div style={{ color: CONN_COLOR[connStatus], fontWeight: 700, fontSize: 13, marginBottom: 6 }}>
-              {CONN_LABEL[connStatus]}
-            </div>
-            <div style={{ color: '#7d8590', fontSize: 10, lineHeight: 1.6 }}>
-              {connStatus === 'error'
-                ? <>Daemon not responding — retrying...<br />Check: <code>claudestat start</code></>
-                : <>Daemon listening on localhost:7337<br />Real-time data via SSE</>
-              }
-            </div>
-          </div>
-        }>
-          <div style={S.brand}>
-            <div style={{ ...S.dot(connected), background: CONN_COLOR[connStatus], boxShadow: connected ? `0 0 5px ${CONN_COLOR[connStatus]}` : undefined }} />
-            <span style={S.brandName}>claudestat</span>
-          </div>
-        </Tip>
-
-        <div style={S.sep} />
-
-        {/* Tabs */}
-        <div style={S.tabs}>
-          {TAB_LABELS.map(({ id, label, icon: Icon }) => (
-            <button key={id} style={S.tab(activeTab === id)} onClick={() => onTabChange(id)}>
-              <Icon size={12} />
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
-
       <div style={S.spacer} />
 
       {/* Right section */}

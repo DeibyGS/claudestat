@@ -7,12 +7,24 @@ import type {
   ActiveSource, ToolStatus, OrchTimeline
 } from './types'
 import type { SystemConfig } from './components/SystemView'
-import { type Tab, Header }    from './components/Header'
+import { Header }    from './components/Header'
+import { Sidebar, ALL_TABS, type Tab } from './components/Sidebar'
+import { QuotaStrip } from './components/QuotaStrip'
 import { ConfigPanel }        from './components/ConfigPanel'
 import { TracePanel }          from './components/TracePanel'
 import { LiveSourceBar, SOURCE_LABELS } from './components/LiveSourceBar'
 import { fmtTok } from './components/shared'
 import { mergeLiveEvent } from './lib/liveEvents'
+
+const VIEW_STORAGE_KEY = 'cs-view'
+
+function loadInitialTab(): Tab {
+  try {
+    const saved = localStorage.getItem(VIEW_STORAGE_KEY)
+    if (saved && (ALL_TABS as string[]).includes(saved)) return saved as Tab
+  } catch {}
+  return 'live'
+}
 
 const HistoryView  = lazy(() => import('./components/HistoryView').then(m => ({ default: m.HistoryView })))
 const ProjectsView = lazy(() => import('./components/ProjectsView').then(m => ({ default: m.ProjectsView })))
@@ -51,7 +63,7 @@ export default function App() {
   const [state,        setState]       = useState<AppState>(EMPTY)
   // 'idle' = antes de conectar, 'connected' = SSE activo, 'error' = daemon caído
   const [connStatus,   setConnStatus]  = useState<'idle' | 'connected' | 'error'>('idle')
-  const [activeTab,    setActiveTab]   = useState<Tab>('live')
+  const [activeTab,    setActiveTab]   = useState<Tab>(loadInitialTab)
   const [metaStats,    setMetaStats]   = useState<MetaStats | undefined>()
   const [metaHistory,  setMetaHistory] = useState<MetaSnapshot[]>([])
   const [historyDays,    setHistoryDays]    = useState<DaySessions[]>([])
@@ -412,6 +424,11 @@ export default function App() {
     fetch('/api/oc-model-usage?days=7').then(r => r.ok ? r.json() : null).then(d => d && setOcModelUsage(d.models ?? [])).catch(() => {})
   }, [state.sessionState])
 
+  // ── Remember last view (S9) ──────────────────────────────────────────────────
+  useEffect(() => {
+    try { localStorage.setItem(VIEW_STORAGE_KEY, activeTab) } catch {}
+  }, [activeTab])
+
   // ── Fetch por tab ───────────────────────────────────────────────────────────
   useEffect(() => {
     if (activeTab === 'history') {
@@ -497,15 +514,21 @@ export default function App() {
   const ocHeavyCache = ocThreshold ? (ocLastEntry?.cacheRead ?? ocSource!.cache_read) : undefined
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+    <div className="cs-app">
+      <Sidebar
+        activeTab={activeTab} onTabChange={setActiveTab}
+        connStatus={connStatus}
+        liveCount={activeSources.length}
+      />
+      <div className="cs-main">
       <Header
         state={state} connStatus={connStatus}
-        activeTab={activeTab} onTabChange={setActiveTab}
         activeProject={activeProject}
         onOpenConfig={() => setConfigOpen(true)}
         quota={quota}
         activeSources={activeSources}
       />
+      <QuotaStrip quota={quota} />
       {configOpen && <ConfigPanel onClose={() => setConfigOpen(false)} />}
 
       {/* Alertas globales — visibles en cualquier pestaña */}
@@ -608,6 +631,7 @@ export default function App() {
         </div>
       )}
 
+      </div>
     </div>
   )
 }

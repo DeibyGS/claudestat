@@ -18,6 +18,15 @@ export interface LoopAlert {
   ts:       number
 }
 
+// ≥N consecutive tool results that fail with the same error (src/intelligence.ts ErrorPersistenceAlert).
+export interface ErrorPersistenceAlert {
+  type:     'error_persistence'
+  toolName: string
+  error:    string
+  count:    number
+  ts:       number
+}
+
 export interface CostInfo {
   cost_usd:         number
   input_tokens:     number
@@ -26,6 +35,7 @@ export interface CostInfo {
   cache_creation:   number
   efficiency_score: number
   loops:            LoopAlert[]
+  error_persistence?: ErrorPersistenceAlert[]
   summary?:         string
   context_used?:    number
   context_window?:  number
@@ -84,6 +94,27 @@ export interface ActiveSource {
   cache_read:    number
   cache_creation: number
   project?:      string | null
+}
+
+// One row per live session (incl. sub-agents), from GET /api/active-sessions?view=all.
+// Live tab v2 (T7, S11): drives the vertical session list + focus header.
+export interface LiveSessionRow {
+  source:          string
+  sessionId:       string
+  parentId:        string | null
+  project:         string | null
+  branch:          string | null
+  model:           string
+  state:           SessionState
+  cost_usd:        number
+  last_seen_ms:    number
+  input_tokens:    number
+  output_tokens:   number
+  cache_read:      number
+  cache_creation:  number
+  context_used?:   number
+  context_window?: number
+  loops_detected?: number
 }
 
 // ─── Historial y proyectos ────────────────────────────────────────────────────

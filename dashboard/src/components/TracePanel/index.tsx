@@ -10,6 +10,7 @@ import { SidebarStats } from './SidebarStats'
 import { ContextCurve } from './ContextCurve'
 import { BlockListItem } from './BlockListItem'
 import { BlockDetailPanel } from './BlockDetailPanel'
+import { CostTimeline } from './CostTimeline'
 
 const DAGView = lazy(() => import('../DAGView').then(m => ({ default: m.DAGView })))
 
@@ -219,6 +220,9 @@ export function TracePanel({ events, startedAt, cost, blockCosts = [], meta, quo
             'Block view'
           )}
         </div>
+        {flowTab === 'session' && (
+          <CostTimeline blocks={blocks} blockCosts={blockCosts} selected={selectedIdx} onSelect={handleSelect} />
+        )}
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {flowTab === 'flow' ? (
             <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#484f58', fontSize: 12 }}>Loading…</div>}>

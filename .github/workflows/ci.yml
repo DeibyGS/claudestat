@@ -28,7 +28,7 @@ jobs:
     name: Test (${{ matrix.os }})
     needs: [lint]
     timeout-minutes: 15
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'macos-latest' && 'macos-15-intel' || matrix.os }}
     strategy:
       fail-fast: false
       matrix:

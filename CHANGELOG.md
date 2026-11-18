@@ -13,10 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Prices for every current Claude model** — unknown models are flagged unpriced instead of billed as Sonnet; context windows are per model (Claude Code 967K, OpenCode from its own catalog) (#94)
 - **Sub-agent cost counted twice** — sub-agents are linked to their parent from the JSONL path and excluded from block and aggregate sums when the parent's `cost-state` already includes them (#94)
 - **OpenCode subscription sessions showed an estimated cost** — they now show the real $0 plus the API-equivalent price from OpenCode's catalog (#94)
+- **Live loop detection was too naive** — loops are now detected by the same tool repeated with the same normalized input within a time window, not just a raw call count; added an alert for consecutive tool calls that keep failing with the same error, Team/Enterprise plan quota percentages now come only from the usage API, and OpenCode sessions report their real provider, live state and git branch (#96)
 
 ### Added
 
 - **`GET /api/active-sessions?view=all`** — every live session, sub-agents included, with parent link, project, branch, model and state. Without `view` the response is unchanged
+- **Per-turn cost, usage, lines changed, API vs tool time, thinking token estimate and compactions** for Claude Code and OpenCode sessions, plus `GET /api/sessions/:id/turns` (#97)
+- **Design tokens, a grouped sidebar and a pinned quota strip** across every dashboard view (#98)
+- **Live tab focus view** — a session list with nested sub-agents, a focus header, an "Atención" card surfacing loops/persistent errors/waiting sessions, a cost-per-block chart and a live cross-session event feed (#99)
 
 ## [1.23.1] - 2026-11-07
 

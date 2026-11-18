@@ -15,6 +15,7 @@ import { TracePanel }          from './components/TracePanel'
 import { SOURCE_LABELS } from './components/LiveSourceBar'
 import { LiveSessionList }    from './components/LiveSessionList'
 import { LiveFocusHeader }    from './components/LiveFocusHeader'
+import { LiveMetricCards }    from './components/LiveMetricCards'
 import { AttentionCard }      from './components/AttentionCard'
 import { LiveEventFeed, type FeedEvent } from './components/LiveEventFeed'
 import { fmtTok } from './components/shared'
@@ -545,6 +546,7 @@ export default function App() {
 
   return (
     <div className="cs-app">
+      <style>{`@media (max-width: 900px) { .cs-live-workspace { flex-direction: column } }`}</style>
       <Sidebar
         activeTab={activeTab} onTabChange={setActiveTab}
         connStatus={connStatus}
@@ -568,7 +570,7 @@ export default function App() {
       {ocHeavyTokens !== null && <HeavyContextBanner source="opencode" tokens={ocHeavyTokens} cacheTokens={ocHeavyCache} />}
 
       {activeTab === 'live' && (
-        <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
+        <div className="cs-live-workspace" style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex' }}>
           <LiveSessionList
             rows={liveSessionRows}
             active={activeLiveSessionId}
@@ -591,6 +593,7 @@ export default function App() {
                 />
               </div>
             )}
+            {selectedSession && <LiveMetricCards key={selectedSession.sessionId} sessionId={selectedSession.sessionId} />}
             <div style={liveLayout}>
               <TracePanel
                 events={isClaudeCode || !selectedSession ? ccEvents : opencodeEvents}

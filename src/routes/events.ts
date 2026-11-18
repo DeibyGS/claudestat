@@ -450,6 +450,7 @@ export const onCostUpdate: CostUpdateCallback = (sessionId, cost, source) => {
       context_window:        cost.context_window,
       efficiency_score:      report.efficiencyScore,
       loops:                 report.loops,
+      error_persistence:     report.errorPersistence,
       summary:               report.summary,
       model:                 cost.lastModel,
       projected_hourly_usd:  projectedHourlyUsd,

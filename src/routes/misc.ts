@@ -239,8 +239,15 @@ miscRouter.get('/api/active-sessions', (req: Request, res: Response) => {
           branch:       s.git_branch ?? null,
           model:        s.dominant_model ?? 'unknown',
           state:        (s.source === 'opencode' && ocLiveState(s.id)) || deriveSessionState(last.type, last.ts),
-          cost_usd:     s.total_cost_usd ?? 0,
-          last_seen_ms: realTs,
+          cost_usd:       s.total_cost_usd ?? 0,
+          last_seen_ms:   realTs,
+          input_tokens:   s.total_input_tokens ?? 0,
+          output_tokens:  s.total_output_tokens ?? 0,
+          cache_read:     s.total_cache_read ?? 0,
+          cache_creation: s.total_cache_creation ?? 0,
+          context_used:    s.context_used || undefined,
+          context_window:  s.context_window || undefined,
+          loops_detected:  s.loops_detected ?? 0,
         }
       })
       .sort((a, b) => b.last_seen_ms - a.last_seen_ms)

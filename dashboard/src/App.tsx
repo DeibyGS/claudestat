@@ -4,7 +4,7 @@ import type {
   AppState, TraceEvent, CostInfo, BlockCost, DailyActivity,
   MetaStats, MetaSnapshot, DaySessions, ProjectSummary,
   QuotaData, SessionState, ClaudeStatsData, QuotaStats, SubAgentSession,
-  ActiveSource, ToolStatus, OrchTimeline
+  ActiveSource, ToolStatus, OrchTimeline, LiveSessionRow
 } from './types'
 import type { SystemConfig } from './components/SystemView'
 import { Header }    from './components/Header'
@@ -12,7 +12,11 @@ import { Sidebar, ALL_TABS, type Tab } from './components/Sidebar'
 import { QuotaStrip } from './components/QuotaStrip'
 import { ConfigPanel }        from './components/ConfigPanel'
 import { TracePanel }          from './components/TracePanel'
-import { LiveSourceBar, SOURCE_LABELS } from './components/LiveSourceBar'
+import { SOURCE_LABELS } from './components/LiveSourceBar'
+import { LiveSessionList }    from './components/LiveSessionList'
+import { LiveFocusHeader }    from './components/LiveFocusHeader'
+import { AttentionCard }      from './components/AttentionCard'
+import { LiveEventFeed, type FeedEvent } from './components/LiveEventFeed'
 import { fmtTok } from './components/shared'
 import { mergeLiveEvent } from './lib/liveEvents'
 
@@ -85,6 +89,7 @@ export default function App() {
   const [systemConfigError, setSystemConfigError] = useState(false)
   const [quotaStats,   setQuotaStats]  = useState<QuotaStats | undefined>()
   const [activeSources,    setActiveSources]    = useState<ActiveSource[]>([])
+  const [liveSessionRows,  setLiveSessionRows]  = useState<LiveSessionRow[]>([])
   const [activeLiveSessionId, setActiveLiveSessionId] = useState<string>('')
   const [toolStatus,       setToolStatus]       = useState<ToolStatus>({})
   const [activityData,    setActivityData]     = useState<DailyActivity[]>([])
@@ -336,6 +341,21 @@ export default function App() {
     return () => clearInterval(t)
   }, [])
 
+  // ── Live session rows polling (10s) — all active sessions incl. sub-agents, ──
+  // for the live tab v2 side list (T7, S11). Separate from activeSources (above,
+  // grouped by source only) which other views still rely on unchanged.
+  useEffect(() => {
+    function fetchLiveRows() {
+      fetch('/api/active-sessions?view=all')
+        .then(r => r.ok ? r.json() : null)
+        .then((d: LiveSessionRow[] | null) => { if (d) setLiveSessionRows(d) })
+        .catch(() => {})
+    }
+    fetchLiveRows()
+    const t = setInterval(fetchLiveRows, 10_000)
+    return () => clearInterval(t)
+  }, [])
+
   // ── Orchestration polling (10s) — for filtering Live sessions ──────────────
   useEffect(() => {
     function fetchOrch() {
@@ -353,15 +373,10 @@ export default function App() {
   const orchProjectPath = orchData && (orchData.status === 'active' || orchData.status === 'paused') ? orchData.project_path : null
   const liveSources = activeSources.filter(s => !orchProjectPath || !s.project || s.project !== orchProjectPath)
   const freshSources = activeSources.filter(s => Date.now() - s.last_seen_ms < STALE_SOURCE_MS)
-  // Always keep selected, SSE-active, and compacting sessions visible even if >5min stale
-  const visibleSources = useMemo(() => {
-    const pinned = new Set([activeLiveSessionId, state.sessionId, compactingSessionId].filter(Boolean) as string[])
-    const base = freshSources
-    const extra = [...pinned].filter(id => !base.find(s => s.sessionId === id))
-      .map(id => activeSources.find(s => s.sessionId === id)).filter(Boolean) as typeof activeSources
-    return extra.length ? [...extra, ...base] : base
-  }, [activeSources, freshSources, activeLiveSessionId, state.sessionId, compactingSessionId])
-  const selectedSession = activeSources.find(s => s.sessionId === activeLiveSessionId)
+  // liveSessionRows (not the source-deduped activeSources) — the side list lets the
+  // user pick any concurrent session or sub-agent, not just the one "dominant" row
+  // per source that activeSources keeps (code-review finding, live-tab-v2 T7).
+  const selectedSession = liveSessionRows.find(r => r.sessionId === activeLiveSessionId)
   const isOcActive = selectedSession && selectedSession.source !== 'claude-code'
   const ocSessionId = selectedSession?.sessionId
 
@@ -513,6 +528,21 @@ export default function App() {
   const ocHeavyTokens = ocThreshold ? (ocLastEntry?.inputTokens ?? ocSource!.input_tokens) : null
   const ocHeavyCache = ocThreshold ? (ocLastEntry?.cacheRead ?? ocSource!.cache_read) : undefined
 
+  // ── Live tab v2 (T7, S11): focus header + Atención card + global feed ───────
+  const liveSessionState: SessionState = isClaudeCode ? ccState : ocState
+  const waitingSinceMs = liveSessionState === 'waiting_for_input'
+    ? Date.now() - (isClaudeCode ? (ccLast?.ts ?? Date.now()) : (selectedSession?.last_seen_ms ?? Date.now()))
+    : undefined
+
+  const focusStartedAt = isClaudeCode
+    ? (ccEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now())
+    : (opencodeEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now())
+
+  const feedEvents: FeedEvent[] = useMemo(() => [
+    ...claudeCodeEvents.map(e => ({ ...e, _src: 'cc' as const })),
+    ...opencodeEvents.map(e => ({ ...e, _src: 'oc' as const })),
+  ].sort((a, b) => b.ts - a.ts), [claudeCodeEvents, opencodeEvents])
+
   return (
     <div className="cs-app">
       <Sidebar
@@ -538,46 +568,51 @@ export default function App() {
       {ocHeavyTokens !== null && <HeavyContextBanner source="opencode" tokens={ocHeavyTokens} cacheTokens={ocHeavyCache} />}
 
       {activeTab === 'live' && (
-        <>
-          <LiveSourceBar
-            sources={visibleSources}
+        <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
+          <LiveSessionList
+            rows={liveSessionRows}
             active={activeLiveSessionId}
             onSelect={setActiveLiveSessionId}
-            toolStatus={toolStatus}
-            compactingSessionId={compactingSessionId}
           />
-          <div style={{
-            padding: '3px 16px', borderBottom: '1px solid #21262d',
-            background: '#0d1117', display: 'flex', alignItems: 'center', gap: 8,
-          }}>
-            <span style={{ fontSize: 10, color: '#484f58' }}>
-              Real-time tool session — context, tokens, cost, tool calls
-            </span>
-            <span style={{ fontSize: 9, color: '#21262d' }}>|</span>
-            <span style={{ fontSize: 9, color: '#30363d' }}>
-              For spec-driven workflow coordination see <span style={{ color: '#58a6ff' }}>Orchestrator</span> tab
-            </span>
-          </div>
-          <div style={liveLayout}>
-            <TracePanel
-              events={isClaudeCode || !selectedSession ? ccEvents : opencodeEvents}
-              startedAt={isClaudeCode ? (ccEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now()) : (opencodeEvents[0]?.ts ?? selectedSession?.last_seen_ms ?? Date.now())}
-              cost={sourceCost}
-              blockCosts={state.blockCosts.filter(b => !b.sessionId || b.sessionId === activeLiveSessionId)}
-              meta={isClaudeCode ? metaStats : undefined}
-              quota={isClaudeCode ? quota : undefined}
-              sessionState={isClaudeCode ? ccState : ocState}
-              weeklyData={isClaudeCode ? state.weeklyData : []}
-              hiddenCost={isClaudeCode ? hiddenCost : undefined}
-              prompts={isClaudeCode ? claudeCodePrompts : opencodePrompts}
-              quotaStats={isClaudeCode ? quotaStats : undefined}
-              subAgentSessions={isClaudeCode ? state.subAgentSessions : []}
-              cliLabel={isClaudeCode ? 'Claude Code' : (selectedSession ? (SOURCE_LABELS[selectedSession.source] ?? selectedSession.source) : 'Claude Code')}
-              burnRateTokensPerMin={isClaudeCode ? undefined : ocBurnRate}
-              ocModelUsage={isClaudeCode ? undefined : ocModelUsage}
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <LiveFocusHeader
+              row={selectedSession}
+              sessionState={liveSessionState}
+              model={sourceCost?.model}
+              startedAt={focusStartedAt}
             />
+            {sourceCost && (
+              <div style={{ padding: '8px 24px 0', flexShrink: 0 }}>
+                <AttentionCard
+                  loops={sourceCost.loops ?? []}
+                  errorPersistence={isClaudeCode ? (state.cost?.error_persistence ?? []) : []}
+                  sessionState={liveSessionState}
+                  waitingSinceMs={waitingSinceMs}
+                />
+              </div>
+            )}
+            <div style={liveLayout}>
+              <TracePanel
+                events={isClaudeCode || !selectedSession ? ccEvents : opencodeEvents}
+                startedAt={focusStartedAt}
+                cost={sourceCost}
+                blockCosts={state.blockCosts.filter(b => !b.sessionId || b.sessionId === activeLiveSessionId)}
+                meta={isClaudeCode ? metaStats : undefined}
+                quota={isClaudeCode ? quota : undefined}
+                sessionState={liveSessionState}
+                weeklyData={isClaudeCode ? state.weeklyData : []}
+                hiddenCost={isClaudeCode ? hiddenCost : undefined}
+                prompts={isClaudeCode ? claudeCodePrompts : opencodePrompts}
+                quotaStats={isClaudeCode ? quotaStats : undefined}
+                subAgentSessions={isClaudeCode ? state.subAgentSessions : []}
+                cliLabel={isClaudeCode ? 'Claude Code' : (selectedSession ? (SOURCE_LABELS[selectedSession.source] ?? selectedSession.source) : 'Claude Code')}
+                burnRateTokensPerMin={isClaudeCode ? undefined : ocBurnRate}
+                ocModelUsage={isClaudeCode ? undefined : ocModelUsage}
+              />
+            </div>
+            <LiveEventFeed events={feedEvents} />
           </div>
-        </>
+        </div>
       )}
 
       {activeTab === 'history' && (
@@ -693,7 +728,7 @@ function handleMessage(prev: AppState, msg: any): AppState {
       output_tokens: p.output_tokens, cache_read: p.cache_read,
       cache_creation: p.cache_creation, efficiency_score: p.efficiency_score,
       context_used: p.context_used, context_window: p.context_window,
-      loops: p.loops || [], summary: p.summary,
+      loops: p.loops || [], error_persistence: p.error_persistence || [], summary: p.summary,
       model: p.model,
       source: p.source,
       started_at: p.started_at,
